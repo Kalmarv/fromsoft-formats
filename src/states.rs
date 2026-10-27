@@ -12,6 +12,14 @@
 //! statically (another argument count, or arguments filled by parameter substitution), other common functions that
 //! touch parts, and state instructions with literal entities in story events are not interpreted: the parts they name
 //! keep their default presence and are counted in the report.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation
+    )
+)]
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -79,38 +87,45 @@ impl Rules {
                 let args: Vec<i32> = words.iter().map(|&w| i32::from_le_bytes(w)).collect();
                 let aligned = rest.is_empty();
                 if DIRECT.contains(&(ins.bank, ins.id)) {
-                    s.direct_instructions += 1;
+                    s.direct_instructions = s.direct_instructions.saturating_add(1);
                     if !substituted && let Some(&id) = args.first() {
                         s.open.insert(id);
                     }
                     continue;
                 }
-                if (ins.bank, ins.id) != (2000, 6) || args.is_empty() {
+                if (ins.bank, ins.id) != (2000, 6) {
                     continue;
                 }
-                let function = args[0];
-                let Some(&(_, kind)) = STATE_FUNCTIONS.iter().find(|(f, _)| *f == function) else {
-                    *s.other_calls.entry(function).or_default() += 1;
-                    s.open.extend(args.iter().skip(1).copied().filter(|&x| x > 0));
+                let Some((&function, tail)) = args.split_first() else {
                     continue;
                 };
-                if !aligned || args.len() != 7 || substituted {
-                    s.undecidable_calls += 1;
-                    if let Some(&id) = args.get(1) {
+                let Some(&(_, kind)) = STATE_FUNCTIONS.iter().find(|(f, _)| *f == function) else {
+                    {
+                        let calls = s.other_calls.entry(function).or_default();
+                        *calls = calls.saturating_add(1);
+                    }
+                    s.open.extend(tail.iter().copied().filter(|&x| x > 0));
+                    continue;
+                };
+                let (true, false, &[entity, d0, d1, d2, d3, packed]) = (aligned, substituted, tail) else {
+                    s.undecidable_calls = s.undecidable_calls.saturating_add(1);
+                    if let Some(&id) = tail.first() {
                         s.open.insert(id);
                     }
                     continue;
-                }
-                let states = args[6].to_le_bytes();
-                let disabled_when = (0..4)
-                    .filter(|&i| args[2 + i] != 0)
-                    .map(|i| (args[2 + i], states[i] != 0))
+                };
+                let disabled_when = [d0, d1, d2, d3]
+                    .into_iter()
+                    .zip(packed.to_le_bytes())
+                    .filter(|&(id, _)| id != 0)
+                    .map(|(id, state)| (id, state != 0))
                     .collect();
-                *s.decided.entry(function).or_default() += 1;
-                s.rules.entry((key(kind), args[1])).or_default().push(Rule {
+                let decided = s.decided.entry(function).or_default();
+                *decided = decided.saturating_add(1);
+                s.rules.entry((key(kind), entity)).or_default().push(Rule {
                     event: e.id,
                     function,
-                    entity: args[1],
+                    entity,
                     disabled_when,
                 });
             }

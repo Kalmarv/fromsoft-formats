@@ -16,6 +16,14 @@
 //!
 //! A group holds the ids `first..=last`, its strings the offsets from `index` on. The layout is SoulsFormats' `FMG`
 //! (as SoulsFormatsNEXT states it); a file that departs from it is refused, naming the byte.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation
+    )
+)]
 use std::collections::BTreeMap;
 
 use crate::{Result, invalid};
@@ -38,13 +46,15 @@ impl Fmg {
                 .ok_or_else(|| invalid(FORMAT, at, "ends before its header does"))
         };
         let u32_at = |at: usize| -> Result<u32> {
-            data.get(at..at + 4)
+            at.checked_add(4)
+                .and_then(|end| data.get(at..end))
                 .and_then(|b| <[u8; 4]>::try_from(b).ok())
                 .map(u32::from_le_bytes)
                 .ok_or_else(|| invalid(FORMAT, at, "ends inside a 32-bit value"))
         };
         let u64_at = |at: usize| -> Result<u64> {
-            data.get(at..at + 8)
+            at.checked_add(8)
+                .and_then(|end| data.get(at..end))
                 .and_then(|b| <[u8; 8]>::try_from(b).ok())
                 .map(u64::from_le_bytes)
                 .ok_or_else(|| invalid(FORMAT, at, "ends inside a 64-bit value"))
@@ -95,7 +105,7 @@ impl Fmg {
         };
         let slot = if wide { 8 } else { 4 };
         // every string has an offset slot, so a count the file cannot hold is refused before anything is allocated
-        if strings > data.len() / slot || groups > data.len() / group_size {
+        if strings.saturating_mul(slot) > data.len() || groups.saturating_mul(group_size) > data.len() {
             return Err(invalid(
                 FORMAT,
                 0x0c,
@@ -105,17 +115,20 @@ impl Fmg {
         let mut entries = BTreeMap::new();
         let mut counted = 0usize;
         for g in 0..groups {
-            let at = first_group + g * group_size;
+            let at = offset_plus(first_group, g.saturating_mul(group_size))?;
             let (index, first, last) = (
                 u32_at(at)? as usize,
-                u32_at(at + 4)? as i32,
-                u32_at(at + 8)? as i32,
+                u32_at(offset_plus(at, 4)?)? as i32,
+                u32_at(offset_plus(at, 8)?)? as i32,
             );
             if last < first {
                 return Err(invalid(FORMAT, at, format!("a group of ids {first} to {last}")));
             }
-            let count = (i64::from(last) - i64::from(first) + 1) as usize;
-            counted += count;
+            let count = usize::try_from(last.abs_diff(first))
+                .ok()
+                .and_then(|n| n.checked_add(1))
+                .ok_or_else(|| invalid(FORMAT, at, format!("a group of ids {first} to {last}")))?;
+            counted = counted.saturating_add(count);
             if counted > strings {
                 return Err(invalid(
                     FORMAT,
@@ -124,7 +137,7 @@ impl Fmg {
                 ));
             }
             for j in 0..count {
-                let slot_at = offsets + (index + j) * slot;
+                let slot_at = offset_plus(offsets, index.saturating_add(j).saturating_mul(slot))?;
                 let offset = if wide {
                     usize::try_from(u64_at(slot_at)?)
                         .map_err(|_| invalid(FORMAT, slot_at, "an offset past the address space"))?
@@ -134,11 +147,21 @@ impl Fmg {
                 if offset == 0 {
                     continue;
                 }
-                entries.insert(first + j as i32, utf16_at(data, offset)?);
+                let id = i32::try_from(j)
+                    .ok()
+                    .and_then(|j| first.checked_add(j))
+                    .ok_or_else(|| invalid(FORMAT, at, format!("a group of ids {first} to {last}")))?;
+                entries.insert(id, utf16_at(data, offset)?);
             }
         }
         Ok(Fmg { entries })
     }
+}
+
+/// The offset `delta` bytes after `base`, or an error when it does not fit an offset.
+fn offset_plus(base: usize, delta: usize) -> Result<usize> {
+    base.checked_add(delta)
+        .ok_or_else(|| invalid(FORMAT, base, "an offset past the address space"))
 }
 
 /// The NUL-terminated UTF-16LE string at `at`. Unpaired surrogates are refused, not replaced.
@@ -154,7 +177,7 @@ fn utf16_at(data: &[u8], at: usize) -> Result<String> {
         .take_while(|&unit| unit != 0)
         .collect();
     // a string that runs to the end of the file with no terminator is cut off, not a string
-    if (units.len() + 1) * 2 > rest.len() {
+    if units.len().saturating_add(1).saturating_mul(2) > rest.len() {
         return Err(invalid(
             FORMAT,
             at,

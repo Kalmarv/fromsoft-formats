@@ -1,6 +1,14 @@
 //! Collision as FromSoftware stores it in Havok tagfiles: map compressed meshes with the fsnp material table that maps
 //! their shape keys to HitMtrlParam IDs ([`read_map`]), and object bodies as meshes and convex shapes
 //! ([`read_bodies`]). The tagfile, compressed mesh and convex shape readers are `havok-formats`'.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation
+    )
+)]
 use crate::affine::{compose, pose, pose_columns};
 use crate::{Result, invalid};
 use havok_formats::convex::ConvexShape;
@@ -79,15 +87,18 @@ fn material_keys(shape: Value<'_, '_>, has_triangles: bool) -> Result<KeyMateria
         ));
     }
     let keyed = if triangle_data.is_empty() { 0 } else { keys.len() };
-    let beyond = triangle_data.len() - keyed;
+    let beyond = triangle_data.len().saturating_sub(keyed);
     // Each row's material, in row order.
     let rows: Vec<i32> = (0..triangle_data.len())
         .map(|i| {
             let group = triangle_data.get(i)?.field("primitiveDataIndex")?.unsigned()?;
-            let material = primitive_data
-                .get(group as usize)?
-                .field("materialNameData")?
-                .unsigned()?;
+            let material =
+                primitive_data
+                    .get(usize::try_from(group).map_err(|_| {
+                        invalid("collision", shape.offset, "primitive data index exceeds usize")
+                    })?)?
+                    .field("materialNameData")?
+                    .unsigned()?;
             i32::try_from(material).map_err(|_| invalid("collision", shape.offset, "material exceeds i32"))
         })
         .collect::<Result<_>>()?;
@@ -101,27 +112,29 @@ fn material_keys(shape: Value<'_, '_>, has_triangles: bool) -> Result<KeyMateria
         // Invalid shape-key rows do not identify any mesh primitive.
         // Preserve their count instead of overwriting a fictitious key.
         if raw == u32::MAX {
-            result.invalid_keys += 1;
+            result.invalid_keys = result.invalid_keys.saturating_add(1);
             continue;
         }
-        let key = raw >> (32 - bits);
-        let candidates = &rows[i..=i + beyond];
-        if candidates.iter().any(|m| *m != candidates[0]) {
-            result.placement_dependent += 1;
+        let key = raw >> u32::try_from(32u64.saturating_sub(bits)).unwrap_or(0);
+        let candidates = rows.get(i..=i.saturating_add(beyond)).ok_or_else(|| {
+            invalid(
+                "collision",
+                shape.offset,
+                format!("shape-key row {i} has no triangle data"),
+            )
+        })?;
+        let Some(&first) = candidates.first() else {
+            continue;
+        };
+        if candidates.iter().any(|m| *m != first) {
+            result.placement_dependent = result.placement_dependent.saturating_add(1);
             continue;
         }
-        if result
-            .materials
-            .insert(key, candidates[0])
-            .is_some_and(|m| m != candidates[0])
-        {
+        if result.materials.insert(key, first).is_some_and(|m| m != first) {
             return Err(invalid(
                 "collision",
                 shape.offset,
-                format!(
-                    "conflicting shape-key materials: key {key:x}, row {i}, new {}",
-                    candidates[0]
-                ),
+                format!("conflicting shape-key materials: key {key:x}, row {i}, new {first}"),
             ));
         }
     }
@@ -164,15 +177,18 @@ pub fn read_map(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Soup> {
                         "a map mesh referencing extern shapes is not read",
                     ));
                 }
-                soup.unread_custom_primitives += mesh.custom.len();
+                soup.unread_custom_primitives =
+                    soup.unread_custom_primitives.saturating_add(mesh.custom.len());
                 let keys = material_keys(shape, !mesh.triangles.is_empty())?;
-                soup.invalid_material_keys += keys.invalid_keys;
-                soup.unkeyed_triangle_data += keys.unkeyed_rows;
-                soup.placement_dependent_keys += keys.placement_dependent;
-                soup.dead_primitives += mesh.dead_primitives;
+                soup.invalid_material_keys = soup.invalid_material_keys.saturating_add(keys.invalid_keys);
+                soup.unkeyed_triangle_data = soup.unkeyed_triangle_data.saturating_add(keys.unkeyed_rows);
+                soup.placement_dependent_keys = soup
+                    .placement_dependent_keys
+                    .saturating_add(keys.placement_dependent);
+                soup.dead_primitives = soup.dead_primitives.saturating_add(mesh.dead_primitives);
                 for triangle in mesh.triangles {
                     let mat = keys.materials.get(&triangle.key).copied().unwrap_or(-1);
-                    soup.unmapped += usize::from(mat == -1);
+                    soup.unmapped = soup.unmapped.saturating_add(usize::from(mat == -1));
                     soup.materials.push(mat);
                     let vertices = triangle.vertices.map(|v| pose(v, p, q));
                     if vertices.iter().flatten().any(|f| !f.is_finite()) {
@@ -236,7 +252,7 @@ pub fn shape_to_file(
         None => body,
         Some(inner) => {
             let wide = |m: &[[f32; 3]; 4]| m.map(|c| c.map(f64::from));
-            compose(&wide(&body), &wide(inner)).map(|c| c.map(|x| x as f32))
+            compose(&wide(&body), &wide(inner)).map(|c| c.map(crate::affine::narrow))
         }
     }
 }
@@ -346,7 +362,7 @@ pub fn read_bodies(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Vec<
                         };
                         for tri in mesh.triangles {
                             let material = keys.materials.get(&tri.key).copied().unwrap_or(-1);
-                            soup.unmapped += usize::from(material == -1);
+                            soup.unmapped = soup.unmapped.saturating_add(usize::from(material == -1));
                             soup.materials.push(material);
                             let vertices = tri.vertices.map(|v| pose(v, p, q));
                             if vertices.iter().flatten().any(|f| !f.is_finite()) {

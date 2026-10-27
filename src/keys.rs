@@ -1,6 +1,14 @@
 //! Archive key material in the forms a caller supplies it: an archive pair's RSA public key as a PKCS#1 PEM block
 //! ([`pem_public_key`]), and a 32-byte key as hexadecimal digits, held to a digest when the caller states one
 //! ([`checked_key`]).
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation
+    )
+)]
 use crate::invalid;
 
 /// The modulus and exponent (big-endian, without leading zeros) of a PKCS#1 `RSA PUBLIC KEY` PEM block.
@@ -41,17 +49,22 @@ fn der_item(b: &[u8]) -> Option<(u8, &[u8], &[u8])> {
         usize::from(first)
     } else {
         let n = usize::from(first & 0x7f);
-        if n == 0 || n > 4 || b.len() < n || b[0] == 0 {
+        if n == 0 || n > 4 {
             return None;
         }
-        let len = b[..n].iter().fold(0usize, |a, &x| a << 8 | usize::from(x));
+        let (digits, rest) = b.split_at_checked(n)?;
+        if digits.first() == Some(&0) {
+            return None;
+        }
+        let len = digits.iter().fold(0usize, |a, &x| a << 8 | usize::from(x));
         if len < 0x80 {
             return None;
         }
-        b = &b[n..];
+        b = rest;
         len
     };
-    (b.len() >= len).then(|| (tag, &b[..len], &b[len..]))
+    let (item, rest) = b.split_at_checked(len)?;
+    Some((tag, item, rest))
 }
 
 /// Standard base64 (RFC 4648) with `=` padding and zero pad bits; ASCII whitespace between characters is ignored.
@@ -61,30 +74,32 @@ fn base64(text: &str) -> Option<Vec<u8>> {
         return None;
     }
     let value = |c: u8| match c {
-        b'A'..=b'Z' => Some(c - b'A'),
-        b'a'..=b'z' => Some(c - b'a' + 26),
-        b'0'..=b'9' => Some(c - b'0' + 52),
+        b'A'..=b'Z' => Some(c.wrapping_sub(b'A')),
+        b'a'..=b'z' => Some(c.wrapping_sub(b'a').saturating_add(26)),
+        b'0'..=b'9' => Some(c.wrapping_sub(b'0').saturating_add(52)),
         b'+' => Some(62),
         b'/' => Some(63),
         _ => None,
     };
-    let mut out = Vec::with_capacity(digits.len() / 4 * 3);
+    let mut out = Vec::with_capacity((digits.len() / 4).saturating_mul(3));
     let chunks = digits.as_chunks::<4>().0;
     for (i, chunk) in chunks.iter().enumerate() {
         let pad = chunk.iter().rev().take_while(|&&c| c == b'=').count();
-        if pad > 2 || (pad > 0 && i + 1 != chunks.len()) {
+        if pad > 2 || (pad > 0 && i != chunks.len().saturating_sub(1)) {
             return None;
         }
         let mut word = 0u32;
-        for &c in &chunk[..4 - pad] {
+        let kept = 4usize.saturating_sub(pad);
+        for &c in chunk.get(..kept)? {
             word = word << 6 | u32::from(value(c)?);
         }
-        word <<= 6 * pad as u32;
+        let shift = u32::try_from(pad).ok()?;
+        word <<= shift.saturating_mul(6);
         // the bits below the last whole byte must be zero
-        if word & ((1 << (8 * pad as u32)) - 1) != 0 {
+        if word & (1u32 << shift.saturating_mul(8)).saturating_sub(1) != 0 {
             return None;
         }
-        out.extend_from_slice(&word.to_be_bytes()[1..4 - pad]);
+        out.extend_from_slice(word.to_be_bytes().get(1..kept)?);
     }
     Some(out)
 }
@@ -198,8 +213,8 @@ pub(crate) fn checked_key(hex: &str, sha256: Option<&[u8; 32]>) -> crate::Result
     }
     let mut key = [0u8; 32];
     for (i, (k, pair)) in key.iter_mut().zip(hex.as_bytes().as_chunks::<2>().0).enumerate() {
-        let digits = std::str::from_utf8(pair).map_err(|e| invalid("key", i * 2, e))?;
-        *k = u8::from_str_radix(digits, 16).map_err(|e| invalid("key", i * 2, e))?;
+        let digits = std::str::from_utf8(pair).map_err(|e| invalid("key", i.saturating_mul(2), e))?;
+        *k = u8::from_str_radix(digits, 16).map_err(|e| invalid("key", i.saturating_mul(2), e))?;
     }
     if sha256.is_some_and(|sha256| Sha256::digest(key)[..] != sha256[..]) {
         return Err(invalid(

@@ -1,5 +1,13 @@
 //! TPF texture packages (PC): each texture's name and flags with its DDS file, retained exactly as stored, all faces
 //! and mipmaps included. Pixels are not decoded.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation
+    )
+)]
 use crate::{
     Result,
     bytes::{Budget, View, coverage},
@@ -80,39 +88,46 @@ impl Package {
         let mut descriptors = Vec::new();
         for _ in 0..count {
             let offset = v.u32(p)? as usize;
-            let size = v.u32(p + 4)? as usize;
-            let format = v.u8(p + 8)?;
-            let kind = match v.u8(p + 9)? {
+            let size = v.u32(v.at(p, 4)?)? as usize;
+            let format = v.u8(v.at(p, 8)?)?;
+            let kind = match v.u8(v.at(p, 9)?)? {
                 0 => TextureKind::Image2D,
                 1 => TextureKind::Cube,
                 2 => TextureKind::Volume,
-                _ => return Err(invalid("TPF", p + 9, "unknown texture kind")),
+                _ => return Err(invalid("TPF", v.at(p, 9)?, "unknown texture kind")),
             };
-            let mipmaps = v.u8(p + 10)?;
-            let texture_flags = v.u8(p + 11)?;
+            let mipmaps = v.u8(v.at(p, 10)?)?;
+            let texture_flags = v.u8(v.at(p, 11)?)?;
             if texture_flags > 1 {
-                return Err(invalid("TPF", p + 11, "compressed/unknown PC texture flags"));
+                return Err(invalid(
+                    "TPF",
+                    v.at(p, 11)?,
+                    "compressed/unknown PC texture flags",
+                ));
             }
-            let name = v.u32(p + 12)? as usize;
-            let has_extra = v.u32(p + 16)?;
-            p += 20;
+            let name = v.u32(v.at(p, 12)?)? as usize;
+            let has_extra = v.u32(v.at(p, 16)?)?;
+            let flag_at = v.at(p, 16)?;
+            p = v.at(p, 20)?;
             let extra = match has_extra {
                 0 => None,
                 1 => {
                     let id = v.u32(p)?;
-                    let len = v.u32(p + 4)? as usize;
+                    let len_at = v.at(p, 4)?;
+                    let len = v.u32(len_at)? as usize;
                     if !len.is_multiple_of(4) {
-                        return Err(invalid("TPF", p + 4, "extra word size"));
+                        return Err(invalid("TPF", len_at, "extra word size"));
                     }
-                    v.slice(p + 8, len)?;
+                    let words_at = v.at(p, 8)?;
+                    v.slice(words_at, len)?;
                     let mut words = Vec::new();
                     for i in (0..len).step_by(4) {
-                        words.push(v.u32(p + 8 + i)?);
+                        words.push(v.u32(v.at(words_at, i)?)?);
                     }
-                    p += 8 + len;
+                    p = v.at(words_at, len)?;
                     Some(Extra { id, words })
                 }
-                _ => return Err(invalid("TPF", p - 4, "extra flag")),
+                _ => return Err(invalid("TPF", flag_at, "extra flag")),
             };
             descriptors.push((offset, size, format, kind, mipmaps, texture_flags, name, extra));
         }
@@ -128,7 +143,7 @@ impl Package {
             } else {
                 v.asciiz(name, &budget)?
             };
-            spans.push((name, end - name));
+            spans.push((name, end.saturating_sub(name)));
             names_end = names_end.max(end);
             budget.charge(offset, size)?;
             let dds = v.slice(offset, size)?.to_vec();
@@ -137,7 +152,7 @@ impl Package {
             }
             spans.push((offset, size));
             payload_start = Some(payload_start.map_or(offset, |first| first.min(offset)));
-            payload_end = payload_end.max(offset + size);
+            payload_end = payload_end.max(v.at(offset, size)?);
             textures.push(Texture {
                 name: text,
                 format,
@@ -152,10 +167,17 @@ impl Package {
         // PC producers measure data size either before payload alignment or at
         // the first DDS. Padding between sections is zero but has no fixed width.
         let first = payload_start.unwrap_or(names_end);
-        if first < names_end || (data_size != logical_end - names_end && data_size != logical_end - first) {
+        if first < names_end
+            || (data_size != logical_end.saturating_sub(names_end)
+                && data_size != logical_end.saturating_sub(first))
+        {
             return Err(invalid("TPF", 4, "data length mismatch"));
         }
-        if data.len() - logical_end > 15 || data[logical_end..].iter().any(|b| *b != 0) {
+        if data.len().saturating_sub(logical_end) > 15
+            || v.slice(logical_end, data.len().saturating_sub(logical_end))?
+                .iter()
+                .any(|b| *b != 0)
+        {
             return Err(invalid("TPF", logical_end, "trailing bytes"));
         }
         coverage(&v, spans, logical_end, usize::MAX)?;

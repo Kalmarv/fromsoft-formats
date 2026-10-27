@@ -12,6 +12,14 @@
 //! The parameter bytes of an event run to the start of the next event's record; the last event's to the animation's
 //! event groups, else to the next animation's header block, else to the end of the file, so they include the zero padding
 //! that aligns the records to 16 bytes.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation
+    )
+)]
 
 use crate::bytes::{Budget, View};
 use crate::{Result, invalid};
@@ -124,7 +132,11 @@ pub fn clip_animation_id(stem: &str) -> Option<i64> {
     if !digits(group) || !digits(number) {
         return None;
     }
-    Some(group.parse::<i64>().ok()? * 1_000_000 + number.parse::<i64>().ok()?)
+    group
+        .parse::<i64>()
+        .ok()?
+        .checked_mul(1_000_000)?
+        .checked_add(number.parse::<i64>().ok()?)
 }
 
 impl Tae {
@@ -170,13 +182,28 @@ impl Tae {
         v.slice(table, bytes)?;
         let mut bodies = Vec::with_capacity(count);
         for i in 0..count {
-            let at = table + i * 16;
-            bodies.push((v.u64(at)? as i64, size(&v, at + 8)?));
+            let at = v.element(table, i, 16)?;
+            let slot = v.at(at, 8)?;
+            let body = size(&v, slot)?;
+            if body >= data.len() {
+                return Err(invalid(
+                    FORMAT,
+                    slot,
+                    format!(
+                        "animation body at {body:#x} is beyond the {} bytes of the file",
+                        data.len()
+                    ),
+                ));
+            }
+            bodies.push((v.u64(at)? as i64, body));
         }
         let mut animations = Vec::with_capacity(count);
         for (i, &(animation_id, body)) in bodies.iter().enumerate() {
             // where this animation's event parameters stop at the latest: the next animation's header block
-            let next_block = bodies.get(i + 1).map(|&(_, b)| size(&v, b + 24)).transpose()?;
+            let next_block = bodies
+                .get(i.saturating_add(1))
+                .map(|&(_, b)| v.at(b, 24).and_then(|at| size(&v, at)))
+                .transpose()?;
             animations.push(read_animation(&v, &budget, animation_id, body, next_block)?);
         }
         Ok(Tae {
@@ -220,28 +247,28 @@ fn read_animation(
     next_block: Option<usize>,
 ) -> Result<Animation> {
     let headers = size(v, body)?;
-    let groups = size(v, body + 8)?;
-    let times = size(v, body + 16)?;
-    let block = size(v, body + 24)?;
-    let count = v.u32(body + 32)? as usize;
+    let groups = size(v, v.at(body, 8)?)?;
+    let times = size(v, v.at(body, 16)?)?;
+    let block = size(v, v.at(body, 24)?)?;
+    let count_at = v.at(body, 32)?;
+    let count = v.u32(count_at)? as usize;
     let bytes = count
         .checked_mul(24)
-        .ok_or_else(|| invalid(FORMAT, body + 32, "size overflow"))?;
+        .ok_or_else(|| invalid(FORMAT, count_at, "size overflow"))?;
     v.slice(headers, bytes)?;
     // each event: where its start and end times and its data are
     let mut records = Vec::with_capacity(count);
     for i in 0..count {
-        let at = headers + i * 24;
-        let (start, end, data) = (size(v, at)?, size(v, at + 8)?, size(v, at + 16)?);
-        let parameters = data
-            .checked_add(16)
-            .ok_or_else(|| invalid(FORMAT, at + 16, "size overflow"))?;
+        let at = v.element(headers, i, 24)?;
+        let (start, end, data) = (size(v, at)?, size(v, v.at(at, 8)?)?, size(v, v.at(at, 16)?)?);
+        let parameters = v.at(data, 16)?;
         // the record's parameter offset is the next word after it, or 0
-        let stored = size(v, data + 8)?;
+        let stored_at = v.at(data, 8)?;
+        let stored = size(v, stored_at)?;
         if stored != 0 && stored != parameters {
             return Err(invalid(
                 FORMAT,
-                data + 8,
+                stored_at,
                 format!("event {i} of animation {id} names parameters at {stored:#x}, not after its record"),
             ));
         }
@@ -255,7 +282,7 @@ fn read_animation(
     let mut events = Vec::with_capacity(count);
     for (i, &(start, end, data, parameters)) in records.iter().enumerate() {
         // the parameters run to the next record's start, which follows them in the file
-        let stop = match records.get(i + 1) {
+        let stop = match records.get(i.saturating_add(1)) {
             Some(&(_, _, next, _)) => next,
             None => limit,
         };
@@ -269,7 +296,7 @@ fn read_animation(
         budget.charge(parameters, length)?;
         events.push(Event {
             kind: v.u32(data)? as i32,
-            unk04: v.u32(data + 4)? as i32,
+            unk04: v.u32(v.at(data, 4)?)? as i32,
             start: float(v, start)?,
             end: float(v, end)?,
             parameters: v.slice(parameters, length)?.to_vec(),
@@ -289,21 +316,21 @@ fn read_animation(
 fn read_block(v: &View<'_>, budget: &Budget, block: usize, times: usize) -> (Header, Option<String>) {
     let read = || -> Result<(Header, Option<String>)> {
         let kind = v.u32(block)?;
-        let record = v.u32(block + 8)? as usize;
+        let record = v.u32(v.at(block, 8)?)? as usize;
         if record == 0 {
             return Ok((Header::None, None));
         }
         let name_at = v.u32(record)? as usize;
         let header = match kind {
             0 => Header::Standard {
-                loops: v.u8(record + 8)? != 0,
-                imports_hkx: v.u8(record + 9)? != 0,
-                allow_delay_load: v.u8(record + 10)? != 0,
-                import_hkx_source: v.u32(record + 12)? as i32,
+                loops: v.u8(v.at(record, 8)?)? != 0,
+                imports_hkx: v.u8(v.at(record, 9)?)? != 0,
+                allow_delay_load: v.u8(v.at(record, 10)?)? != 0,
+                import_hkx_source: v.u32(v.at(record, 12)?)? as i32,
             },
             1 => Header::ImportOther {
-                from: v.u32(record + 8)? as i32,
-                unknown: v.u32(record + 12)? as i32,
+                from: v.u32(v.at(record, 8)?)? as i32,
+                unknown: v.u32(v.at(record, 12)?)? as i32,
             },
             other => return Err(invalid(FORMAT, block, format!("mini header type {other}"))),
         };
@@ -458,5 +485,30 @@ mod tests {
         assert_eq!(clip_animation_id("skeleton"), None);
         assert_eq!(clip_animation_id("a00x_003000"), None);
         assert_eq!(clip_animation_id("a000_"), None);
+    }
+
+    #[test]
+    fn an_animation_body_beyond_the_file_is_an_error_at_the_table_slot() {
+        for body in [u64::MAX - 3, u64::MAX - 40, 1 << 50] {
+            let mut b = file();
+            u64le(&mut b, 0xd8, body);
+            let e = Tae::read(&b).unwrap_err().to_string();
+            assert!(
+                e.starts_with("TAE at 0xd8: animation body at ") && e.contains("is beyond the"),
+                "{e}"
+            );
+            // a later animation's body is read for the end of the one before it
+            for body in [u64::MAX - 3, u64::MAX - 40] {
+                let mut b = file();
+                u32le(&mut b, 84, 2);
+                u64le(&mut b, 88, 0x200);
+                u64le(&mut b, 0x200, 3000);
+                u64le(&mut b, 0x208, 0xe0);
+                u64le(&mut b, 0x210, 3001);
+                u64le(&mut b, 0x218, body);
+                let e = Tae::read(&b).unwrap_err().to_string();
+                assert!(e.starts_with("TAE at 0x218: animation body at "), "{e}");
+            }
+        }
     }
 }

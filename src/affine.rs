@@ -74,3 +74,12 @@ pub fn pose(v: [f32; 3], p: [f32; 4], q: [f32; 4]) -> [f32; 3] {
     let [x, y, z, _] = p;
     posed(&pose_columns([x, y, z], q), v)
 }
+
+/// `x` rounded to the nearest f32 (the width poses are stored in).
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "a float narrowed to the nearest float: no integer value is truncated"
+)]
+pub(crate) fn narrow(x: f64) -> f32 {
+    x as f32
+}
