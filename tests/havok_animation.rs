@@ -9,7 +9,8 @@
 //!   binder holds. The counts by class and by type are printed.
 //!
 //!   The install has one exception, named in `KNOWN` and checked to be exactly it: one file of `c1090` is a tagfile of
-//!   SDK 2015.1 (the reader knows 2016.2 and 2018.1). A track bound to a negative bone index drives no bone (two files
+//!   SDK 2015.1; it reads, but its binding's `originalSkeletonName` is empty, so it names no skeleton the binder holds.
+//!   A track bound to a negative bone index drives no bone (two files
 //!   of `c7300` have one).
 
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
@@ -24,7 +25,10 @@ use havok_formats::{Compendium, Tagfile};
 use inputs::{Game, Tool, install, oodle};
 
 /// The files the census expects not to read cleanly, by file name, and why.
-const KNOWN: [(&str, &str); 1] = [(r"c1090\hkx\a000_205000.hkx", "unsupported SDK version")];
+const KNOWN: [(&str, &str); 1] = [(
+    r"c1090\hkx\a000_205000.hkx",
+    "the binding names a skeleton the binder does not hold",
+)];
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 

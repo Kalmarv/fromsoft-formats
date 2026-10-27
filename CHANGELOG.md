@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0 (2026-10-27)
+
+- TPF: the texture-flags byte may be `0x80`, as on every texture of Elden Ring's environment-probe packages (221,796
+  textures); `Texture::flags` keeps it.
+- BTL: version 15 (240-byte light records, two Elden Ring banks) reads; the record size is checked in the header.
+- BHD5: an entry outside its hash bucket (`hash % bucket_count`) is refused.
+- FLVER: `Material` gains `string_bytes` (+16, checked against the material's strings outside version 0x20014) and
+  `index` (+24). Breaking: a struct literal of `Material` needs them, and `btl::VERSIONS` has three entries.
+- Depends on `havok-formats` 0.4.0 (Sekiro's one SDK 2015.1 clip now reads; `tests/havok_animation.rs` names why it
+  still has no skeleton) and `dx` 0.2.0.
+
 ## 0.3.0 (2026-10-27)
 
 
