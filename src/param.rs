@@ -234,7 +234,7 @@ impl NpcParam {
                 FORMAT,
                 0,
                 format!(
-                    "{} version {} with rows of {} bytes, the NPC param read is {NPC_PARAM_TYPE} version {} with rows                      of {}",
+                    "{} version {} with rows of {} bytes, the NPC param read is {NPC_PARAM_TYPE} version {} with rows of {}",
                     param.param_type,
                     param.data_version,
                     param.row_size,
@@ -243,21 +243,30 @@ impl NpcParam {
                 ),
             ));
         }
-        let rows = param
-            .rows
-            .iter()
-            .map(|r| {
-                let display_mask = layout
-                    .mask_bytes
-                    .iter()
-                    .enumerate()
-                    .fold(0u32, |m, (g, &b)| m | u32::from(r.data[b]) << (8 * g));
-                NpcRow {
-                    id: r.id,
-                    display_mask,
-                }
-            })
-            .collect();
+        let mut rows = Vec::with_capacity(param.rows.len());
+        for r in &param.rows {
+            let mut display_mask = 0u32;
+            for (group, &at) in layout.mask_bytes.iter().enumerate() {
+                let byte = r.data.get(at).ok_or_else(|| {
+                    invalid(
+                        FORMAT,
+                        at,
+                        format!(
+                            "row {} of {} bytes has no byte {at}, which the layout reads as modelDispMask bits {}..{}",
+                            r.id,
+                            r.data.len(),
+                            group * 8,
+                            group * 8 + 7
+                        ),
+                    )
+                })?;
+                display_mask |= u32::from(*byte) << (group * 8);
+            }
+            rows.push(NpcRow {
+                id: r.id,
+                display_mask,
+            });
+        }
         Ok(NpcParam { rows })
     }
 
@@ -385,8 +394,8 @@ impl NpcStats {
         let mut out = Vec::with_capacity(param.rows.len());
         for r in &param.rows {
             let word = |at: usize| -> Result<[u8; 4]> {
-                r.data
-                    .get(at..at + 4)
+                at.checked_add(4)
+                    .and_then(|end| r.data.get(at..end))
                     .and_then(|b| <[u8; 4]>::try_from(b).ok())
                     .ok_or_else(|| invalid(FORMAT, at, format!("row {} ends before byte {at}", r.id)))
             };
@@ -737,5 +746,41 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(e.contains("not the layout read"), "{e}");
+    }
+
+    #[test]
+    fn a_custom_layout_reading_past_the_row_is_an_error_not_a_panic() {
+        let l = Game::Sekiro.npc_param();
+        let bytes = fixture(NPC_PARAM_TYPE, l.data_version, l.row_size, &[(7, npc_row(&l, 1))]);
+        let p = Param::read(&bytes).unwrap();
+        for at in [l.row_size, l.row_size + 100, usize::MAX] {
+            let custom = NpcLayout {
+                mask_bytes: [l.mask_bytes[0], at, l.mask_bytes[2], l.mask_bytes[3]],
+                ..l
+            };
+            let e = NpcParam::from_param(&p, &custom).unwrap_err().to_string();
+            assert!(e.starts_with(&format!("PARAM at {at:#x}: row 7")), "{e}");
+            let stats = NpcStatLayout {
+                data_version: l.data_version,
+                row_size: l.row_size,
+                offsets: [at; 10],
+            };
+            let e = NpcStats::from_param(&p, &stats).unwrap_err().to_string();
+            assert!(e.starts_with(&format!("PARAM at {at:#x}: row 7")), "{e}");
+        }
+    }
+
+    #[test]
+    fn refusal_text_has_no_runs_of_spaces() {
+        let (sekiro, elden) = (Game::Sekiro.npc_param(), Game::EldenRing.npc_param());
+        let bytes = fixture(
+            NPC_PARAM_TYPE,
+            elden.data_version,
+            elden.row_size,
+            &[(1, npc_row(&elden, 1))],
+        );
+        let e = NpcParam::read(&bytes, &sekiro).unwrap_err().to_string();
+        assert!(!e.contains("  "), "{e}");
+        assert!(e.ends_with(&format!("with rows of {}", sekiro.row_size)), "{e}");
     }
 }
