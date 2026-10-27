@@ -184,8 +184,8 @@ dependencies = [
 
 [[package]]
 name = "dxcontainer"
-version = "0.1.0"
-source = "git+https://github.com/Kalmarv/dx?rev=ab07f2b27e9f154508c4502ac8b61134b7e34b08#ab07f2b27e9f154508c4502ac8b61134b7e34b08"
+version = "0.1.1"
+source = "git+https://github.com/Kalmarv/dx?rev=ee5dce9e8d52ccdf54864245ecca2cc0ee8a53bf#ee5dce9e8d52ccdf54864245ecca2cc0ee8a53bf"
 dependencies = [
  "primase-foundations",
  "thiserror",
@@ -375,7 +375,7 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 [[package]]
 name = "havok-formats"
 version = "0.1.0"
-source = "git+https://github.com/Kalmarv/havok-formats?rev=fd5ac50a722dfb993ad232605cea7bc0577c2134#fd5ac50a722dfb993ad232605cea7bc0577c2134"
+source = "git+https://github.com/Kalmarv/havok-formats?rev=1da63c88309165c03c9bf0e57b1e2debee40e2a7#1da63c88309165c03c9bf0e57b1e2debee40e2a7"
 dependencies = [
  "primase-foundations",
  "thiserror",
@@ -536,29 +536,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
-name = "pin-project-lite"
-version = "0.2.17"
+name = "oozextract"
+version = "0.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
-
-[[package]]
-name = "primase-foundations"
-version = "0.1.0"
-source = "git+https://github.com/Kalmarv/primase-foundations?rev=dc4369b73343f3e0d81adc47f2e504027efc1d5a#dc4369b73343f3e0d81adc47f2e504027efc1d5a"
-dependencies = [
- "flate2",
- "half",
- "libloading",
- "lz4_flex",
- "primase-oozextract",
- "ruzstd",
- "thiserror",
-]
-
-[[package]]
-name = "primase-oozextract"
-version = "0.5.6"
-source = "git+https://github.com/Kalmarv/primase-oozextract?rev=9273ca48cd301d0cf7fb7cd3a83c9ecdc6c0bb32#9273ca48cd301d0cf7fb7cd3a83c9ecdc6c0bb32"
+checksum = "890a74cc43300b8e482f62f989bcab89ec760921b0cea87aa5bbb7fdfef1c013"
 dependencies = [
  "bytemuck",
  "bytes",
@@ -566,6 +547,26 @@ dependencies = [
  "log",
  "test-log",
  "wide",
+]
+
+[[package]]
+name = "pin-project-lite"
+version = "0.2.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
+
+[[package]]
+name = "primase-foundations"
+version = "0.2.0"
+source = "git+https://github.com/Kalmarv/primase-foundations?rev=b3a3d4b3a892b8342fda081ab4449bb57052a2f8#b3a3d4b3a892b8342fda081ab4449bb57052a2f8"
+dependencies = [
+ "flate2",
+ "half",
+ "libloading",
+ "lz4_flex",
+ "oozextract",
+ "ruzstd",
+ "thiserror",
 ]
 
 [[package]]
