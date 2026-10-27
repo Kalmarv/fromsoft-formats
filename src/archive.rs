@@ -7,6 +7,14 @@
     clippy::disallowed_types,
     reason = "reader I/O: reads the install's archives"
 )]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation
+    )
+)]
 pub use crate::bhd::{PathHash, path_hash, path_hash64};
 use crate::{
     Game, Result,
@@ -58,7 +66,8 @@ impl NameDictionary {
             }
             if let Some(bad) = s.bytes().position(|b| !b.is_ascii()) {
                 // `s` is `line` less its edges: the bytes cut from the front come before the first bad byte
-                let lead = line.len() - line.trim_start().len() + (trimmed.len() - s.len());
+                let lead = (line.len().saturating_sub(line.trim_start().len()))
+                    .saturating_add(trimmed.len().saturating_sub(s.len()));
                 return Err(invalid(
                     "dictionary",
                     line_at.saturating_add(lead).saturating_add(bad),

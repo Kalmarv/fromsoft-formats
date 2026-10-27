@@ -1,3 +1,11 @@
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation
+    )
+)]
 use primase_foundations::bytes::{BoundsError, Endian};
 
 use crate::{Result, invalid};
@@ -22,6 +30,13 @@ impl<'a> View<'a> {
     /// The offset `delta` bytes after `base`, or an error at `base` when the sum does not fit an offset.
     pub fn at(&self, base: usize, delta: usize) -> Result<usize> {
         base.checked_add(delta)
+            .ok_or_else(|| invalid(self.format, base, "offset overflow"))
+    }
+    /// The offset of element `i` of a table of `size`-byte elements at `base`, or an error at `base` when it does not
+    /// fit an offset.
+    pub fn element(&self, base: usize, i: usize, size: usize) -> Result<usize> {
+        i.checked_mul(size)
+            .and_then(|delta| base.checked_add(delta))
             .ok_or_else(|| invalid(self.format, base, "offset overflow"))
     }
     pub fn slice(&self, o: usize, n: usize) -> Result<&'a [u8]> {
@@ -115,13 +130,14 @@ impl View<'_> {
                 .checked_add(2)
                 .ok_or_else(|| invalid(self.format, o, "size overflow"))?;
         }
-        budget.charge(o, end - o + 2)?;
+        let after = self.at(end, 2)?;
+        budget.charge(o, after.saturating_sub(o))?;
         let units = (o..end)
             .step_by(2)
             .map(|at| self.u16(at))
             .collect::<Result<Vec<u16>>>()?;
         let text = String::from_utf16(&units).map_err(|e| invalid(self.format, o, e))?;
-        Ok((text, end + 2))
+        Ok((text, after))
     }
     /// The NUL-terminated ASCII string at `o` and the offset after its terminator, charged like [`View::utf16z`]; a
     /// byte over 0x7f is an error (Shift-JIS names are not read).
@@ -132,13 +148,14 @@ impl View<'_> {
                 .checked_add(1)
                 .ok_or_else(|| invalid(self.format, o, "size overflow"))?;
         }
-        budget.charge(o, end - o + 1)?;
-        let raw = self.slice(o, end - o)?;
+        let after = self.at(end, 1)?;
+        budget.charge(o, after.saturating_sub(o))?;
+        let raw = self.slice(o, end.saturating_sub(o))?;
         if !raw.is_ascii() {
             return Err(invalid(self.format, o, "non-ASCII Shift-JIS name unsupported"));
         }
         let text = String::from_utf8(raw.to_vec()).map_err(|_| invalid(self.format, o, "name encoding"))?;
-        Ok((text, end + 1))
+        Ok((text, after))
     }
 }
 pub(crate) fn coverage(
@@ -155,14 +172,19 @@ pub(crate) fn coverage(
         if start < pos {
             return Err(invalid(v.format, start, "overlapping sections"));
         }
-        if start - pos > padding || v.slice(pos, start - pos)?.iter().any(|&b| b != 0) {
+        if start.saturating_sub(pos) > padding
+            || v.slice(pos, start.saturating_sub(pos))?.iter().any(|&b| b != 0)
+        {
             return Err(invalid(v.format, pos, "unaccounted bytes"));
         }
         pos = start
             .checked_add(len)
             .ok_or_else(|| invalid(v.format, start, "size overflow"))?;
     }
-    if pos > end || end - pos > padding || v.slice(pos, end - pos)?.iter().any(|&b| b != 0) {
+    if pos > end
+        || end.saturating_sub(pos) > padding
+        || v.slice(pos, end.saturating_sub(pos))?.iter().any(|&b| b != 0)
+    {
         return Err(invalid(v.format, pos, "unaccounted trailing bytes"));
     }
     Ok(())

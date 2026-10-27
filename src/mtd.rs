@@ -1,5 +1,13 @@
 //! MTD material definitions (`.mtd`, Sekiro): a shader, a description, typed parameters and texture slots, in nested
 //! blocks whose counts and markers are all checked against the file, with Shift-JIS strings decoded strictly.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation
+    )
+)]
 use primase_foundations::bytes::Endian;
 
 use crate::{Result, invalid};
@@ -96,10 +104,11 @@ impl Cursor<'_> {
     }
     fn marker(&mut self, expected: u8) -> Result<()> {
         let at = self.c.position();
-        if self.bytes(1)?[0] != expected {
+        if self.bytes(1)?.first() != Some(&expected) {
             return Err(invalid("MTD", at, "marker"));
         }
-        let padding = (4 - self.c.position() % 4) % 4;
+        // the bytes up to the next multiple of four
+        let padding = self.c.position().wrapping_neg() % 4;
         if self.bytes(padding)?.iter().any(|b| *b != 0) {
             return Err(invalid("MTD", at, "nonzero alignment"));
         }
@@ -122,7 +131,11 @@ impl Cursor<'_> {
         self.expect(kind)?;
         let version = self.u32()?;
         if !versions.contains(&version) {
-            return Err(invalid("MTD", self.c.position() - 4, "block version"));
+            return Err(invalid(
+                "MTD",
+                self.c.position().saturating_sub(4),
+                "block version",
+            ));
         }
         self.marker(marker)?;
         Ok(version)
@@ -136,7 +149,7 @@ impl Cursor<'_> {
             start,
             kind,
             declared,
-            consumed: self.c.position() - start,
+            consumed: self.c.position().saturating_sub(start),
         });
         Ok(())
     }
@@ -193,10 +206,10 @@ impl MaterialDefinition {
             c.block(block, &[1], marker)?;
             c.expect(n)?;
             let value = if block == 0x1000 {
-                match c.bytes(1)?[0] {
-                    0 => Value::Bool(false),
-                    1 => Value::Bool(true),
-                    _ => return Err(invalid("MTD", c.c.position() - 1, "boolean")),
+                match c.bytes(1)?.first() {
+                    Some(0) => Value::Bool(false),
+                    Some(1) => Value::Bool(true),
+                    _ => return Err(invalid("MTD", c.c.position().saturating_sub(1), "boolean")),
                 }
             } else if block == 0x1001 {
                 Value::Int((0..n).map(|_| c.u32().map(|x| x as i32)).collect::<Result<_>>()?)

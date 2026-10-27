@@ -1,4 +1,12 @@
 //! Elden Ring's own rules: what differs from the other FromSoftware games and is not stated by the files themselves.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation
+    )
+)]
 use crate::bhd::{PathHash, RecordLayout};
 use crate::game::{ArchivePair, ArchiveSet, CollisionSource, ObjectModel, Resolution};
 use crate::{Result, invalid};
@@ -87,7 +95,11 @@ pub(crate) fn parent_tiles(tile: &str) -> Vec<(String, [f64; 2])> {
     if tile.len() != 12 || !tile.is_ascii() || !tile.ends_with("_00") {
         return Vec::new();
     }
-    let (Ok(x), Ok(z)) = (tile[4..6].parse::<u32>(), tile[7..9].parse::<u32>()) else {
+    let (Some(Ok(x)), Some(Ok(z)), Some(area)) = (
+        tile.get(4..6).map(str::parse::<u32>),
+        tile.get(7..9).map(str::parse::<u32>),
+        tile.get(..3),
+    ) else {
         return Vec::new();
     };
     levels
@@ -95,9 +107,9 @@ pub(crate) fn parent_tiles(tile: &str) -> Vec<(String, [f64; 2])> {
         .map(|&level| {
             let (px, pz) = (x >> level, z >> level);
             let half = edge * f64::from(1u32 << level) / 2.;
-            let offset = |i: u32, p: u32| f64::from(i - (p << level)) * edge + edge / 2. - half;
+            let offset = |i: u32, p: u32| f64::from(i.saturating_sub(p << level)) * edge + edge / 2. - half;
             (
-                format!("{}_{px:02}_{pz:02}_{level:02}", &tile[..3]),
+                format!("{area}_{px:02}_{pz:02}_{level:02}"),
                 [offset(x, px), offset(z, pz)],
             )
         })

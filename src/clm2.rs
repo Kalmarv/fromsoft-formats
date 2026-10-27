@@ -3,6 +3,14 @@
 //! word means is not established (SoulsFormatsNEXT names them `Unk00` and `Unk02`), so they are kept as stored.
 //! Sekiro's part binders hold them for the cloth of a body (`bd_m_9500_m.clm2`) and a weapon (`wp_a_0427_c.clm2`), and
 //! some object binders.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation
+    )
+)]
 
 use crate::bytes::{Budget, View};
 use crate::{Result, invalid};
@@ -11,6 +19,8 @@ const FORMAT: &str = "CLM2";
 
 /// The bytes of the file's header, and of each mesh's record after it.
 const HEADER: usize = 0x28;
+/// [`HEADER`] as the little-endian word the header states twice.
+const HEADER_WORD: [u8; 4] = 0x28u32.to_le_bytes();
 const MESH_RECORD: usize = 16;
 
 /// A CLM2 file.
@@ -33,9 +43,9 @@ impl Clm2 {
         v.expect(8, &[1, 0, 1, 0])?;
         v.expect(12, &[0; 8])?;
         let count = v.u32(20)? as usize;
-        v.expect(24, &(HEADER as u32).to_le_bytes())?;
+        v.expect(24, &HEADER_WORD)?;
         v.expect(28, &[0; 8])?;
-        v.expect(36, &(HEADER as u32).to_le_bytes())?;
+        v.expect(36, &HEADER_WORD)?;
         let table = count
             .checked_mul(MESH_RECORD)
             .ok_or_else(|| invalid(FORMAT, 20, "size overflow"))?;
@@ -43,14 +53,14 @@ impl Clm2 {
         let budget = Budget::new(FORMAT, data.len());
         let mut meshes = Vec::with_capacity(count);
         for i in 0..count {
-            let at = HEADER + i * MESH_RECORD;
+            let at = v.element(HEADER, i, MESH_RECORD)?;
             v.expect(at, &[0; 4])?;
-            v.expect(at + 12, &[0; 4])?;
-            let n = v.u32(at + 4)? as usize;
-            let offset = v.u32(at + 8)? as usize;
+            v.expect(v.at(at, 12)?, &[0; 4])?;
+            let n = v.u32(v.at(at, 4)?)? as usize;
+            let offset = v.u32(v.at(at, 8)?)? as usize;
             let bytes = n
                 .checked_mul(4)
-                .ok_or_else(|| invalid(FORMAT, at + 4, "size overflow"))?;
+                .ok_or_else(|| invalid(FORMAT, at, "size overflow"))?;
             if n == 0 {
                 meshes.push(Vec::new());
                 continue;
@@ -59,7 +69,10 @@ impl Clm2 {
             budget.charge(offset, bytes)?;
             meshes.push(
                 (0..n)
-                    .map(|k| Ok([v.u16(offset + 4 * k)? as i16, v.u16(offset + 4 * k + 2)? as i16]))
+                    .map(|k| {
+                        let word = v.element(offset, k, 4)?;
+                        Ok([v.u16(word)? as i16, v.u16(v.at(word, 2)?)? as i16])
+                    })
                     .collect::<Result<Vec<_>>>()?,
             );
         }

@@ -6,6 +6,14 @@
     clippy::disallowed_methods,
     reason = "reader I/O: reads the game's regulation file beside its executable"
 )]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation
+    )
+)]
 use aes::{
     Aes256,
     cipher::{Array, BlockCipherDecrypt, KeyInit},
@@ -160,7 +168,20 @@ pub fn npc_placements(
             out.push(NpcPlacement {
                 map: map.to_owned(),
                 part: p.name.clone(),
-                model: p.model.map(|m| layout.models[m].name.clone()).unwrap_or_default(),
+                model: match p.model {
+                    Some(m) => layout
+                        .models
+                        .get(m)
+                        .map(|model| model.name.clone())
+                        .ok_or_else(|| {
+                            invalid(
+                                "MSB",
+                                0,
+                                format!("part {} names model {m} of {}", p.name, layout.models.len()),
+                            )
+                        })?,
+                    None => String::new(),
+                },
                 dummy,
                 row: p.npc_param.unwrap_or(-1),
                 character_init: layout.character_init(p.index)?,

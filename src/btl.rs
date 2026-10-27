@@ -1,5 +1,13 @@
 //! BTL light-bank values: versions 16 (Sekiro) and 18 (Elden Ring) share the 232-byte light record. The file stores
 //! RGB bytes; their transfer function and the mapping of intensity into target watts are the caller's to choose.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation
+    )
+)]
 use crate::{
     Result,
     bytes::{Budget, View},
@@ -91,21 +99,22 @@ impl LightBank {
         let budget = Budget::new("BTL", bytes.len());
         let mut lights = Vec::with_capacity(count);
         for i in 0..count {
+            let record_at = v.element(start, i, 232)?;
             let r = View {
-                data: v.slice(start + i * 232, 232)?,
+                data: v.slice(record_at, 232)?,
                 format: "BTL light",
                 be: false,
             };
             let n = r.size(16)?;
-            if n % 2 != 0 {
-                return Err(invalid("BTL", start + i * 232 + 16, "unaligned UTF-16 name"));
+            if !n.is_multiple_of(2) {
+                return Err(invalid("BTL", v.at(record_at, 16)?, "unaligned UTF-16 name"));
             }
             let (name, _) = names.utf16z(n, &budget)?;
             let kind = match r.u32(24)? {
                 0 => Kind::Point,
                 1 => Kind::Spot,
                 2 => Kind::Directional,
-                _ => return Err(invalid("BTL", start + i * 232 + 24, "unknown light type")),
+                _ => return Err(invalid("BTL", v.at(record_at, 24)?, "unknown light type")),
             };
             r.boolean(28)?;
             for offset in [96, 140, 148, 168, 176, 180] {

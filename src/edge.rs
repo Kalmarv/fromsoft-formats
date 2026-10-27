@@ -1,4 +1,12 @@
 //! EDGE files (hang edges) as Sekiro stores them: grapple points, hang segments and wall-hug segments.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation
+    )
+)]
 use crate::{Result, bytes::View, invalid};
 /// What an edge record marks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,7 +63,7 @@ impl Edges {
         v.expect(12, &[0; 4])?;
         let mut edges = Vec::with_capacity(count);
         for i in 0..count {
-            let start = 16 + i * 64;
+            let start = v.element(16, i, 64)?;
             let r = View {
                 data: v.slice(start, 64)?,
                 format: "EDGE record",
@@ -68,7 +76,7 @@ impl Edges {
                 1 => Kind::Grapple,
                 2 => Kind::Hang,
                 3 => Kind::Hug,
-                _ => return Err(invalid("EDGE", start + 52, "unknown edge type")),
+                _ => return Err(invalid("EDGE", v.at(start, 52)?, "unknown edge type")),
             };
             edges.push(Edge {
                 points: [vector(&r, 0)?, vector(&r, 16)?, vector(&r, 32)?],
@@ -93,5 +101,9 @@ pub(crate) fn float(v: &View<'_>, offset: usize) -> Result<f32> {
     Ok(value)
 }
 pub(crate) fn vector(v: &View<'_>, offset: usize) -> Result<[f32; 3]> {
-    Ok([float(v, offset)?, float(v, offset + 4)?, float(v, offset + 8)?])
+    Ok([
+        float(v, offset)?,
+        float(v, v.at(offset, 4)?)?,
+        float(v, v.at(offset, 8)?)?,
+    ])
 }

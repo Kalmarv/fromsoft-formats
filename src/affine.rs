@@ -1,24 +1,40 @@
 //! Affine arithmetic on the places files store: column matrices in f64 ([`Matrix`]) and in f32 as a pose's columns
 //! ([`pose_columns`]: a Havok body's position and unit quaternion).
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation
+    )
+)]
 
 /// An affine map in f64: the images of the x, y and z axes, then the translation.
 pub type Matrix = [[f64; 3]; 4];
 /// The direction `p` through `m` (no translation).
 pub fn affine_vector(m: &Matrix, p: [f64; 3]) -> [f64; 3] {
-    std::array::from_fn(|a| (0..3).map(|i| m[i][a] * p[i]).sum())
+    let [[a0, a1, a2], [b0, b1, b2], [c0, c1, c2], _] = *m;
+    let [x, y, z] = p;
+    [
+        a0 * x + b0 * y + c0 * z,
+        a1 * x + b1 * y + c1 * z,
+        a2 * x + b2 * y + c2 * z,
+    ]
 }
 /// The point `p` through `m`.
 pub fn affine_point(m: &Matrix, p: [f64; 3]) -> [f64; 3] {
-    let v = affine_vector(m, p);
-    std::array::from_fn(|i| v[i] + m[3][i])
+    let [vx, vy, vz] = affine_vector(m, p);
+    let [_, _, _, [tx, ty, tz]] = *m;
+    [vx + tx, vy + ty, vz + tz]
 }
 /// `local`, then `parent`: the map of a child placed in its parent's space.
 pub fn compose(parent: &Matrix, local: &Matrix) -> Matrix {
+    let [x, y, z, t] = *local;
     [
-        affine_vector(parent, local[0]),
-        affine_vector(parent, local[1]),
-        affine_vector(parent, local[2]),
-        affine_point(parent, local[3]),
+        affine_vector(parent, x),
+        affine_vector(parent, y),
+        affine_vector(parent, z),
+        affine_point(parent, t),
     ]
 }
 
@@ -44,10 +60,17 @@ pub fn pose_columns(p: [f32; 3], q: [f32; 4]) -> [[f32; 3]; 4] {
 
 /// `v` through the affine map with columns `c`.
 pub fn posed(c: &[[f32; 3]; 4], v: [f32; 3]) -> [f32; 3] {
-    std::array::from_fn(|i| v[0] * c[0][i] + v[1] * c[1][i] + v[2] * c[2][i] + c[3][i])
+    let [[a0, a1, a2], [b0, b1, b2], [c0, c1, c2], [t0, t1, t2]] = *c;
+    let [x, y, z] = v;
+    [
+        x * a0 + y * b0 + z * c0 + t0,
+        x * a1 + y * b1 + z * c1 + t1,
+        x * a2 + y * b2 + z * c2 + t2,
+    ]
 }
 
 /// `v` through the pose of position `p` (its `xyz`) and orientation `q`.
 pub fn pose(v: [f32; 3], p: [f32; 4], q: [f32; 4]) -> [f32; 3] {
-    posed(&pose_columns([p[0], p[1], p[2]], q), v)
+    let [x, y, z, _] = p;
+    posed(&pose_columns([x, y, z], q), v)
 }
