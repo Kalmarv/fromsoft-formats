@@ -129,8 +129,12 @@ impl Keys {
             if file.is_file() {
                 let text = std::fs::read_to_string(&file)?;
                 regulation = Some(
-                    crate::keys::checked_key(text.trim(), regulation_sha256)
-                        .map_err(|e| invalid("key", 0, format!("{}: {e}", file.display())))?,
+                    crate::keys::checked_key(text.trim(), regulation_sha256).map_err(|e| match e {
+                        crate::Error::Invalid { offset, detail, .. } => {
+                            invalid("key", offset, format!("{}: {detail}", file.display()))
+                        }
+                        other => other,
+                    })?,
                 );
             }
         }
