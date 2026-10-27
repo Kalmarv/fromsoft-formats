@@ -19,27 +19,27 @@ pub enum Kind {
 /// One 232-byte light record, as stored.
 #[derive(Debug, Clone)]
 pub struct Light {
-    /// The light's name.
+    /// The light's name: UTF-16 text in the name table, found through the record's length at record offset 16.
     pub name: String,
-    /// Its shape.
+    /// Its shape, from the `u32` type at record offset 24.
     pub kind: Kind,
-    /// Diffuse colour, RGB bytes.
+    /// Diffuse colour: the three bytes at record offset 29 (red, green, blue; no transfer function applied).
     pub diffuse: [u8; 3],
-    /// Diffuse intensity, as stored (its mapping to a physical unit is the caller's).
+    /// Diffuse intensity: the `f32` at record offset 32, as stored (its mapping to a physical unit is the caller's).
     pub diffuse_power: f32,
-    /// Specular colour, RGB bytes.
+    /// Specular colour: the three bytes at record offset 36 (red, green, blue).
     pub specular: [u8; 3],
-    /// Specular intensity, as stored.
+    /// Specular intensity: the `f32` at record offset 40, as stored.
     pub specular_power: f32,
-    /// Whether the light casts shadows.
+    /// Whether the light casts shadows: the byte at record offset 39 (0 or 1; any other value is refused).
     pub cast_shadows: bool,
-    /// The cone angle, as stored.
+    /// The cone angle: the `f32` at record offset 44, as stored (unit not established; meaningful for spot lights).
     pub cone_angle: f32,
-    /// Its position, as stored.
+    /// Its position: three `f32` at record offset 56, as stored.
     pub position: [f32; 3],
-    /// Its rotation, as stored (three floats).
+    /// Its rotation: three `f32` at record offset 68, as stored (angle unit and order are not established).
     pub rotation: [f32; 3],
-    /// Its radius, as stored.
+    /// Its radius: the `f32` at record offset 88, as stored.
     pub radius: f32,
     /// The record's remaining 4-byte words, as stored, by byte offset in the record; no meaning is assigned to them.
     pub auxiliary: std::collections::BTreeMap<usize, u32>,

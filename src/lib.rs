@@ -1,4 +1,4 @@
-//! Strict readers of FromSoftware's data (Sekiro: Shadows Die Twice and Elden Ring): the installed BHD5/BDT archives
+//! Strict, read-only readers of FromSoftware's data (Sekiro: Shadows Die Twice and Elden Ring): the installed BHD5/BDT archives
 //! ([`Archive`], with keys the caller supplies), DCX envelopes ([`dcx`]), BND4 binders ([`Binder`]) and the formats
 //! they hold: FLVER models, map layouts (MSB), light banks (BTL), hang edges (EDGE), event scripts (EMEVD), text
 //! (FMG), draw params (GPARAM), material definitions (MTD, MATBIN), shader metaparams, params (PARAM), animation
@@ -9,8 +9,9 @@
 //! reader keeps is what the file stores; what a file leaves to the game (which file is in force, what a flag means) is
 //! the caller's to decide.
 //!
-//! The crate distributes no key, dictionary, native library or game file. The caller supplies the archive keys of its
-//! own install ([`Keys`]), the Oodle library for Kraken-compressed files (a [`dcx::Decoder`]) and, to turn path hashes
+//! The crate distributes no key, dictionary, native library or game file, and stores no key beyond the [`Keys`] value
+//! the caller passes. The caller supplies the archive keys of its own install (kept as PEM files and read with
+//! [`Keys::from_folder`]), the Oodle library for Kraken-compressed files (a [`dcx::Decoder`]) and, to turn path hashes
 //! back into paths, a path list ([`NameDictionary`]).
 //!
 //! # Reading a file
@@ -57,7 +58,8 @@
 //! ```
 //!
 //! `examples/list_binder.rs` is this example as a program.
-#![deny(clippy::disallowed_methods, clippy::disallowed_types)]
+#![deny(clippy::disallowed_methods, clippy::disallowed_types, missing_docs)]
+// every public item is documented
 // Every reader takes the bytes of a stored file: no index or slice that can panic, no arithmetic on offsets or sizes that
 // can wrap, no cast that can truncate (the tests, which build their inputs by hand, are outside the rule).
 #![cfg_attr(

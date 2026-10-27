@@ -10,7 +10,7 @@ It reads, by name and for the game versions it was written against:
 - **Maps.** MSB map layouts (Sekiro's MSBS and Elden Ring's MSBE: models, parts, regions, events), BTL light banks (versions 16 and 18), EDGE hang edges (Sekiro), GPARAM draw parameters (versions 3, 5 and 6), EMEVD event scripts (Sekiro's 64-bit layout) and the part-state rules they set.
 - **Game data.** PARAM files (the NPC and grass params, and Sekiro's part-built NPC outfits through the equipment params; Elden Ring is refused there), FMG text and the NPC names built from it, TAE animation events (version `0x1000D`), and map and object collision in Havok tagfiles (through [`havok-formats`](https://github.com/Kalmarv/havok-formats)).
 
-It needs a few things from you, because it ships none of them: the archive keys of your own install (one RSA public key per archive, and for Elden Ring the key of `regulation.bin`), the game's Oodle library (or, off Windows, a portable decoder) for Kraken-compressed files, and, to turn path hashes back into paths, a path list of your choosing. The crate holds no key material, no digests of it, no dictionary, no native library and no game file, and this repository does not contain or link to any.
+It needs a few things from you, because it ships none of them: the archive keys of your own install (one RSA public key per archive, and for Elden Ring the key of `regulation.bin`), which you keep as files in a folder and load with `Keys::from_folder`; the crate keeps them only in the `Keys` value you pass, the game's Oodle library (or, off Windows, a portable decoder) for Kraken-compressed files, and, to turn path hashes back into paths, a path list of your choosing. The crate holds no key material, no digests of it, no dictionary, no native library and no game file, and this repository does not contain or link to any.
 
 ## Example
 
@@ -59,6 +59,7 @@ The crate is not on crates.io yet; depend on it from git (`fromsoft-formats = { 
 - **Bounded work.** Decoded sizes are capped by the `max_output` you give the `Decoder`, and most readers limit how many bytes a file's records may name, as a multiple of the input's size, so a hostile file cannot make them allocate or copy without limit.
 - **Deterministic.** Opening an install on any number of threads gives the same archive.
 - **Narrow side effects.** The crate has no `unsafe` code, makes no network connections and starts no processes. Only `archive` (the install's archives) and `game_params` (Elden Ring's `regulation.bin`) read files, and a lint enforces that.
+- **Lints.** The library denies `clippy::indexing_slicing`, `clippy::arithmetic_side_effects` and `clippy::cast_possible_truncation` outside tests, `unsafe_code`, and (`#![deny(missing_docs)]`) any public item without documentation. Exactly two items opt out of the strict lints, each with a stated reason: `affine::narrow` (a float narrowed to the nearest `f32`) and the vertex helper `exact_i32` in `flver` (a value checked integral and in range before the cast). The two modules that read files from disk, `archive` and `game_params`, also allow the lints that otherwise forbid file access.
 
 ## What it does not do
 
