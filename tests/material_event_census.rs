@@ -44,7 +44,7 @@ fn every_elden_character_material_event198_payload() -> Result<()> {
     let (Some(root), Some(key_dir), Some(dll)) =
         (install(Data::Elden), keys(Data::Elden), oodle(Tool::Oodle6))
     else {
-        println!("TAE198_SKIP=PRIMASE_DATA Elden install/keys/oodle6 not configured");
+        println!("TAE198_SKIP=GAME_DATA lacks installs.elden, keys.elden or tools.oodle6");
         return Ok(());
     };
     let codec = common::oodle(dll)?;

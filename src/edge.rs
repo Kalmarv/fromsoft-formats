@@ -1,26 +1,42 @@
-//! Sekiro EDGE records: grapple points, hang segments and wall-hug segments.
+//! EDGE files (hang edges) as Sekiro stores them: grapple points, hang segments and wall-hug segments.
 use crate::{Result, bytes::View, invalid};
+/// What an edge record marks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
+    /// A grapple point (stored type 1).
     Grapple,
+    /// A hang segment (stored type 2).
     Hang,
+    /// A wall-hug segment (stored type 3).
     Hug,
 }
+/// One 64-byte EDGE record.
 #[derive(Debug, Clone)]
 pub struct Edge {
+    /// Its three stored points, as stored.
     pub points: [[f32; 3]; 3],
+    /// The stored float at offset 44; its meaning is not established here.
     pub parameter: f32,
+    /// The stored ID at offset 48.
     pub id: i32,
+    /// What the record marks.
     pub kind: Kind,
+    /// The stored byte at offset 53.
     pub variation: u8,
+    /// The stored byte at offset 54.
     pub flags: u8,
 }
+/// A read EDGE file.
 #[derive(Debug, Clone)]
 pub struct Edges {
+    /// The file's stored ID (header offset 8).
     pub id: i32,
+    /// Its records, in file order.
     pub edges: Vec<Edge>,
 }
 impl Edges {
+    /// Read an EDGE file: the version, the exact record count and size, and every unused field are checked; a
+    /// non-finite float or unknown type is refused.
     pub fn read(bytes: &[u8]) -> Result<Self> {
         let v = View {
             data: bytes,

@@ -1,6 +1,7 @@
 //! The game's params, read as stored ([`crate::param::Param`]) from where the game keeps them
 //! ([`crate::Game::params`]: Sekiro's `param/gameparam/gameparam.parambnd.dcx`, Elden Ring's `regulation.bin`), and
-//! the map parts that name an NPC param row: which rows point at which character model.
+//! the map parts that name an NPC param row: which rows point at which character model. An Elden Ring install needs its
+//! `regulation.key` in the [`crate::Keys`] (the caller supplies it).
 #![allow(
     clippy::disallowed_methods,
     reason = "reader I/O: reads the game's regulation file beside its executable"
@@ -113,9 +114,11 @@ pub fn read_npc_stats(
 pub struct NpcPlacement {
     /// The map (`m10_00_00_00`).
     pub map: String,
+    /// The part's name in the map.
     pub part: String,
     /// The part's model name (`c3000`).
     pub model: String,
+    /// Whether the part is a DummyEnemy rather than an Enemy.
     pub dummy: bool,
     /// The row it names, as stored (0 or -1 where it names none).
     pub row: i32,
@@ -125,9 +128,8 @@ pub struct NpcPlacement {
 
 /// Every Enemy and DummyEnemy part of the maps `dictionary` names that the archives hold
 /// (`/map/mapstudio/<map>.msb.dcx`), in map then file order: which NPC rows point at which model. The archives index
-/// files by a hash of their path and keep no names, so the maps are the dictionary's (the community unpackers'
-/// lists: UXM's `SekiroDictionary.txt` names Sekiro's ten, `EldenRingDictionary.txt` the 370 of Elden Ring's with
-/// enemies among others); a map it does not name is not read.
+/// files by a hash of their path and keep no names, so the maps read are the ones the dictionary names (a community path
+/// list such as UXM's `SekiroDictionary.txt` or `EldenRingDictionary.txt`); a map it does not name is not read.
 pub fn npc_placements(
     archive: &Archive,
     decoder: &Decoder<'_>,

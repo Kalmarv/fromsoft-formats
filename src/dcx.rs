@@ -1,7 +1,9 @@
-//! DCX DFLT, KRAK and ZSTD envelopes. Only documented header permutations are accepted.
+//! DCX envelopes with DFLT (zlib), KRAK (Oodle Kraken) and ZSTD payloads. Only the header variants listed at
+//! [`Envelope::parse`] are accepted; any other is an error naming the field.
 use crate::{Result, bytes::View, invalid};
 use primase_foundations::compress::{Decompressor, Zlib, Zstd, oodle::Oodle};
-/// The compression a DCX envelope names at offset 40 (`KRAK`, `DFLT`), or `None` for bytes that are not one.
+/// The four-character compression tag a DCX envelope names at offset 40 (`KRAK`, `DFLT`, `ZSTD`), or `None` for bytes
+/// that do not start with a DCX header. The tag is not validated here; [`Envelope::parse`] does that.
 pub fn compression(data: &[u8]) -> Option<[u8; 4]> {
     if !data.starts_with(b"DCX\0") {
         return None;
@@ -22,13 +24,19 @@ pub enum Compression {
 /// A validated DCX envelope: how its payload is compressed, the payload as stored and the size it decodes to.
 #[derive(Debug, Clone, Copy)]
 pub struct Envelope<'a> {
+    /// How the payload is compressed.
     pub compression: Compression,
+    /// The compressed payload, borrowed from the input.
     pub payload: &'a [u8],
+    /// The size it decodes to, as the header states it.
     pub decoded_size: usize,
 }
 
 impl<'a> Envelope<'a> {
-    /// Reads the envelope's header, accepting only the documented permutations; a decoded size over `max_output` is refused.
+    /// Reads the envelope's header and accepts only the variants it knows: `KRAK` (version `0x11000`, level
+    /// 6 or 9), `DFLT` (version `0x10000` level 9, or `0x11000` level 8 or 9) and `ZSTD` (version `0x11000`). A decoded
+    /// size over `max_output`, a payload that overruns the data or trailing bytes other than up to 15 zero bytes of
+    /// alignment are refused, naming the offset.
     pub fn parse(data: &'a [u8], max_output: usize) -> Result<Self> {
         let v = View {
             data,
@@ -109,13 +117,18 @@ impl<'a> Envelope<'a> {
     }
 }
 
-/// Explicit native decoder and caller-controlled allocation ceiling in bytes.
+/// What decodes an envelope: the optional Oodle decoder (needed for Kraken envelopes only) and the largest decoded size
+/// in bytes the caller allows, so that a hostile size field cannot demand an allocation.
 #[derive(Debug, Clone, Copy)]
 pub struct Decoder<'a> {
+    /// The Oodle decoder the caller opened (`primase_foundations::compress::oodle::Oodle`); `None` makes a Kraken
+    /// envelope an error.
     pub oodle: Option<&'a Oodle>,
+    /// The largest decoded size in bytes an envelope may state.
     pub max_output: usize,
 }
 impl Decoder<'_> {
+    /// Decode the DCX envelope `data`; anything else is an error.
     pub fn decode(&self, data: &[u8]) -> Result<Vec<u8>> {
         let envelope = Envelope::parse(data, self.max_output)?;
         match envelope.compression {
@@ -127,6 +140,7 @@ impl Decoder<'_> {
             Compression::Zstd => Ok(Zstd.decompress(envelope.payload, envelope.decoded_size)?),
         }
     }
+    /// Decode `data` if it starts with a DCX envelope, else return it unchanged.
     pub fn decode_if_dcx(&self, data: &[u8]) -> Result<Vec<u8>> {
         if data.starts_with(b"DCX\0") {
             self.decode(data)

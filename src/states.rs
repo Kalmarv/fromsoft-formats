@@ -30,8 +30,11 @@ const DIRECT: [(i32, i32); 3] = [(2012, 1), (2005, 3), (2011, 1)];
 /// One decided rule: the entity is disabled while any of the pairs holds.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Rule {
+    /// The ID of the event that makes the call.
     pub event: i64,
+    /// The common function called (`20004110`, `20004112` or `20004114`).
     pub function: i32,
+    /// The entity or entity group it switches.
     pub entity: i32,
     /// (flag, state): disabled while the flag has this state (true: on).
     pub disabled_when: Vec<(i32, bool)>,

@@ -2,7 +2,7 @@
 //! probably". One list for each mesh of the model, in the model's mesh order, of entries of two 16-bit words each; what a
 //! word means is not established (SoulsFormatsNEXT names them `Unk00` and `Unk02`), so they are kept as stored.
 //! Sekiro's part binders hold them for the cloth of a body (`bd_m_9500_m.clm2`) and a weapon (`wp_a_0427_c.clm2`), and
-//! some object binders (32 of its 1395).
+//! some object binders.
 
 use crate::bytes::{Budget, View};
 use crate::{Result, invalid};

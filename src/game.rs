@@ -7,13 +7,17 @@ use crate::bhd::{PathHash, RecordLayout};
 /// A FromSoftware game.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 pub enum Game {
+    /// Sekiro: Shadows Die Twice.
     Sekiro,
+    /// Elden Ring.
     EldenRing,
 }
 
 impl Game {
+    /// Every game, in declaration order.
     pub const ALL: [Game; 2] = [Game::Sekiro, Game::EldenRing];
 
+    /// The game's display name.
     pub fn name(self) -> &'static str {
         match self {
             Game::Sekiro => "Sekiro",
@@ -187,7 +191,9 @@ pub enum ParamSource {
     /// initialisation vector), holding a DCX envelope around the param binder. The key is the user's key material: the
     /// file `key_file` of the keys folder ([`crate::Keys::from_folder`]).
     Regulation {
+        /// The file beside the executable (`regulation.bin`).
         file: &'static str,
+        /// The file of the keys folder holding its key (`regulation.key`).
         key_file: &'static str,
     },
 }
@@ -195,7 +201,9 @@ pub enum ParamSource {
 /// Where a placed object's model is stored ([`Game::object_model`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ObjectModel {
+    /// The archive path of the binder holding the model.
     pub binder: String,
+    /// The name of the FLVER member in that binder.
     pub flver: String,
     /// Its collision files, each where the game keeps it.
     pub collision: Vec<CollisionSource>,
@@ -205,7 +213,9 @@ pub struct ObjectModel {
 /// Ring's `_l` asset files (which every collidable asset has) low.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Resolution {
+    /// The detailed collision.
     High,
+    /// The coarse collision.
     Low,
 }
 
@@ -213,8 +223,11 @@ pub enum Resolution {
 /// its resolution.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CollisionSource {
+    /// The archive path of the binder, or `None` for the model's own binder.
     pub binder: Option<String>,
+    /// The member's name.
     pub member: String,
+    /// The detail of the collision.
     pub resolution: Resolution,
 }
 
@@ -257,7 +270,10 @@ impl ArchivePair {
 /// Their keys are the caller's ([`crate::Keys::from_folder`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ArchiveSet {
+    /// The pairs, in index order.
     pub pairs: &'static [ArchivePair],
+    /// How archive paths hash.
     pub hash: PathHash,
+    /// How a BHD5 file record is laid out.
     pub record: RecordLayout,
 }

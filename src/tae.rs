@@ -38,10 +38,16 @@ pub enum Header {
         imports_hkx: bool,
         /// "Allow this animation to be loaded from delayload anibnds" (SoulsFormatsNEXT).
         allow_delay_load: bool,
+        /// The animation number [`Header::Standard::imports_hkx`] names.
         import_hkx_source: i32,
     },
     /// The animation takes both its motion data and its events from the animation numbered `from`.
-    ImportOther { from: i32, unknown: i32 },
+    ImportOther {
+        /// The animation number it takes both from.
+        from: i32,
+        /// A stored word whose meaning is not established.
+        unknown: i32,
+    },
 }
 
 /// One timed event.
@@ -72,9 +78,11 @@ impl Event {
 pub struct Animation {
     /// The animation's number as stored (`3000`).
     pub id: i64,
+    /// Where the animation gets its motion data and events.
     pub header: Header,
     /// The motion file name the mini header names, where it states one (not all do).
     pub file_name: Option<String>,
+    /// The timed events, in file order.
     pub events: Vec<Event>,
 }
 
@@ -85,8 +93,11 @@ pub struct Tae {
     pub id: i32,
     /// "What set of events this TAE uses" (SoulsFormatsNEXT): the event bank the file's types are numbered in.
     pub event_bank: i64,
+    /// The skeleton file name the file states, if any.
     pub skeleton_name: Option<String>,
+    /// The SIB file name the file states, if any.
     pub sib_name: Option<String>,
+    /// The animations, in file order.
     pub animations: Vec<Animation>,
 }
 

@@ -23,8 +23,7 @@ pub fn texture_number(name: &str) -> Option<u32> {
 
 /// The slots of `meta` a material leaves unbound, with each one's default texture (its stem), where the metaparam
 /// states one: the `Texture2D_N` of a declared slot that none of the material's binding keys `bound` names
-/// ([`texture_number`] of each). Elden Ring's engine binds the default there. The reader loads these defaults and the
-/// layer bake's resolve binds them, both by this one rule.
+/// ([`texture_number`] of each). Elden Ring's engine binds the default there.
 pub fn unbound_slots<K: AsRef<str>>(
     bound: impl IntoIterator<Item = K>,
     meta: &Metaparam,
@@ -43,6 +42,7 @@ pub fn unbound_slots<K: AsRef<str>>(
 /// A texture slot the shader declares.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Texture {
+    /// The slot's name (`C_DetailBlend__snp_Texture2D_7_AlbedoMap`).
     pub name: String,
     /// The texture used when the material binds none ("" for none).
     pub default_texture: String,
@@ -65,6 +65,7 @@ pub struct Texture {
 /// A render pass's sampler bindings: bit n of a mask is sampler slot n.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct RenderPass {
+    /// The pass's stored ID.
     pub pass_id: u32,
     /// Samplers the pixel stage binds.
     pub pixel_samplers: u32,
@@ -77,11 +78,17 @@ pub struct RenderPass {
 /// A parameter read through `SAT_CAParam`, one component per record.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct CaParam {
+    /// The parameter's name.
     pub name: String,
+    /// The stored sequence index.
     pub sequence_index: u32,
+    /// The stored parameter ID.
     pub param_id: u32,
+    /// Which component of the parameter this record is.
     pub component: u32,
+    /// Its default value.
     pub default: f32,
+    /// The u32 at 0x38 of the record, not understood.
     pub unknown_40: u32,
     /// A name hash.
     pub key: u32,
@@ -90,21 +97,25 @@ pub struct CaParam {
 /// A parameter read through `SAT_MtdParam`, a whole value of up to five floats.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct MtdParam {
+    /// The parameter's name.
     pub name: String,
     /// Offset of its first component in the constant buffer, in 32-bit components.
     pub start: u32,
+    /// The stored sequence index.
     pub sequence_index: i32,
     /// 0 bool, 1 float, 2 float2 (UV tiling), 3 float3, 4 float4, a colour (RGBA and an intensity): 12 in Sekiro's
     /// files, 13 in Elden Ring's ([`MtdParam::is_colour`]).
     pub value_type: u8,
     /// Set (stored 2) where the renderer reads the parameter and no shader does.
     pub not_shader_input: bool,
+    /// Whether the value is in sRGB.
     pub srgb: bool,
     /// The byte at 0x2f of the record: 1 on the colours.
     pub colour: bool,
     /// MaterialEx override key: CRC-32 of the UTF-16LE logical parameter name, zero for no override.
     /// This need not equal `name`: `C[PixelKill]_Int` addresses the petal shader's opaque `_float_2` name.
     pub key: u32,
+    /// Its default value, up to five floats.
     pub default: [f32; 5],
 }
 
@@ -121,21 +132,30 @@ impl MtdParam {
 pub struct Metaparam {
     /// Constant-buffer size in bytes.
     pub constant_buffer_size: u32,
+    /// The shader's stored ID.
     pub shader_id: u32,
     /// Feature flags: 0x10 declares CAParams, 0x100 the vertex stage reads the material's parameters, 0x10000 the
     /// shader is tessellated.
     pub flags: u32,
     /// The key the material's GX records are matched by.
     pub gxmd_key: u32,
+    /// The size of the CAParam block, as stored.
     pub ca_param_block_size: u32,
     /// The word at 0x54 (the reader of the format calls it the CAParam count).
     pub ca_param_components: u32,
+    /// The word at 0x30, not understood.
     pub unknown_30: u32,
+    /// The word at 0x40, not understood.
     pub unknown_40: u32,
+    /// The word at 0x50, not understood.
     pub unknown_50: u32,
+    /// The texture slots it declares.
     pub textures: Vec<Texture>,
+    /// The render passes' sampler bindings.
     pub passes: Vec<RenderPass>,
+    /// The CAParams.
     pub ca_params: Vec<CaParam>,
+    /// The MtdParams.
     pub mtd_params: Vec<MtdParam>,
 }
 
@@ -200,6 +220,7 @@ impl Reader<'_> {
 }
 
 impl Metaparam {
+    /// Read a `.metaparam` file (decompressed). Version 6 only; every length, offset and zero field is checked.
     pub fn read(data: &[u8]) -> Result<Self> {
         let r = Reader {
             v: View {

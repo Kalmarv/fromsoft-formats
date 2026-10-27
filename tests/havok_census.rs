@@ -11,7 +11,7 @@
 //! - `CLASS <game> <class> fields [..]`: the stored field names of each class whose name says cloth, ragdoll, rigid body,
 //!   constraint or physics, once per game, so a reader's fields are the file's own;
 //! - `EXT <game> <binder kind> <extension> members <n> characters <k> read <yes|no>`: every member of the twenty
-//!   characters' binders by binder kind and extension, and whether a primase reader keeps it (`yes` for the model, its
+//!   characters' binders by binder kind and extension, and whether a consumer of these readers keeps it (`yes` for the model, its
 //!   textures, the cloth companion, the animation binder's tagfiles and event files; the rest is what a notice names as
 //!   not read).
 //!
@@ -30,7 +30,7 @@ const KINDS: [&str; 4] = ["chrbnd", "anibnd", "behbnd", "texbnd"];
 const VARIANTS: [&str; 4] = ["", "_div00", "_div01", "_div02"];
 const TAKEN: usize = 20;
 
-/// Whether a primase reader keeps a member of a binder of `kind` with extension `ext`.
+/// Whether a consumer of these readers keeps a member of a binder of `kind` with extension `ext`.
 fn kept(kind: &str, ext: &str) -> bool {
     matches!(
         (kind, ext),

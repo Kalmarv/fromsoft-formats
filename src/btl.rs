@@ -6,37 +6,57 @@ use crate::{
     edge::{float, vector},
     invalid,
 };
+/// A light's shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
+    /// Stored type 0.
     Point,
+    /// Stored type 1.
     Spot,
+    /// Stored type 2.
     Directional,
 }
+/// One 232-byte light record, as stored.
 #[derive(Debug, Clone)]
 pub struct Light {
+    /// The light's name.
     pub name: String,
+    /// Its shape.
     pub kind: Kind,
+    /// Diffuse colour, RGB bytes.
     pub diffuse: [u8; 3],
+    /// Diffuse intensity, as stored (its mapping to a physical unit is the caller's).
     pub diffuse_power: f32,
+    /// Specular colour, RGB bytes.
     pub specular: [u8; 3],
+    /// Specular intensity, as stored.
     pub specular_power: f32,
+    /// Whether the light casts shadows.
     pub cast_shadows: bool,
+    /// The cone angle, as stored.
     pub cone_angle: f32,
+    /// Its position, as stored.
     pub position: [f32; 3],
+    /// Its rotation, as stored (three floats).
     pub rotation: [f32; 3],
+    /// Its radius, as stored.
     pub radius: f32,
-    /// Non-exported source fields, retained by byte offset without invented meanings.
+    /// The record's remaining 4-byte words, as stored, by byte offset in the record; no meaning is assigned to them.
     pub auxiliary: std::collections::BTreeMap<usize, u32>,
 }
+/// A read light bank (`.btl`).
 #[derive(Debug, Clone)]
 pub struct LightBank {
     /// The stored version: one of [`VERSIONS`].
     pub version: u32,
+    /// Its lights, in file order.
     pub lights: Vec<Light>,
 }
 /// The versions whose light record this reader knows.
 pub const VERSIONS: [u32; 2] = [16, 18];
 impl LightBank {
+    /// Read a light bank. The version, the header, the record count against the file size, each name's offset and
+    /// every field the reader holds to a fixed value are checked; a non-finite float is refused.
     pub fn read(bytes: &[u8]) -> Result<Self> {
         let v = View {
             data: bytes,

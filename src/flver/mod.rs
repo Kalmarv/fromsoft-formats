@@ -1,4 +1,6 @@
-//! Sekiro FLVER2 geometry, retaining file coordinates and material bindings.
+//! FLVER2 models (versions `0x20013`, `0x20014`, `0x20016` and `0x2001a`: Sekiro's and Elden Ring's): bones, dummy
+//! polygons, materials with their texture bindings, vertex layouts and the meshes' decoded vertices and face sets,
+//! kept in the file's coordinates. Edge-compressed indices and the legacy text encoding are refused.
 mod vertex;
 use crate::{
     Result,
@@ -7,6 +9,7 @@ use crate::{
 };
 pub use vertex::Vertex;
 
+/// One member of a vertex layout: an attribute a vertex stores, and where.
 #[derive(Clone, Debug)]
 pub struct Member {
     /// The member's first word as stored: 0 in an ordinary layout; in a SpeedTree layout its stream (low half) and a
@@ -18,14 +21,22 @@ pub struct Member {
     pub stored: bool,
     /// The member's offset in its stream (the vertex buffer for a stored member).
     pub offset: usize,
+    /// The storage format code (`2` Float3, `3` Float4, `0x13` UByte4Norm, `0x2e` Half4, ...).
     pub kind: u32,
+    /// What the member is (0 position, 1 bone weights, 2 bone indices, 3 normal, 5 UV, 6 tangent, 7 bitangent, 10
+    /// colour).
     pub semantic: u32,
+    /// Which member of that semantic this is (UV set, tangent number).
     pub index: u32,
 }
+/// A texture binding of a material.
 #[derive(Clone, Debug)]
 pub struct Texture {
+    /// The texture's source path as stored.
     pub path: String,
+    /// The slot it binds, as the material names it.
     pub kind: String,
+    /// Its UV scale.
     pub scale: [f32; 2],
     /// How the texture repeats along u and v (`TilingTypeU`, `TilingTypeV`).
     pub tiling: [Tiling; 2],
@@ -49,10 +60,15 @@ pub enum Tiling {
     /// None stated.
     #[default]
     None,
+    /// Repeat.
     Repeat,
+    /// Mirrored repeat.
     MirrorRepeat,
+    /// Clamp to the edge.
     Clamp,
+    /// Border colour.
     Border,
+    /// Mirror once.
     MirrorOnce,
 }
 impl Tiling {
@@ -71,23 +87,35 @@ impl Tiling {
 /// Raw, uninterpreted material extension record; payload bytes retain source order.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct GxItem {
+    /// The four-byte item ID.
     pub id: [u8; 4],
+    /// The item's stored version.
     pub version: u32,
+    /// The item's payload.
     pub data: Vec<u8>,
 }
+/// A material of a model: its name, the material definition it names and its texture bindings.
 #[derive(Clone, Debug)]
 pub struct Material {
+    /// The material's name.
     pub name: String,
+    /// The material definition it refers to (an MTD path in Sekiro, a MATBIN name in Elden Ring), as stored.
     pub mtd: String,
+    /// Its texture bindings, in order.
     pub textures: Vec<Texture>,
     /// Raw, uninterpreted GX records in source order, excluding the terminator.
     pub gx: Vec<GxItem>,
 }
+/// One face set of a mesh: an index list with its flags.
 #[derive(Clone, Debug)]
 pub struct FaceSet {
+    /// The flags as stored (bits 24 to 26 the level of detail, bit 31 motion blur; see [`FaceSet::kind`]).
     pub flags: u32,
+    /// Whether the indices are a triangle strip (`0xffff` restarts) rather than a list.
     pub strip: bool,
+    /// Whether back faces are culled.
     pub cull: bool,
+    /// The vertex indices.
     pub indices: Vec<u32>,
 }
 impl FaceSet {
@@ -121,26 +149,37 @@ impl FaceSet {
         self.flags & 0x8700_0000 == 0
     }
 }
+/// A mesh: a material, its vertices and the face sets that index them.
 #[derive(Clone, Debug)]
 pub struct Mesh {
+    /// The stored `Dynamic` flag (the mesh is skinned).
     pub dynamic: bool,
+    /// Its material's index in [`Model::materials`].
     pub material: usize,
     /// The bone (node) the mesh stands for, as stored (`NodeIndex`, -1 for none): the bone a static mesh's vertices
     /// follow when its layout stores no normal W to name one per vertex ([`Model::stores_normal_w`]).
     pub node: i32,
     /// The mesh's bone palette as stored (bone indices): empty when its vertices name bones directly.
     pub palette: Vec<u32>,
+    /// The indices in [`Model::layouts`] of the layouts of its vertex buffers, in buffer order.
     pub layouts: Vec<usize>,
+    /// Its vertices, decoded.
     pub vertices: Vec<Vertex>,
+    /// Its face sets.
     pub faces: Vec<FaceSet>,
 }
+/// A bone of the model's skeleton.
 #[derive(Clone, Debug)]
 pub struct Bone {
     /// The bone's name as stored.
     pub name: String,
+    /// Its translation relative to its parent, as stored.
     pub translation: [f32; 3],
+    /// Its rotation relative to its parent, as stored (three angles).
     pub rotation: [f32; 3],
+    /// Its scale, as stored.
     pub scale: [f32; 3],
+    /// Its parent's index in [`Model::bones`], -1 for none.
     pub parent: i16,
 }
 /// A dummy polygon (SoulsFormatsNEXT: "used for hit detection, particle effect locations, and much more"): a named-by-number
@@ -151,6 +190,7 @@ pub struct Dummy {
     /// The point. In the space of the parent bone where there is one ([`Dummy::parent_bone`]), else in the model's; the
     /// file's frame.
     pub position: [f32; 3],
+    /// The direction the point faces.
     pub forward: [f32; 3],
     /// Meaningful only where [`Dummy::use_upward_vector`] is set.
     pub upward: [f32; 3],
@@ -164,24 +204,33 @@ pub struct Dummy {
     /// The four colour bytes in the file's order (alpha, red, green, blue; SoulsFormatsNEXT: "not certain about the
     /// ordering").
     pub color: [u8; 4],
+    /// A stored flag whose meaning SoulsFormatsNEXT does not state.
     pub flag1: bool,
+    /// Whether [`Dummy::upward`] is meaningful.
     pub use_upward_vector: bool,
     /// Two words SoulsFormatsNEXT calls unknown ("only used in Sekiro").
     pub unk30: i32,
+    /// The word after it.
     pub unk34: i32,
 }
 
+/// A read FLVER model.
 #[derive(Clone, Debug)]
 pub struct Model {
+    /// The skeleton's bones, in file order.
     pub bones: Vec<Bone>,
     /// The model's dummy polygons, in file order.
     pub dummies: Vec<Dummy>,
+    /// The FLVER version, one of `0x20013`, `0x20014`, `0x20016`, `0x2001a`.
     pub version: u32,
     /// A SpeedTree model ([`is_speedtree`]): its vertices carry their stored members in [`Vertex::speedtree`], and
     /// the attributes its programs read from them ([`speedtree_layout`]).
     pub speedtree: bool,
+    /// The vertex layouts, each the members of one vertex buffer format.
     pub layouts: Vec<Vec<Member>>,
+    /// The materials.
     pub materials: Vec<Material>,
+    /// The meshes.
     pub meshes: Vec<Mesh>,
 }
 fn count(v: &View<'_>, o: usize) -> Result<usize> {
@@ -256,6 +305,10 @@ impl Model {
             .sum()
     }
 
+    /// Read a FLVER from its decompressed bytes. Every table, count and offset is bounded by the file, the bytes the
+    /// records name are bounded by its size (records that name one range over and over are refused), and every vertex
+    /// buffer and face set must be used by a mesh; an unknown version, vertex format or flag is an error naming the
+    /// offset.
     pub fn read(data: &[u8]) -> Result<Self> {
         let v = View {
             data,
@@ -335,7 +388,7 @@ impl Model {
             v.expect(o + 56, &[0; 8])?;
             let bytes = v.slice(o + 12, 4)?;
             // as stored: a dummy is data the model's meshes do not depend on, so a value that is not finite does not
-            // refuse the model (the pass that places the dummy refuses it)
+            // refuse the model (whoever places the dummy checks it)
             let raw = |at: usize| -> Result<f32> { Ok(f32::from_bits(v.u32(at)?)) };
             dummies.push(Dummy {
                 position: [raw(o)?, raw(o + 4)?, raw(o + 8)?],
@@ -693,8 +746,8 @@ impl Model {
 
 /// Whether a FLVER stores SpeedTree vegetation: the high half of its header word at 0x68 is 0x8000. Its layouts' members
 /// name their stream and whether the file stores them ([`Member::stored`]), with offsets per stream; [`Model::read`]
-/// reads the stored ones into [`Vertex::speedtree`] (the reference reader, SoulsFormatsNEXT ee1dd61, refuses every
-/// one of Elden Ring's 119) and the vertex's attributes from them ([`speedtree_layout`]).
+/// reads the stored ones into [`Vertex::speedtree`] (the reference reader, SoulsFormatsNEXT ee1dd61, refuses
+/// such models) and the vertex's attributes from them ([`speedtree_layout`]).
 pub fn is_speedtree(data: &[u8]) -> bool {
     data.starts_with(b"FLVER\0L\0") && data.get(0x6a..0x6c) == Some(&[0x00, 0x80][..])
 }
@@ -705,9 +758,13 @@ pub enum SpeedTreeLayout {
     /// Branches, fronds and leaves: the indices, among the stored members, of the rest position (`xyz`), UV0 (`xy`),
     /// the normal and the SpeedTree tangent (unsigned bytes, unpacked as `x * 2 - 1`).
     Geometry {
+        /// The index of the position member among the stored members.
         position: usize,
+        /// The index of the UV0 member.
         uv: usize,
+        /// The index of the normal member.
         normal: usize,
+        /// The index of the tangent member.
         tangent: usize,
     },
     /// A billboard card (`Float4` UV2, `Float2` UV3): its program turns the card to the camera and picks its image
@@ -720,8 +777,7 @@ pub enum SpeedTreeLayout {
 /// blend at the finest level) and the wind off, each program outputs `Half4` UV2's `xyz` as the position, `Half4`
 /// UV3's `xy` as the texture coordinate, and the members at its last two `TEXCOORD` inputs as the normal and the
 /// tangent: its layout's two `UByte4Norm` members, in order, for every mesh but three, whose programs read another
-/// member ([`Model::set_speedtree_frame`] gives a mesh those; `tests/speedtree.rs` runs every mesh's own program on its
-/// vertices). The billboard cards' layout is [`SpeedTreeLayout::Billboard`]; another layout is refused.
+/// member ([`Model::set_speedtree_frame`] gives a mesh those). The billboard cards' layout is [`SpeedTreeLayout::Billboard`]; another layout is refused.
 pub fn speedtree_layout(members: &[Member]) -> Result<SpeedTreeLayout> {
     let stored: Vec<&Member> = members.iter().filter(|m| m.stored).collect();
     let refused = || {
@@ -831,7 +887,9 @@ impl Model {
 /// What a face set is for, from its flags: a level of detail (0 the finest) or the motion-blur variant of one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum FaceSetKind {
+    /// A level of detail; 0 is the finest.
     Lod(u8),
+    /// The motion-blur variant of a level of detail.
     MotionBlur(u8),
 }
 

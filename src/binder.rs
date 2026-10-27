@@ -9,24 +9,37 @@ use primase_foundations::compress::{DEFLATE_MAX_RATIO, Decompressor, Zlib};
 /// How many times over the file's bytes a binder's records may decode to (compressed files hold fewer bytes than they
 /// make; the real binders of the games decode to a small multiple of their size).
 const DECODED_TIMES: usize = 64;
+/// One member of a binder.
 #[derive(Debug, Clone)]
 pub struct BinderFile {
+    /// The member's ID, where the binder stores IDs.
     pub id: Option<i32>,
+    /// The member's name, where the binder stores names (UTF-16 or ASCII; stored text, not normalised).
     pub name: Option<String>,
+    /// The member's two flag bits as stored (bit 0: stored compressed).
     pub flags: u8,
+    /// The member's bytes, decompressed; a nested DCX envelope is decoded too. Empty when read by
+    /// [`Binder::split_names`].
     pub bytes: Vec<u8>,
 }
+/// A BND4 binder (or a BHF4 index with its BDF4 payload) read whole.
 #[derive(Debug, Clone)]
 pub struct Binder {
+    /// The 8 version bytes of the header.
     pub version: [u8; 8],
+    /// The record format flags, normalised to the layout the reader checks.
     pub format: u8,
+    /// The members, in file-table order.
     pub files: Vec<BinderFile>,
 }
 impl Binder {
+    /// Read a BND4 binder held whole in `data`: its file table and members, with compressed members and nested DCX
+    /// envelopes decoded by `decoder`. The members' bytes copied or decoded are bounded by the file's size (a table
+    /// that names one range over and over is refused), and every byte of the file must be accounted for, apart from up to 15 zero bytes of padding between parts.
     pub fn read(data: &[u8], decoder: &Decoder<'_>) -> Result<Self> {
         Self::read_inner(data, None, decoder, false)
     }
-    /// Read a BHF4 index and its matching BDF4 payload file.
+    /// Read a BHF4 index `header` and its matching BDF4 payload file `payload` (the `.edgebhd`/`.edgebdt` form).
     pub fn read_split(header: &[u8], payload: &[u8], decoder: &Decoder<'_>) -> Result<Self> {
         Self::read_inner(header, Some(payload), decoder, false)
     }

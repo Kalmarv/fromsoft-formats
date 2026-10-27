@@ -20,46 +20,65 @@ const SAMPLER: usize = 0x30;
 /// 12 float5.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub enum Value {
+    /// Type code 0.
     Bool(bool),
+    /// Type code 4.
     Int(i32),
+    /// Type code 5.
     Int2([i32; 2]),
+    /// Type code 8.
     Float(f32),
+    /// Type code 9.
     Float2([f32; 2]),
     /// Three floats; some files store two more after them (kept, not interpreted).
     Float3([f32; 3], Option<[f32; 2]>),
+    /// Four floats (type code 11).
     Float4([f32; 4]),
+    /// Five floats (type code 12).
     Float5([f32; 5]),
     /// A value stored with fewer bytes than its type `code` declares (the next item starts sooner): the stored
     /// bytes, uninterpreted.
     Truncated {
+        /// The declared type code.
         code: u32,
+        /// The bytes actually stored.
         bytes: Vec<u8>,
     },
 }
+/// A typed parameter of a material.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Param {
+    /// The parameter's name.
     pub name: String,
+    /// Its stored key.
     pub key: u32,
+    /// Its value.
     pub value: Value,
 }
+/// A texture sampler of a material.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Sampler {
     /// The shader's sampler name, for example `..._snp_Texture2D_2_AlbedoMap_0`.
     pub kind: String,
     /// Source texture path; empty when the material leaves the slot to the FLVER or the shader default.
     pub path: String,
+    /// The sampler's stored key.
     pub key: u32,
     /// Two floats stored after the key, kept uninterpreted.
     pub unknown: [f32; 2],
 }
+/// A read MATBIN material: its shader, parameters and samplers.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Material {
     /// Shader source path (`.spx`).
     pub shader: String,
     /// The material's own source path (`.matxml`).
     pub source: String,
+    /// The material's stored key.
     pub key: u32,
+    /// Its parameters, in file order.
     pub params: Vec<Param>,
+    /// Its samplers, in file order.
     pub samplers: Vec<Sampler>,
     /// Bytes after the last item the file references, as stored (empty in most files; some end with strings of
     /// an earlier revision of the material that nothing points at).

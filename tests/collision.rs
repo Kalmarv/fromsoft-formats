@@ -1,5 +1,5 @@
 //! Compare raw collision soups with an independent decoder's (`havok-soup`, one per `havok` tagfile). No smoothing,
-//! surface selection, or frame lowering is part of this raw-file comparison.
+//! surface selection, or frame conversion is part of this raw-file comparison.
 //!
 //! Triangle count and order are compared exactly, and so is every material this reader determines. Where a mesh holds
 //! triangle-data rows no key takes, the oracle places them by vertex-id agreement, which does not determine their place

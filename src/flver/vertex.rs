@@ -6,42 +6,39 @@ use primase_foundations::vertex::Format;
 /// Decoded attributes in file coordinates. Repeated attributes retain stream order.
 #[derive(Clone, Debug, Default)]
 pub struct Vertex {
+    /// The position (semantic 0), in the file's coordinates.
     pub position: [f32; 3],
+    /// The normal (semantic 3).
     pub normal: [f32; 3],
+    /// The normal's fourth component as stored; for a static mesh it names the bone the vertex follows.
     pub normal_w: i32,
+    /// The bone weights (semantic 1).
     pub bone_weights: [f32; 4],
+    /// The bone indices (semantic 2): into the mesh's palette ([`super::Mesh::palette`]) where it has one, else bones.
     pub bone_indices: [u16; 4],
     /// The UV members in stream order, each as one four-lane attribute the way the game's vertex program receives it
     /// (`TEXCOORDn.xyzw`; a lane its format has no value for is zero). A `Short2`, `Byte4A`, `Byte4B` or `Short2toFloat2`
-    /// member is two int16 lanes over the UV factor (the program's integer input, scaled by 1/2048 in the program) and a
-    /// `Float2` or `Float3` member its floats; a `Float4` or `UVPair` member gives two such attributes. A `UByte4Norm`
-    /// (`0x13`) member is four normalised unsigned bytes (`b / 255`), which the program reads as a float `TEXCOORDn` and
-    /// passes on unscaled: Elden Ring's `M[AMSN_V][Mb3][Ov_N]_Gbuf.vpo` (`TEXCOORD1 xyzw float`, loaded by
-    /// `dx.op.loadInput.f32` at lines 288-290 of its disassembly and stored to the output unchanged at lines 501-503) and
-    /// Sekiro's `M_MultipleGround__Gbuf.vpo` (`TEXCOORD1..6` float, `mov o5.x, v5.x` and the like, lines 222-228) alike.
+    /// member is two int16 lanes over the UV factor (2048) and a `Float2` or `Float3` member its floats; a `Float4` or
+    /// `UVPair` member gives two such attributes. A `UByte4Norm` (`0x13`) member is four normalised unsigned bytes
+    /// (`b / 255`), which the game's programs read as a float `TEXCOORDn` and pass on unscaled.
     ///
-    /// A `Half4` (`0x2e`) member is not a texture coordinate: it is a point in the model's space, xyz as IEEE half floats
-    /// and w zero, the pivot vegetation sways about. The program takes it as a float `TEXCOORDn xyzw` and treats it as a
-    /// position. Elden Ring's `M[AMSN_V]_Vesitation_Emissive_Glow_Gbuf.vpo` multiplies `TEXCOORD3.xyz` by three rows of
-    /// an instance matrix and adds each row's `w` (the translation), the same affine transform it applies to `POSITION0`
-    /// with its own matrix rows. Only meshes of pivot materials store one: Sekiro's `…_Translucency_Pivot…`,
-    /// `…_Pivot_Parent…` and `snake_Pivot` MTDs (306 meshes, 978,040 vertices), and Elden Ring's grass, `Vesitation` and
-    /// tree assets (1,586 meshes, 5,301,513 vertices; a SpeedTree mesh's member is in [`Vertex::speedtree`] instead).
-    /// The value is constant over a group of vertices and lies near them: a Sekiro m11_00 map piece's member is
-    /// (99.0, -49.72, -89.5) for vertices at (98.9, -47.5, -89.9). Its magnitude follows the model's coordinates, up to
-    /// 487.75 in Sekiro and 2118.0 in Elden Ring, every value a half's. Read as int16 over the UV factor (SoulsFormats'
-    /// `Short4toFloat4B`, SoulsFormatsNEXT's mislabelled `Half4` UV branch), no value could exceed 16, so that reading
-    /// is not the game's. The lanes outside [0, 1] are expected: they are coordinates in metres. The w lane is zero in
-    /// every one of these members, in both games. The member is kept here, in stream order, because the programs number
-    /// their `TEXCOORDn` inputs by that order.
+    /// A `Half4` (`0x2e`) member is not a texture coordinate: it is a point in the model's space, xyz as IEEE half
+    /// floats and w zero, the pivot vegetation sways about. The game's programs read it as a float `TEXCOORDn xyzw` and
+    /// transform it like a position, so it is decoded as half floats, not as int16 over the UV factor, and its lanes
+    /// are coordinates in metres, outside [0, 1]. Only meshes of pivot materials (and grass and tree assets) store one;
+    /// a SpeedTree mesh's member is in [`Vertex::speedtree`] instead. Members are kept in stream order because the
+    /// programs number their `TEXCOORDn` inputs by that order.
     pub uvs: Vec<[f32; 4]>,
     /// The four stored bytes of each `UByte4Norm` UV member and the index in [`Vertex::uvs`] of its attribute, for layer
     /// weights (the same values as that attribute's lanes before the `/ 255`).
     pub layer_bytes: Vec<(usize, [u8; 4])>,
+    /// The tangents (semantic 6), in stream order.
     pub tangents: Vec<[f32; 4]>,
     /// Source semantic-6 member indices, parallel to tangents. Sparse indices stay sparse.
     pub tangent_indices: Vec<u8>,
+    /// The bitangent (semantic 7), where the layout stores one.
     pub bitangent: [f32; 4],
+    /// The vertex colours (semantic 10), in stream order.
     pub colors: Vec<[f32; 4]>,
     /// A SpeedTree vertex's stored members in layout order, each as its format gives it to a vertex program (four
     /// lanes, unused ones zero): half floats as floats, normalized unsigned bytes as `x / 255`, floats as stored.

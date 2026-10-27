@@ -1,6 +1,10 @@
 [package]
 name = "fromsoft-formats"
-description = "Strict readers of FromSoftware (Sekiro, Elden Ring) archives, binders and file formats"
+description = "Checked readers for Sekiro and Elden Ring data: BHD5 archives, DCX, BND4, FLVER, MSB, TPF, MTD/MATBIN, params and more"
+keywords = ["fromsoftware", "sekiro", "elden-ring", "flver", "modding"]
+categories = ["parser-implementations", "game-development"]
+readme = "README.md"
+documentation = "https://docs.rs/fromsoft-formats"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

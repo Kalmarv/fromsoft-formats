@@ -39,6 +39,7 @@ const MAGIC: &[u8] = b"f\0i\0l\0t\0";
 pub struct Gparam {
     /// The stored version: 3, 5 or 6.
     pub version: u32,
+    /// The groups, in file order.
     pub groups: Vec<Group>,
     /// What the file stores that is not read.
     pub unread: Unread,
@@ -56,8 +57,11 @@ pub struct Unread {
 /// A group of fields (a lighting set, fog, a tone map): its key (the editor identity, `LightSet ParamEditor`) and name.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Group {
+    /// The group's key, as stored.
     pub key: String,
+    /// Its name, as stored.
     pub name: String,
+    /// Its fields, in file order.
     pub fields: Vec<Field>,
 }
 
@@ -65,50 +69,80 @@ pub struct Group {
 /// `i` of `values`.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Field {
+    /// The field's key, as stored.
     pub key: String,
+    /// Its name, as stored.
     pub name: String,
+    /// The value ID of each value.
     pub ids: Vec<i32>,
+    /// The time of day of each value (version 5 and later; empty before).
     pub times: Vec<f32>,
+    /// The values, of the type the file states.
     pub values: Values,
 }
 
 /// A field's values, by the type the file states.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum Values {
+    /// Signed 8-bit integers.
     I8(Vec<i8>),
+    /// Signed 16-bit integers.
     I16(Vec<i16>),
+    /// Signed 32-bit integers.
     I32(Vec<i32>),
+    /// Signed 64-bit integers.
     I64(Vec<i64>),
+    /// Unsigned 8-bit integers.
     U8(Vec<u8>),
+    /// Unsigned 16-bit integers.
     U16(Vec<u16>),
+    /// Unsigned 32-bit integers.
     U32(Vec<u32>),
+    /// Unsigned 64-bit integers.
     U64(Vec<u64>),
+    /// 32-bit floats.
     F32(Vec<f32>),
+    /// 64-bit floats.
     F64(Vec<f64>),
+    /// Booleans.
     Bool(Vec<bool>),
+    /// Two floats each.
     Vec2(Vec<[f32; 2]>),
+    /// Three floats each.
     Vec3(Vec<[f32; 3]>),
+    /// Four floats each.
     Vec4(Vec<[f32; 4]>),
     /// Four bytes, red first.
     Rgba(Vec<[u8; 4]>),
+    /// Strings.
     Text(Vec<String>),
 }
 
 /// One value, as stored.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum Value {
+    /// A signed integer of any width.
     Int(i64),
+    /// An unsigned integer of any width.
     Uint(u64),
+    /// A float of either width.
     Float(f64),
+    /// A boolean.
     Bool(bool),
+    /// Two floats.
     Vec2([f32; 2]),
+    /// Three floats.
     Vec3([f32; 3]),
+    /// Four floats.
     Vec4([f32; 4]),
+    /// Four bytes, red first.
     Rgba([u8; 4]),
+    /// A string.
     Text(String),
 }
 
 impl Values {
+    /// The number of values.
     pub fn len(&self) -> usize {
         match self {
             Values::I8(v) => v.len(),
@@ -130,6 +164,7 @@ impl Values {
         }
     }
 
+    /// Whether there are none.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

@@ -1,6 +1,6 @@
 //! Event scripts (`.emevd`, Sekiro's 64-bit little-endian layout): events, their instructions with raw argument
 //! bytes, the parameter substitutions that fill instruction arguments from an event's own arguments, linked-file
-//! offsets and the string table. Read only; nothing is interpreted here (see `sekiro::states`).
+//! offsets and the string table. Read only; nothing is interpreted here (see [`crate::states`] for one reading).
 //!
 //! Layout: a 0x90-byte header (magic, format bytes, version 0xCD, file size, then 16 i64: count and offset of events,
 //! instructions, an unused table, layers, parameters and linked files, length and offset of arguments and strings),
@@ -20,27 +20,37 @@ const PARAMETER: usize = 0x20;
 /// One event script.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Script {
+    /// The events, in file order.
     pub events: Vec<Event>,
+    /// The linked-file offsets, as stored.
     pub linked_files: Vec<i64>,
     /// The string table, as stored.
     pub strings: Vec<u8>,
 }
 
+/// One event: an ID, how it behaves on rest, its instructions and its parameter substitutions.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Event {
+    /// The event's ID.
     pub id: i64,
     /// What the event does when the player rests: 0 default, 1 restart, 2 end (as stored).
     pub rest: u32,
+    /// The event's instructions, in order.
     pub instructions: Vec<Instruction>,
+    /// The substitutions that fill instruction arguments from the event's own arguments.
     pub parameters: Vec<Parameter>,
 }
 
+/// One instruction: a command number and its argument bytes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Instruction {
+    /// The instruction's bank (the `2000` of `2000:6`).
     pub bank: i32,
+    /// Its number within the bank (the `6` of `2000:6`).
     pub id: i32,
     /// Argument bytes as stored (before any parameter substitution).
     pub args: Vec<u8>,
+    /// The layer value it carries, if it names a layer record.
     pub layer: Option<u32>,
 }
 
@@ -57,10 +67,15 @@ impl Instruction {
 /// `instruction`'s arguments at `target`."
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Parameter {
+    /// The index of the instruction within its event.
     pub instruction: usize,
+    /// The byte offset in that instruction's arguments.
     pub target: usize,
+    /// The byte offset in the event's own arguments.
     pub source: usize,
+    /// How many bytes are copied.
     pub bytes: u32,
+    /// A stored word whose meaning is not established.
     pub unk: i32,
 }
 

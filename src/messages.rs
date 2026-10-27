@@ -13,7 +13,9 @@ const FORMAT: &str = "FromSoftware messages";
 /// NPC text together with every absent optional binder and repeated FMG id.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NpcNamesRead {
+    /// The NPC names by ID.
     pub names: BTreeMap<i32, String>,
+    /// What was absent or repeated, one sentence each.
     pub report: Vec<String>,
 }
 

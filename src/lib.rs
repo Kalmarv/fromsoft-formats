@@ -5,9 +5,58 @@
 //! events (TAE), texture packages (TPF), collision (Havok, CLM2).
 //!
 //! Every read is checked: data that is shorter than it says, refers outside itself or holds a value the reader does
-//! not know is an [`Error`] naming the format and the offset, never a panic or a silently skipped field. What a reader
-//! keeps is what the file stores; what a file leaves to the game (which file is in force, what a flag means) is the
-//! caller's to decide.
+//! not know is an [`Error`] naming the format and the offset, rather than a panic or a silently skipped field. What a
+//! reader keeps is what the file stores; what a file leaves to the game (which file is in force, what a flag means) is
+//! the caller's to decide.
+//!
+//! The crate distributes no key, dictionary, native library or game file. The caller supplies the archive keys of its
+//! own install ([`Keys`]), the Oodle library for Kraken-compressed files (a [`dcx::Decoder`]) and, to turn path hashes
+//! back into paths, a path list ([`NameDictionary`]).
+//!
+//! # Reading a file
+//!
+//! Every reader takes the bytes of one file, decompressed, and returns either the file's contents or an error that
+//! says what it refused and where:
+//!
+//! ```
+//! use fromsoft_formats::{Error, flver::Model};
+//!
+//! let err = Model::read(b"not a FLVER file").unwrap_err();
+//! assert!(matches!(&err, Error::Invalid { format: "FLVER", offset: 0, .. }));
+//! println!("{err}");
+//! ```
+//!
+//! # Reading an install
+//!
+//! An [`Install`] names a game folder and the caller's keys; [`Install::open`] indexes its archives, and
+//! [`Archive::read`] returns the decompressed bytes of an entry by archive path. Binders are opened with
+//! [`Binder::read`], which also decodes the DCX envelopes of its members:
+//!
+//! ```no_run
+//! # #![allow(unsafe_code)]
+//! use fromsoft_formats::{Binder, Game, Install, Keys, dcx::Decoder};
+//! use primase_foundations::compress::oodle::{Oodle, Version};
+//! use std::path::Path;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! // One PKCS#1 `RSA PUBLIC KEY` PEM per archive (`Data1.pem` ... `Data5.pem`), which the caller holds.
+//! let keys = Keys::from_folder("keys", Game::Sekiro, None)?;
+//! let archive = Install::new("D:/Games/Sekiro", Game::Sekiro, keys).open()?;
+//!
+//! // Kraken-compressed files need Oodle: the game's own library on Windows, a portable decoder elsewhere.
+//! // SAFETY: the library is the game's own.
+//! let oodle = unsafe { Oodle::open(Some(Path::new("D:/Games/Sekiro/oo2core_6_win64.dll")), Version::V6) }?;
+//! let decoder = Decoder { oodle: Some(&oodle), max_output: 1 << 30 };
+//!
+//! let binder = Binder::read(&archive.read("/param/gameparam/gameparam.parambnd.dcx", &decoder)?, &decoder)?;
+//! for file in &binder.files {
+//!     println!("{:?} {} bytes", file.name, file.bytes.len());
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! `examples/list_binder.rs` is this example as a program.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod affine;
@@ -52,8 +101,11 @@ pub enum Error {
     /// `format`'s data at `offset` holds what the reader refuses, or lacks what it needs.
     #[error("{format} at {offset:#x}: {detail}")]
     Invalid {
+        /// The format that refused the data (`"FLVER"`, `"BND4"`).
         format: &'static str,
+        /// The byte offset of the refused field (for a few table-level refusals, an index; see the format's reader).
         offset: usize,
+        /// What was expected or found.
         detail: String,
     },
     /// A Havok object the reader holds is not readable.

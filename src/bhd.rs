@@ -14,17 +14,25 @@ use std::num::NonZeroUsize;
 /// Half-open byte range. (-1,-1) in an archive is an explicitly disabled range.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Range {
+    /// First byte of the range.
     pub start: i64,
+    /// One past its last byte.
     pub end: i64,
 }
+/// The AES-128 key an entry's index states and the byte ranges of the entry it encrypts (ECB).
 #[derive(Debug, Clone)]
 pub struct AesKey {
+    /// The 16-byte key stored in the index.
     pub key: [u8; 16],
+    /// The encrypted ranges, in entry offsets; each is aligned to 16 bytes.
     pub ranges: Vec<Range>,
 }
+/// The 32-byte SHA digest an entry's index states and the byte ranges it covers. It is parsed and kept, never checked.
 #[derive(Debug, Clone)]
 pub struct HashInfo {
+    /// The stored digest.
     pub digest: [u8; 32],
+    /// The ranges of the entry the digest covers.
     pub ranges: Vec<Range>,
 }
 /// How a game's archive paths hash to the keys its BHD5 tables store. Both run over the UTF-16 units of the lowercase
@@ -37,6 +45,7 @@ pub enum PathHash {
     Base133,
 }
 impl PathHash {
+    /// The hash of the archive path `path` (zero-extended to u64 for [`PathHash::Base37`]).
     pub fn hash(self, path: &str) -> u64 {
         match self {
             Self::Base37 => u64::from(path_hash(path)),
@@ -64,11 +73,15 @@ pub fn path_hash64(path: &str) -> u64 {
 pub struct RecordLayout {
     /// Path hash offset and width in bytes.
     pub hash: (usize, usize),
+    /// Padded size offset (4 bytes).
     pub padded_size: usize,
     /// Logical (unpadded) size offset and width in bytes.
     pub logical_size: (usize, usize),
+    /// Offset of the entry's position in the BDT file (8 bytes).
     pub offset: usize,
+    /// Offset of the pointer to the entry's SHA table (8 bytes; 0 for none).
     pub sha: usize,
+    /// Offset of the pointer to the entry's AES table (8 bytes; 0 for none).
     pub aes: usize,
 }
 impl RecordLayout {
@@ -100,21 +113,32 @@ fn sized(v: &View<'_>, (o, width): (usize, usize)) -> Result<u64> {
         _ => Err(invalid("BHD5", o, "unsupported field width")),
     }
 }
+/// One file of an archive, as its BHD5 index lists it.
 #[derive(Debug, Clone)]
 pub struct Entry {
     /// The archive path hash, in the width the game's records store it (Sekiro's u32 zero-extended).
     pub hash: u64,
+    /// Where the entry starts in the BDT file.
     pub offset: u64,
+    /// Its stored size in the BDT file, including padding.
     pub padded_size: usize,
+    /// Its size without padding. The reader requires it not to exceed `padded_size`.
     pub logical_size: usize,
+    /// The AES key and ranges, when the entry is encrypted.
     pub aes: Option<AesKey>,
+    /// The digest and ranges, when the index states one.
     pub sha: Option<HashInfo>,
 }
+/// A read BHD5 index (after [`unwrap_rsa`]).
 #[derive(Debug, Clone)]
 pub struct Header {
+    /// The salt stored in the header.
     pub salt: Vec<u8>,
+    /// Every entry of every bucket, in bucket order. A path hash occurs once.
     pub entries: Vec<Entry>,
+    /// The number of hash buckets the index has.
     pub bucket_count: usize,
+    /// The number of zero bytes that padded the unwrapped index after its stated size.
     pub rsa_padding: usize,
 }
 /// Limbs of a 2048-bit number, least significant first.

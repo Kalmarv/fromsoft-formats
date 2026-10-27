@@ -1,3 +1,7 @@
+//! A game install's BHD5/BDT archives: [`Install`] and [`Keys`] say where they are and how to open them, [`Archive`]
+//! indexes them and reads entries by archive path, and [`NameDictionary`] maps path hashes back to paths from a path
+//! list the caller supplies. With [`game_params`](crate::game_params) (which reads Elden Ring's `regulation.bin`), this is
+//! the only module that reads files from disk.
 #![allow(
     clippy::disallowed_methods,
     clippy::disallowed_types,
@@ -22,6 +26,7 @@ use std::{
 /// path hash. Hash collisions retain every distinct normalized candidate, never overwrite.
 #[derive(Debug, Default, Clone)]
 pub struct NameDictionary {
+    /// The paths of each path hash, normalised (lowercase, `/` separators, a leading `/`) and sorted.
     pub names: BTreeMap<u64, Vec<String>>,
 }
 impl NameDictionary {
@@ -37,6 +42,7 @@ impl NameDictionary {
     pub fn parse(text: &str) -> Result<Self> {
         Self::parse_for(text, Game::Sekiro)
     }
+    /// `game`'s paths from text. A non-ASCII path is refused; the error's offset is its zero-based line number.
     pub fn parse_for(text: &str, game: Game) -> Result<Self> {
         let hash = game.archives().hash;
         let mut names: BTreeMap<u64, Vec<String>> = BTreeMap::new();
@@ -132,8 +138,11 @@ impl Keys {
 /// A game's install: its folder, the game and the keys of its archives; what a reader opens.
 #[derive(Clone, Debug)]
 pub struct Install {
+    /// The install folder holding the archives (and, for Elden Ring, `regulation.bin`).
     pub root: PathBuf,
+    /// Which game it is.
     pub game: Game,
+    /// The archive keys the caller supplies.
     pub keys: Keys,
     /// The threads opening its archives may use (the index files' RSA blocks): the caller states them; one by default.
     pub threads: NonZeroUsize,
@@ -159,9 +168,12 @@ impl Install {
     }
 }
 
+/// An index entry and the archive pair it came from.
 #[derive(Debug)]
 pub struct IndexedEntry {
+    /// The [`ArchivePair::shard`] of the pair holding the entry.
     pub shard: u8,
+    /// The entry as the pair's BHD5 index lists it.
     pub entry: Entry,
 }
 /// A game's immutable archive indexes. BDT files are opened for each read, so reads need no shared seek cursor. Names
@@ -170,6 +182,7 @@ pub struct IndexedEntry {
 pub struct Archive {
     root: PathBuf,
     game: Game,
+    /// Every entry of every pair, by path hash.
     pub entries: BTreeMap<u64, IndexedEntry>,
     /// The indexes of the pairs read, in the game's pair order.
     pub headers: Vec<Header>,
@@ -247,6 +260,7 @@ impl Archive {
             absent,
         })
     }
+    /// The game these archives belong to.
     pub fn game(&self) -> Game {
         self.game
     }
@@ -285,6 +299,7 @@ impl Archive {
         let bytes = self.read_stored(hash)?;
         decoder.decode_if_dcx(&bytes)
     }
+    /// [`Archive::read_hash`] of the hash of the archive path `path`; [`crate::Error::Missing`] if the index lacks it.
     pub fn read(&self, path: &str, decoder: &Decoder<'_>) -> Result<Vec<u8>> {
         self.read_hash(self.hash(path), decoder)
     }

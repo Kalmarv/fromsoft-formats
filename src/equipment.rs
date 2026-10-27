@@ -1,19 +1,27 @@
-//! Part-built human NPCs: MSB Enemy.CharaInitID -> CharaInitParam -> EquipParamProtector.
-//! NpcParam has display masks, not this equipment link. Offsets below are the SDT Paramdex v4 definitions:
+//! Part-built human NPCs (Sekiro only): an MSB enemy's `CharaInitID` names a `CharaInitParam` row, which names
+//! `EquipParamProtector` rows, which name the character part binders (`/parts/<part>.partsbnd.dcx`) that dress it.
+//! `NpcParam` has display masks, not this equipment link. Offsets below are the Sekiro (SDT) Paramdex v4 definitions:
 //! initializer armor IDs +32..48 and npcPlayerSex +228; protector equipModelId +160 and gender +209.
 //! Only the stated fields are read; no face-generation, body-shape or runtime equipment replacement is invented.
 use crate::game_params::{NpcPlacement, npc_placements, read_param};
 use crate::param::{Param, Row};
 use crate::{Archive, Binder, Game, Install, NameDictionary, Result, dcx::Decoder, flver::Model, invalid};
 
+/// The outfit one enemy placement of a map names: the character parts it is built from, and what could not be
+/// resolved.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct NpcOutfit {
+    /// The NPC param row the placement names.
     pub npc: i32,
     /// The initializer the placement names; `None` where the MSB stores a negative id (it names none).
     pub init: Option<i32>,
+    /// The map the placement is in.
     pub map: String,
+    /// The placement's part name in the map.
     pub placement: String,
+    /// The part names resolved (`bd_m_9500`), each with a part binder in the archive.
     pub parts: Vec<String>,
+    /// Why a slot could not be resolved, one sentence each.
     pub unresolved: Vec<String>,
     /// Every part the read named by which binders the archive holds, not by a field the param states ([`GENDER_BY_PRESENCE`],
     /// [`FACE_OR_HEAD_BY_PRESENCE`], [`LEVEL_SUFFIX_BY_PRESENCE`]).
@@ -26,6 +34,7 @@ pub const NO_INITIALIZER: &str = "enemy placement that names no character initia
 /// A part named by which binder exists.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct PresenceChoice {
+    /// Which ambiguity the archive settled ([`GENDER_BY_PRESENCE`], [`FACE_OR_HEAD_BY_PRESENCE`] or [`LEVEL_SUFFIX_BY_PRESENCE`]).
     pub reason: &'static str,
     /// The protector row and the part binder chosen.
     pub example: String,
@@ -182,8 +191,9 @@ fn resolve_parts(
     Ok((parts, unresolved, chosen))
 }
 
-/// Every authored outfit for this model/NPC row, in map/part order, including distinct placements that share
-/// an initializer. A program picks the first or a caller-stated initializer and can show all source placements.
+/// Every authored outfit for the character `model`, optionally of one NPC param row `npc`, in map/part order, including
+/// distinct placements that share an initializer. Sekiro only: Elden Ring is refused. The caller picks among the
+/// placements.
 pub fn npc_outfits(
     install: &Install,
     archive: &Archive,
@@ -206,8 +216,8 @@ pub fn npc_outfits(
     outfits_from_placements(install, archive, decoder, placements)
 }
 
-/// All map-authored initializer outfits, so a census can resolve params once rather than rereading all maps per
-/// character. Retains map/placement/NPC/initializer on every row, including unreadable outfits and their reasons.
+/// All map-authored initializer outfits, so that a survey of many characters reads the params once rather than
+/// rereading all maps per character. Sekiro only. Retains map/placement/NPC/initializer on every row, including unreadable outfits and their reasons.
 pub fn npc_outfit_catalog(
     install: &Install,
     archive: &Archive,
@@ -279,8 +289,10 @@ fn outfits_from_placements(
         .collect()
 }
 
-/// Inspect only character FLVERs (cost: each FLVER is decoded whole, vertices included, only to count its drawable meshes), without loading materials/textures or animations. A zero count explains a
-/// rig/stub; absence of FLVER is a named error listing the held members rather than an empty successful read.
+/// The number of drawable meshes (with vertices and at least one triangle) in the FLVERs of the character `id`
+/// (`c2010`) from its `.chrbnd.dcx`. Each FLVER is decoded whole, vertices included, only to count; no materials,
+/// textures or animations are read. A zero count marks a rig without geometry; a binder with no FLVER is an error
+/// listing the members it holds, not an empty success.
 pub fn character_mesh_count(archive: &Archive, decoder: &Decoder<'_>, id: &str) -> Result<usize> {
     if id.len() != 5 || !id.starts_with('c') || !id[1..].bytes().all(|b| b.is_ascii_digit()) {
         return Err(invalid("character geometry", 0, "expected c and four digits"));

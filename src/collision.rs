@@ -7,14 +7,19 @@ use havok_formats::convex::ConvexShape;
 use havok_formats::{Compendium, CustomKind, Tagfile, Value};
 use std::collections::BTreeMap;
 
+/// A map mesh as a triangle soup: triangles in the file's frame, each with its HitMtrlParam ID, and counts of what the file leaves
+/// unresolved. The counts are reported, never hidden: nothing is dropped silently.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Soup {
     /// Triangle-list positions in the file's source frame, after rigid-body pose.
     pub triangles: Vec<[[f32; 3]; 3]>,
     /// HitMtrlParam IDs; -1 is an explicitly counted absent shape-key binding.
     pub materials: Vec<i32>,
+    /// Triangles whose shape key the material table does not map (their material is -1).
     pub unmapped: usize,
+    /// Primitives the compressed mesh marks dead (indices `0xde, 0xad, 0xde, 0xad`); they contribute no triangles.
     pub dead_primitives: usize,
+    /// Entries of the shape-key table that are the invalid all-ones key.
     pub invalid_material_keys: usize,
     /// Triangle-data rows no shape key takes, at the end or among the others.
     pub unkeyed_triangle_data: usize,
@@ -123,7 +128,8 @@ fn material_keys(shape: Value<'_, '_>, has_triangles: bool) -> Result<KeyMateria
     Ok(result)
 }
 
-/// Decode map compressed meshes. A body of another shape class is not read: its
+/// Decode a map collision tagfile (with the compendium it shares, if any): every compressed mesh body as posed
+/// triangles with HitMtrlParam IDs. A body of another shape class is not read: its
 /// class is listed in [`Soup::unread_bodies`], never taken for an empty body.
 pub fn read_map(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Soup> {
     let tag = Tagfile::read(bytes, compendium)?;
@@ -194,11 +200,15 @@ pub enum BodyGeometry {
     /// extern shape (`instance`, columns: rotation x, y and z, then the translation), and the body's pose in the file
     /// frame. It stores no material.
     Convex {
+        /// The shape's core and convex radius, in its own space.
         core: ConvexShape,
         /// A capsule's segment end points `a`, `b` (its radius is the core's).
         capsule: Option<[[f32; 3]; 2]>,
+        /// The shape's placement in the body's space, where a compressed mesh holds it as an extern shape.
         instance: Option<[[f32; 3]; 4]>,
+        /// The body's position in the file frame.
         position: [f32; 3],
+        /// The body's orientation, a unit quaternion `[x, y, z, w]`.
         orientation: [f32; 4],
     },
 }
@@ -267,12 +277,16 @@ fn convex(
     })
 }
 
+/// One rigid body of an object's collision file.
 #[derive(Debug)]
 pub struct Body {
+    /// The body's stored name.
     pub name: String,
     /// Stored motion classification; interpreting 2 as keyframed is policy.
     pub motion_type: u64,
+    /// The Havok class name of the shape (for a compressed mesh that holds extern shapes, of the shape read).
     pub shape: String,
+    /// What the shape holds.
     pub geometry: BodyGeometry,
 }
 

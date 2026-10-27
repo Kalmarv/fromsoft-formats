@@ -33,7 +33,9 @@ pub struct Generation {
     pub part_kinds: &'static [(u32, PartKind)],
     /// Part record header size in bytes, and where it keeps the kind and the model index (u32 each).
     pub part_header: usize,
+    /// Offset in a part record of its kind code (u32).
     pub part_kind: usize,
+    /// Offset in a part record of its model index (u32; `u32::MAX` for none).
     pub part_model: usize,
     /// Header bytes with fixed contents: (offset, bytes).
     pub part_fixed: &'static [(usize, &'static [u8])],
@@ -42,7 +44,9 @@ pub struct Generation {
     pub part_payloads: (usize, usize),
     /// Entity block size, and a range of it that must be zero.
     pub entity_block: usize,
+    /// A range of the entity block (offset, length) that must be zero, where the generation has one.
     pub entity_zero: Option<(usize, usize)>,
+    /// How the generation stores the point-light shadow byte.
     pub point_light_shadow: FlagByte,
     /// Event type code of MapOffset records, in generations that have them.
     pub map_offset_event: Option<u32>,
@@ -122,6 +126,7 @@ impl Generation {
         map_offset_event: None,
         spawn_region: Some(8),
     };
+    /// Both generations.
     pub const ALL: [&'static Self; 2] = [&Self::SEKIRO, &Self::ELDEN_RING];
     /// The generation whose section chain is `names`.
     pub fn find<S: AsRef<str>>(names: &[S]) -> Option<&'static Self> {
@@ -159,31 +164,48 @@ fn section_chain(v: &View<'_>) -> Result<Vec<String>> {
     }
 }
 
+/// A model a layout names (a map piece, object, character, collision).
 #[derive(Clone, Debug)]
 pub struct Model {
+    /// The model's name (`m10_00_00_00_000000`, `c3000`).
     pub name: String,
+    /// The model kind code as stored.
     pub kind: u32,
 }
+/// What a part places.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PartKind {
+    /// A piece of map geometry.
     MapPiece,
+    /// A placed object (Sekiro).
     Object,
+    /// An enemy or other character.
     Enemy,
+    /// A player start.
     Player,
+    /// Collision geometry.
     Collision,
+    /// A placeholder object (Sekiro).
     DummyObject,
+    /// A placeholder enemy.
     DummyEnemy,
+    /// A connection between collisions.
     ConnectCollision,
     /// Elden Ring's placed asset geometry (its counterpart of Sekiro's objects).
     Asset,
+    /// A placeholder asset (Elden Ring).
     DummyAsset,
 }
+/// One part of a map layout: a placed model, character or collision, as stored.
 #[derive(Clone, Debug)]
 pub struct Part {
     /// Original file order, stable even when names repeat.
     pub index: usize,
+    /// The part's name.
     pub name: String,
+    /// What it places.
     pub kind: PartKind,
+    /// Its model's index in [`MapLayout::models`], if it has one.
     pub model: Option<usize>,
     /// Collision-part hit filter; absent on other part kinds.
     pub hit_filter: Option<u8>,
@@ -191,8 +213,11 @@ pub struct Part {
     /// the think param row, then the NPC row, as SoulsFormats' `MSBS`/`MSBE` `EnemyBase.ReadTypeData` read them);
     /// absent on other part kinds.
     pub npc_param: Option<i32>,
+    /// Its position, as stored.
     pub position: [f32; 3],
+    /// Its rotation in degrees (X, Y, Z), as stored; see [`euler_matrix`] for the order they apply in.
     pub rotation_degrees: [f32; 3],
+    /// Its scale, as stored.
     pub scale: [f32; 3],
     /// The part's own entity ID as stored (event scripts address it; -1 or 0: none).
     pub entity_id: i32,
@@ -220,26 +245,39 @@ pub struct ShadowFlags {
     /// Uninterpreted byte at entity-block offset 0x0e; all byte values are retained.
     pub cascade3_cast: u8,
 }
+/// A MapOffset event (Sekiro): where a map-local resource is placed.
 #[derive(Clone, Debug)]
 pub struct MapOffset {
+    /// The event's name.
     pub name: String,
+    /// The offset position, as stored.
     pub position: [f32; 3],
+    /// The rotation about y in degrees, as stored.
     pub degrees: f32,
 }
-/// Record envelopes are validated; unrelated gameplay payloads remain opaque.
+/// One section of the file: its records as raw bytes. Record envelopes are validated; unrelated gameplay payloads
+/// remain opaque.
 #[derive(Clone, Debug)]
 pub struct Section {
+    /// The section's name (`PARTS_PARAM_ST`).
     pub name: String,
+    /// The revision the section stores.
     pub version: u32,
+    /// Its records, each the bytes from its offset to the next record's (or the section's end).
     pub records: Vec<Vec<u8>>,
 }
+/// A read map layout (`.msb.dcx` once decoded): the models and parts decoded, the other records retained.
 #[derive(Clone, Debug)]
 pub struct MapLayout {
     /// The generation the section chain names.
     pub generation: &'static Generation,
+    /// The models, in file order.
     pub models: Vec<Model>,
+    /// The parts, in file order.
     pub parts: Vec<Part>,
+    /// The MapOffset events (none in Elden Ring).
     pub map_offsets: Vec<MapOffset>,
+    /// Every section with its raw records, in file order.
     pub sections: Vec<Section>,
 }
 
@@ -592,10 +630,15 @@ impl MapOffset {
 pub struct PartGparam {
     /// The part's index in the layout's parts ([`Part::index`]).
     pub part: usize,
+    /// The value set of the `LightSet ParamEditor` group.
     pub light_set: i32,
+    /// The value set of `FogParamEditor`.
     pub fog: i32,
+    /// The value set of `LightScattering : ParamEditor`.
     pub light_scattering: i32,
+    /// The value set of `Env Map:Editor`.
     pub env_map: i32,
+    /// A collision part's four scene bytes, as stored (-1: none).
     pub scene: Option<[i8; 4]>,
 }
 
@@ -698,17 +741,21 @@ impl MapLayout {
 pub struct PartGrass {
     /// The part's index in the layout's parts ([`Part::index`]).
     pub part: usize,
+    /// The six `GrassTypeParam` row ids, as stored (0 or negative: none).
     pub ids: [i32; 6],
 }
 
-/// Checkpoint/warp spawn region stored in the common world frame. Its facing
+/// A checkpoint/warp spawn region (type 8), position and rotation as stored in the layout's common frame. Its facing
 /// convention and human-readable labels are the caller's to choose.
 #[derive(Clone, Debug)]
 pub struct SpawnPoint {
+    /// The region's name.
     pub name: String,
     /// Its index among the layout's regions, in file order ([`MapLayout::region_names`]).
     pub region: usize,
+    /// Its position, as stored.
     pub position: [f32; 3],
+    /// Its rotation in degrees, as stored.
     pub rotation_degrees: [f32; 3],
 }
 impl MapLayout {
@@ -775,32 +822,49 @@ impl MapLayout {
 pub enum RegionShape {
     /// Code 0xFFFFFFFF: the region has no shape.
     None,
+    /// Code 0: a point.
     Point,
+    /// Code 1.
     Circle {
+        /// Radius, metres.
         radius: f32,
     },
+    /// Code 2.
     Sphere {
+        /// Radius, metres.
         radius: f32,
     },
+    /// Code 3.
     Cylinder {
+        /// Radius, metres.
         radius: f32,
+        /// Height, metres.
         height: f32,
     },
+    /// Code 4.
     Rectangle {
+        /// Width, metres.
         width: f32,
+        /// Depth, metres.
         depth: f32,
     },
+    /// Code 5.
     Box {
+        /// Width, metres.
         width: f32,
+        /// Depth, metres.
         depth: f32,
+        /// Height, metres.
         height: f32,
     },
     /// Eight references to other regions, by their index in the section and the second word of each as stored.
     Composite {
+        /// Each child's region index and the word stored after it.
         children: Vec<(i32, i32)>,
     },
     /// A shape code SoulsFormats does not name; its data is not read.
     Unknown {
+        /// The stored shape code.
         code: u32,
     },
 }
@@ -816,17 +880,22 @@ pub enum RegionShape {
 pub struct Region {
     /// Its index in the layout's regions, in file order.
     pub index: usize,
+    /// The region's name.
     pub name: String,
-    /// The type code as stored, and its name where SoulsFormats names it ([`Generation::region_type`]).
+    /// The type code as stored.
     pub type_code: u32,
+    /// The type's name where SoulsFormats names it ([`Generation::region_type`]).
     pub type_name: Option<&'static str>,
+    /// The shape the region marks out.
     #[serde(flatten)]
     pub shape: RegionShape,
     /// In the map's frame, as stored: [`euler_matrix`] places it.
     pub position: [f32; 3],
+    /// Its rotation in degrees, as stored.
     pub rotation_degrees: [f32; 3],
     /// The region's own entity ID as stored (event scripts address it; 0 or -1: none).
     pub entity_id: i32,
+    /// The type's own data, unread, as hexadecimal digits when serialised.
     #[serde(serialize_with = "hex")]
     pub type_data: Vec<u8>,
 }
@@ -840,14 +909,21 @@ pub struct Region {
 pub struct Event {
     /// Its index in the layout's events, in file order.
     pub index: usize,
+    /// The event's name.
     pub name: String,
     /// The event ID as stored (`EventID`).
     pub event_id: i32,
+    /// The type code as stored.
     pub type_code: u32,
+    /// The type's name where SoulsFormats names it ([`Generation::event_type`]).
     pub type_name: Option<&'static str>,
+    /// The name of the part it names, if any.
     pub part: Option<String>,
+    /// The name of the region it names, if any.
     pub region: Option<String>,
+    /// The entity ID it stores.
     pub entity_id: i32,
+    /// The type's own data, unread, as hexadecimal digits when serialised.
     #[serde(serialize_with = "hex")]
     pub type_data: Vec<u8>,
 }
@@ -878,14 +954,23 @@ impl PartKind {
 pub struct UnplacedPart {
     /// Its index in the layout's parts ([`Part::index`]).
     pub index: usize,
+    /// The part's name.
     pub name: String,
+    /// The kind's word ([`PartKind::word`]).
     pub kind: &'static str,
+    /// Its model's name, if it has one.
     pub model: Option<String>,
+    /// An enemy's NPC param row, as stored.
     pub npc_param: Option<i32>,
+    /// Its position, as stored.
     pub position: [f32; 3],
+    /// Its rotation in degrees, as stored.
     pub rotation_degrees: [f32; 3],
+    /// Its scale, as stored.
     pub scale: [f32; 3],
+    /// Its entity ID, as stored.
     pub entity_id: i32,
+    /// Its entity groups, as stored.
     pub entity_group_ids: [i32; 8],
 }
 impl MapLayout {

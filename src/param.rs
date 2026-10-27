@@ -27,6 +27,7 @@ const PADDING: usize = 4;
 /// One row as stored.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Row {
+    /// The row's ID.
     pub id: i32,
     /// The row's name; `None` when the row has no name offset. The games' params carry empty names (the names people
     /// use come from community lists, not the game).
@@ -46,6 +47,7 @@ pub struct Param {
     pub unk06: u16,
     /// The bytes of the row layout every row takes.
     pub row_size: usize,
+    /// The rows, in file order.
     pub rows: Vec<Row>,
 }
 
@@ -190,6 +192,7 @@ impl Param {
 /// One row of the NPC param (`NPC_PARAM_ST`): its id and the 32 display mask bits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct NpcRow {
+    /// The row's ID.
     pub id: i32,
     /// `modelDispMask0` to `modelDispMask31`: bit `k` is `modelDispMask<k>`. The game shows the meshes of a model
     /// whose materials are named `#<k>#` when it is set.
@@ -204,14 +207,18 @@ pub const NPC_PARAM_TYPE: &str = "NPC_PARAM_ST";
 /// fields low bit first ([`crate::Game::npc_param`] states each game's, from Paramdex's `NpcParam.xml`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NpcLayout {
+    /// The layout revision ([`Param::data_version`]) the offsets are for.
     pub data_version: u16,
+    /// The row size in bytes the offsets are for; every offset must lie inside it.
     pub row_size: usize,
+    /// The byte offsets of the four groups of eight mask bits.
     pub mask_bytes: [usize; 4],
 }
 
 /// The NPC param's rows, as far as this reader reads them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NpcParam {
+    /// Every row, in file order.
     pub rows: Vec<NpcRow>,
 }
 
@@ -271,8 +278,11 @@ impl NpcParam {
 /// four-byte header of `disableParam_NT` and its reserved bytes and `resistCorrectId_poison`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NpcStatLayout {
+    /// The layout revision ([`Param::data_version`]) the offsets are for.
     pub data_version: u16,
+    /// The row size in bytes the offsets are for.
     pub row_size: usize,
+    /// The byte offset of each field, in [`NpcStats::NAMES`] order.
     pub offsets: [usize; 10],
 }
 
@@ -282,8 +292,11 @@ pub struct NpcStatLayout {
 /// (several hundred: resistances, attack rates, special effects, drops) are not read.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct NpcStats {
+    /// The row's ID.
     pub id: i32,
+    /// `behaviorVariationId`.
     pub behavior_variation_id: i32,
+    /// `nameId`: the ID of the NPC's name in the game's text ([`crate::messages`]).
     pub name_id: i32,
     /// Degrees a second.
     pub turn_velocity: f32,
@@ -295,8 +308,11 @@ pub struct NpcStats {
     pub weight: u32,
     /// How far the model is drawn above the capsule's position, metres.
     pub hit_y_offset: f32,
+    /// Hit points.
     pub hp: u32,
+    /// Magic points.
     pub mp: u32,
+    /// `getSoul`: what the character yields when defeated.
     pub get_soul: u32,
 }
 
@@ -416,26 +432,34 @@ const GRASS_ROW: usize = 276;
 /// models and textures: the placement of the blades is the game's (a density over the part's surface and a spacing).
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct GrassType {
+    /// The row's ID.
     pub id: i32,
     /// `lodRange`: the distance the LODs change at.
     pub lod_range: u16,
     /// `baseDensity` and `spacing`.
     pub base_density: f32,
+    /// `spacing`.
     pub spacing: f32,
     /// `model0Name`, `model1Name` and `simpleModelName` (empty: none).
     pub model0: String,
+    /// `model1Name`.
     pub model1: String,
+    /// `simpleModelName`.
     pub simple_model: String,
     /// `flatTextureName` and `billboardTextureName` (empty: none).
     pub flat_texture: String,
+    /// `billboardTextureName`.
     pub billboard_texture: String,
 }
 
 /// The grass type param's rows, as far as this reader reads them.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct GrassParam {
+    /// The param's layout revision.
     pub data_version: u16,
+    /// Its row size in bytes.
     pub row_size: usize,
+    /// Every row, in file order.
     pub rows: Vec<GrassType>,
 }
 

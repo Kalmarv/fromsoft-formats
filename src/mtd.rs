@@ -1,40 +1,65 @@
-//! MTD material definitions, with bounded nested blocks and strict Shift-JIS.
+//! MTD material definitions (`.mtd`, Sekiro): a shader, a description, typed parameters and texture slots, in nested
+//! blocks whose counts and markers are all checked against the file, with Shift-JIS strings decoded strictly.
 use primase_foundations::bytes::Endian;
 
 use crate::{Result, invalid};
 
+/// A parameter value.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub enum Value {
+    /// A boolean.
     Bool(bool),
+    /// One or two integers.
     Int(Vec<i32>),
+    /// One to four floats.
     Float(Vec<f32>),
 }
+/// A named parameter of a material definition.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Parameter {
+    /// The parameter's name.
     pub name: String,
+    /// Its value.
     pub value: Value,
 }
+/// A texture slot of a material definition.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Texture {
+    /// The slot's kind, as the file names it.
     pub kind: String,
+    /// The UV set it uses.
     pub uv_number: i32,
+    /// Its index in the shader's data.
     pub shader_data_index: i32,
+    /// The texture's path (empty in the older block version, which stores none).
     pub path: String,
+    /// The extra floats the newer block version stores after the path.
     pub extra: Vec<f32>,
 }
+/// A block's declared length against the bytes it was read to consume.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct BlockLength {
+    /// The offset where the block's contents start.
     pub start: usize,
+    /// The block's kind code.
     pub kind: u32,
+    /// The length the file declares.
     pub declared: usize,
+    /// The length the structure actually spans.
     pub consumed: usize,
 }
+/// A read material definition.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct MaterialDefinition {
+    /// The shader it names.
     pub shader: String,
+    /// Its description string.
     pub description: String,
+    /// Its parameters, in file order.
     pub parameters: Vec<Parameter>,
+    /// Its texture slots, in file order.
     pub textures: Vec<Texture>,
+    /// Every block's declared and consumed length, in the order blocks end.
     pub block_lengths: Vec<BlockLength>,
 }
 struct Cursor<'a> {
@@ -125,9 +150,9 @@ impl Cursor<'_> {
     }
 }
 impl MaterialDefinition {
-    /// Structure is authoritative; declared block lengths are retained as diagnostics.
-    /// Stock files can overstate these lengths. No consumer control-flow claim is
-    /// made: typed counts/markers determine boundaries, always within the file.
+    /// Read a decompressed MTD file. The structure is authoritative: typed counts and markers determine where blocks
+    /// end, always within the file, and the declared block lengths are kept in [`MaterialDefinition::block_lengths`]
+    /// as diagnostics (the game's own files can overstate them). Bytes after the last block are an error.
     pub fn read(data: &[u8]) -> Result<Self> {
         let mut c = Cursor {
             c: primase_foundations::bytes::Cursor::new(data),

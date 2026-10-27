@@ -25,6 +25,7 @@ const FORMAT: &str = "FromSoftware FMG";
 /// The strings of one FMG by id. An id with no string (offset 0) is not in the map.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Fmg {
+    /// The strings by ID.
     pub entries: BTreeMap<i32, String>,
 }
 

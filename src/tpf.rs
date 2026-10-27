@@ -1,38 +1,59 @@
-//! PC texture packages. DDS payloads are retained exactly, including all faces/mips.
+//! TPF texture packages (PC): each texture's name and flags with its DDS file, retained exactly as stored, all faces
+//! and mipmaps included. Pixels are not decoded.
 use crate::{
     Result,
     bytes::{Budget, View, coverage},
     invalid,
 };
+/// What a texture is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextureKind {
+    /// A 2D image (stored kind 0).
     Image2D,
+    /// A cube map (stored kind 1).
     Cube,
+    /// A volume texture (stored kind 2).
     Volume,
 }
 /// Opaque optional metadata; words retain their bits rather than assuming floats.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Extra {
+    /// The stored ID.
     pub id: u32,
+    /// The stored words.
     pub words: Vec<u32>,
 }
+/// One texture of a package.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Texture {
+    /// The texture's name as stored.
     pub name: String,
+    /// The stored format code.
     pub format: u8,
+    /// What the texture is.
     pub kind: TextureKind,
+    /// The stored mipmap count.
     pub mipmaps: u8,
+    /// The texture's flags as stored (0 or 1).
     pub flags: u8,
+    /// Its optional extra data.
     pub extra: Option<Extra>,
+    /// The DDS file, complete, starting with `DDS `.
     pub dds: Vec<u8>,
 }
+/// A read texture package.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Package {
+    /// The package's flags as stored.
     pub flags: u8,
+    /// The names' encoding as stored (1: UTF-16, else ASCII).
     pub encoding: u8,
+    /// The textures, in file order.
     pub textures: Vec<Texture>,
 }
 impl Package {
+    /// Read a decompressed `.tpf`. Counts, offsets and sizes are bounded by the file, every payload must be a DDS file, and
+    /// every byte must be accounted for (up to 15 zero bytes at the end).
     pub fn read(data: &[u8]) -> Result<Self> {
         let v = View {
             data,
