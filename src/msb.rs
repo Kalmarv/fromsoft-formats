@@ -5,6 +5,15 @@
 //! second time to parts. Euler angles are degrees, applied X, then Z, then Y.
 //! The generations share the section chain and the record envelopes; the [`Generation`] the file's section chain
 //! names supplies what differs.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation
+    )
+)]
+use crate::affine::narrow;
 use crate::{Result, bytes::View, invalid};
 
 /// How a part's point-light shadow byte is stored.
@@ -331,12 +340,20 @@ pub fn drawn_part_points(layout: &MapLayout) -> Result<Vec<[f32; 2]>> {
         .map(|part| part.matrix().map(|m| [m[3][0], m[3][2]]))
         .collect()
 }
+/// `N` floats of a region's shape data, read through `at` (the offset of each byte-offset into the data).
+fn shape_floats<const N: usize>(r: &View<'_>, at: &dyn Fn(usize) -> Result<usize>) -> Result<[f32; N]> {
+    let mut out = [0.; N];
+    for (i, f) in out.iter_mut().enumerate() {
+        *f = f32_at(r, at(i.saturating_mul(4))?)?;
+    }
+    Ok(out)
+}
 fn text(v: &View<'_>, mut o: usize) -> Result<String> {
     let start = o;
     let mut units = Vec::new();
     loop {
         let x = v.u16(o)?;
-        o += 2;
+        o = v.at(o, 2)?;
         if x == 0 {
             break;
         }
@@ -352,7 +369,7 @@ fn f32_at(v: &View<'_>, o: usize) -> Result<f32> {
     Ok(f)
 }
 fn vector(v: &View<'_>, o: usize) -> Result<[f32; 3]> {
-    Ok([f32_at(v, o)?, f32_at(v, o + 4)?, f32_at(v, o + 8)?])
+    Ok([f32_at(v, o)?, f32_at(v, v.at(o, 4)?)?, f32_at(v, v.at(o, 8)?)?])
 }
 fn pointer(v: &View<'_>, o: usize, min: usize) -> Result<usize> {
     let p = v.size(o)?;
@@ -376,7 +393,7 @@ impl MapLayout {
         let names = section_chain(&v)?;
         let generation = Generation::find(&names)
             .ok_or_else(|| invalid(v.format, 16, format!("unknown section chain {names:?}")))?;
-        let last = generation.sections.len() - 1;
+        let last = generation.sections.len().saturating_sub(1);
         let mut next = 16;
         let mut sections = Vec::new();
         for (section_index, &name) in generation.sections.iter().enumerate() {
@@ -398,20 +415,28 @@ impl MapLayout {
                 format: v.format,
                 be: false,
             };
-            let name_offset = v.size(start + 8)?;
+            let name_at = v.at(start, 8)?;
+            let name_offset = v.size(name_at)?;
             if name_offset < header_end || text(&section, name_offset)? != name {
-                return Err(invalid(v.format, start + 8, "section name mismatch"));
+                return Err(invalid(v.format, name_at, "section name mismatch"));
             }
             let mut offsets = Vec::new();
-            for i in 0..n - 1 {
-                let p = v.size(start + 16 + i * 8)?;
+            for i in 0..n.saturating_sub(1) {
+                let slot = v.element(v.at(start, 16)?, i, 8)?;
+                let p = v.size(slot)?;
                 if p < header_end || p >= end || offsets.last().is_some_and(|&last| last >= p) {
-                    return Err(invalid(v.format, start + 16 + i * 8, "invalid entry offset"));
+                    return Err(invalid(v.format, slot, "invalid entry offset"));
                 }
                 offsets.push(p);
             }
             offsets.push(end);
-            let records = offsets.windows(2).map(|r| data[r[0]..r[1]].to_vec()).collect();
+            let records = offsets
+                .windows(2)
+                .map(|r| match r {
+                    [from, to] => v.slice(*from, to.saturating_sub(*from)).map(<[u8]>::to_vec),
+                    _ => Ok(Vec::new()),
+                })
+                .collect::<Result<Vec<_>>>()?;
             sections.push(Section {
                 name: name.to_owned(),
                 version,
@@ -419,12 +444,12 @@ impl MapLayout {
             });
         }
         for &i in generation.empty {
-            if !sections[i].records.is_empty() {
+            if sections.get(i).is_none_or(|s| !s.records.is_empty()) {
                 return Err(invalid("MSB", 0, "nonempty unsupported section"));
             }
         }
         let mut models = Vec::new();
-        for data in &sections[0].records {
+        for data in section_records(&sections, 0)? {
             let r = View {
                 data,
                 format: "MSB model",
@@ -445,7 +470,7 @@ impl MapLayout {
         }
         let mut parts = Vec::new();
         let header = generation.part_header;
-        for (index, data) in sections[5].records.iter().enumerate() {
+        for (index, data) in section_records(&sections, 5)?.iter().enumerate() {
             let r = View {
                 data,
                 format: "MSB part",
@@ -473,7 +498,8 @@ impl MapLayout {
                 return Err(invalid(r.format, generation.part_model, "model index"));
             };
             let (first, count) = generation.part_payloads;
-            for field in (0..count).map(|i| first + i * 8) {
+            for i in 0..count {
+                let field = r.element(first, i, 8)?;
                 let p = r.size(field)?;
                 if p == 0 {
                     if matches!(field, 96 | 104) {
@@ -487,13 +513,13 @@ impl MapLayout {
             let entity = r.size(96)?;
             r.slice(entity, generation.entity_block)?;
             if let Some((offset, len)) = generation.entity_zero {
-                r.expect(entity + offset, &vec![0; len])?;
+                r.expect(r.at(entity, offset)?, &vec![0; len])?;
             }
             let i32_at = |o: usize| r.u32(o).map(|v| v as i32);
             let entity_id = i32_at(entity)?;
             let mut entity_group_ids = [0i32; 8];
             for (k, g) in entity_group_ids.iter_mut().enumerate() {
-                *g = i32_at(entity + 0x1c + 4 * k)?;
+                *g = i32_at(r.element(r.at(entity, 0x1c)?, k, 4)?)?;
             }
             parts.push(Part {
                 index,
@@ -503,29 +529,35 @@ impl MapLayout {
                 entity_id,
                 entity_group_ids,
                 shadows: ShadowFlags {
-                    cast: r.boolean(entity + 0x0c)?,
-                    receive: r.boolean(entity + 0x11)?,
-                    only: r.boolean(entity + 0x12)?,
+                    cast: r.boolean(r.at(entity, 0x0c)?)?,
+                    receive: r.boolean(r.at(entity, 0x11)?)?,
+                    only: r.boolean(r.at(entity, 0x12)?)?,
                     point_light_cast: match generation.point_light_shadow {
-                        FlagByte::Bool => r.boolean(entity + 0x0a)?,
-                        FlagByte::ZeroOrMinusOne => match r.u8(entity + 0x0a)? {
+                        FlagByte::Bool => r.boolean(r.at(entity, 0x0a)?)?,
+                        FlagByte::ZeroOrMinusOne => match r.u8_at(entity, 0x0a)? {
                             0 => false,
                             0xff => true,
-                            _ => return Err(invalid(r.format, entity + 0x0a, "point-light shadow byte")),
+                            _ => {
+                                return Err(invalid(
+                                    r.format,
+                                    r.at(entity, 0x0a)?,
+                                    "point-light shadow byte",
+                                ));
+                            }
                         },
                     },
-                    static_cast: r.u8(entity + 0x0d)?,
-                    cascade3_cast: r.u8(entity + 0x0e)?,
+                    static_cast: r.u8_at(entity, 0x0d)?,
+                    cascade3_cast: r.u8_at(entity, 0x0e)?,
                 },
                 hit_filter: if kind == PartKind::Collision {
-                    Some(r.slice(r.size(104)?, 1)?[0])
+                    Some(r.u8(r.size(104)?)?)
                 } else {
                     None
                 },
                 npc_param: if matches!(kind, PartKind::Enemy | PartKind::DummyEnemy) {
                     let data = r.size(104)?;
                     r.expect(data, &[0; 8])?;
-                    Some(i32_at(data + 12)?)
+                    Some(i32_at(r.at(data, 12)?)?)
                 } else {
                     None
                 },
@@ -535,7 +567,7 @@ impl MapLayout {
             });
         }
         let mut map_offsets = Vec::new();
-        for data in &sections[1].records {
+        for data in section_records(&sections, 1)? {
             let r = View {
                 data,
                 format: "MSB event",
@@ -550,7 +582,7 @@ impl MapLayout {
                 map_offsets.push(MapOffset {
                     name,
                     position: vector(&r, p)?,
-                    degrees: f32_at(&r, p + 12)?,
+                    degrees: f32_at(&r, r.at(p, 12)?)?,
                 });
             }
         }
@@ -602,7 +634,7 @@ impl MapLayout {
         };
         let at = r.size(104)?;
         r.expect(at, &[0; 8])?;
-        let id = r.u32(at + 0x18)? as i32;
+        let id = r.u32_at(at, 0x18)? as i32;
         Ok((id >= 0).then_some(id))
     }
 }
@@ -635,11 +667,15 @@ pub fn euler_matrix(
         [sy * sx - cy * sz * cx, cz * cx, cy * sx + sy * sz * cx],
         [cy * sz * sx + sy * cx, -cz * sx, cy * cx - sy * sz * sx],
     ];
-    let mut cols = [[0.; 3]; 4];
-    for (i, col) in basis.into_iter().enumerate() {
-        cols[i] = col.map(|x| (x * f64::from(scale[i])) as f32);
-    }
-    cols[3] = position;
+    let [basis_x, basis_y, basis_z] = basis;
+    let [scale_x, scale_y, scale_z] = scale;
+    let axis = |col: [f64; 3], s: f32| col.map(|x| narrow(x * f64::from(s)));
+    let cols = [
+        axis(basis_x, scale_x),
+        axis(basis_y, scale_y),
+        axis(basis_z, scale_z),
+        position,
+    ];
     if !cols.iter().flatten().all(|x| x.is_finite()) {
         return Err(invalid("MSB transform", index, "basis overflow"));
     }
@@ -709,14 +745,17 @@ impl MapLayout {
             out.push(PartGparam {
                 part: part.index,
                 light_set: word(config)?,
-                fog: word(config + 4)?,
-                light_scattering: word(config + 8)?,
-                env_map: word(config + 12)?,
+                fog: word(r.at(config, 4)?)?,
+                light_scattering: word(r.at(config, 8)?)?,
+                env_map: word(r.at(config, 12)?)?,
                 scene: if scene == 0 {
                     None
                 } else {
-                    let b = r.slice(scene + scene_ids, 4)?;
-                    Some([b[0] as i8, b[1] as i8, b[2] as i8, b[3] as i8])
+                    let b = r.slice(r.at(scene, scene_ids)?, 4)?;
+                    let &[a, b, c, d] = b else {
+                        return Err(invalid(r.format, 120, "scene config"));
+                    };
+                    Some([a as i8, b as i8, c as i8, d as i8])
                 },
             });
         }
@@ -756,7 +795,7 @@ impl MapLayout {
             }
             let mut ids = [0i32; 6];
             for (i, id) in ids.iter_mut().enumerate() {
-                *id = r.u32(at + 4 * i)? as i32;
+                *id = r.u32(r.element(at, i, 4)?)? as i32;
             }
             out.push(PartGrass {
                 part: part.index,
@@ -1038,9 +1077,17 @@ impl MapLayout {
     }
 }
 
+/// The records of section `i`.
+fn section_records(sections: &[Section], i: usize) -> Result<&[Vec<u8>]> {
+    sections
+        .get(i)
+        .map(|s| s.records.as_slice())
+        .ok_or_else(|| invalid("MSB", 0, format!("the layout has no section {i}")))
+}
+
 fn hex<S: serde::Serializer>(bytes: &[u8], s: S) -> std::result::Result<S::Ok, S::Error> {
     use std::fmt::Write;
-    let mut text = String::with_capacity(bytes.len() * 2);
+    let mut text = String::with_capacity(bytes.len().saturating_mul(2));
     for b in bytes {
         let _ = write!(text, "{b:02x}");
     }
@@ -1190,48 +1237,33 @@ impl MapLayout {
                 }
                 r.at(shape_data, delta)
             };
-            let floats = |n: usize| -> Result<Vec<f32>> {
-                (0..n)
-                    .map(|i| f32_at(&r, shape_data_at(i.saturating_mul(4))?))
-                    .collect()
-            };
             let shape = match shape_code {
                 0xFFFF_FFFF => RegionShape::None,
                 0 => RegionShape::Point,
                 1 => RegionShape::Circle {
-                    radius: floats(1)?[0],
+                    radius: shape_floats::<1>(&r, &shape_data_at)?[0],
                 },
                 2 => RegionShape::Sphere {
-                    radius: floats(1)?[0],
+                    radius: shape_floats::<1>(&r, &shape_data_at)?[0],
                 },
                 3 => {
-                    let f = floats(2)?;
-                    RegionShape::Cylinder {
-                        radius: f[0],
-                        height: f[1],
-                    }
+                    let [radius, height] = shape_floats::<2>(&r, &shape_data_at)?;
+                    RegionShape::Cylinder { radius, height }
                 }
                 4 => {
-                    let f = floats(2)?;
-                    RegionShape::Rectangle {
-                        width: f[0],
-                        depth: f[1],
-                    }
+                    let [width, depth] = shape_floats::<2>(&r, &shape_data_at)?;
+                    RegionShape::Rectangle { width, depth }
                 }
                 5 => {
-                    let f = floats(3)?;
-                    RegionShape::Box {
-                        width: f[0],
-                        depth: f[1],
-                        height: f[2],
-                    }
+                    let [width, depth, height] = shape_floats::<3>(&r, &shape_data_at)?;
+                    RegionShape::Box { width, depth, height }
                 }
                 6 => RegionShape::Composite {
-                    children: (0..8)
+                    children: (0usize..8)
                         .map(|i| {
                             Ok((
-                                r.u32(shape_data_at(8 * i)?)? as i32,
-                                r.u32(shape_data_at(8 * i + 4)?)? as i32,
+                                r.u32(shape_data_at(i.saturating_mul(8))?)? as i32,
+                                r.u32(shape_data_at(i.saturating_mul(8).saturating_add(4))?)? as i32,
                             ))
                         })
                         .collect::<Result<_>>()?,
@@ -1244,7 +1276,7 @@ impl MapLayout {
             }
             let type_data = match r.size(88)? {
                 0 => Vec::new(),
-                at if at >= 96 => r.slice(at, r.data.len() - at.min(r.data.len()))?.to_vec(),
+                at if at >= 96 => r.slice(at, r.data.len().saturating_sub(at))?.to_vec(),
                 _ => return Err(invalid(r.format, 88, "type data inside the header")),
             };
             out.push(Region {
@@ -1255,7 +1287,7 @@ impl MapLayout {
                 shape,
                 position: vector(&r, 20)?,
                 rotation_degrees: vector(&r, 32)?,
-                entity_id: r.u32(entity + 4)? as i32,
+                entity_id: r.u32_at(entity, 4)? as i32,
                 type_data,
             });
         }
@@ -1267,7 +1299,7 @@ impl MapLayout {
     pub fn map_events(&self) -> Result<Vec<Event>> {
         let regions = self.region_names()?;
         let mut out = Vec::new();
-        for (index, data) in self.sections[1].records.iter().enumerate() {
+        for (index, data) in section_records(&self.sections, 1)?.iter().enumerate() {
             let r = View {
                 data,
                 format: "MSB event",
@@ -1279,7 +1311,7 @@ impl MapLayout {
             let base = pointer(&r, 24, 40)?;
             let type_data = match r.size(32)? {
                 0 => Vec::new(),
-                at if at >= 40 => r.slice(at, r.data.len() - at.min(r.data.len()))?.to_vec(),
+                at if at >= 40 => r.slice(at, r.data.len().saturating_sub(at))?.to_vec(),
                 _ => return Err(invalid(r.format, 32, "type data inside the header")),
             };
             let named =
@@ -1293,8 +1325,8 @@ impl MapLayout {
                 part: named(r.u32(base)? as i32, &|i| {
                     self.parts.get(i).map(|p| p.name.clone())
                 }),
-                region: named(r.u32(base + 4)? as i32, &|i| regions.get(i).cloned()),
-                entity_id: r.u32(base + 8)? as i32,
+                region: named(r.u32_at(base, 4)? as i32, &|i| regions.get(i).cloned()),
+                entity_id: r.u32_at(base, 8)? as i32,
                 type_data,
             });
         }
