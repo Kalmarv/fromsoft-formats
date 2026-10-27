@@ -3,12 +3,12 @@
 //!
 //! [`Param::read`] is strict about the layout Sekiro's and Elden Ring's params share (little-endian, 64-bit offsets,
 //! the param type named by an offset, UTF-16 row names): the header, the row table, the rows' data, the param type
-//! string and the row names account for every byte of the file, apart from short zero padding. It keeps each row's
+//! string and the row names account for every byte of the file, apart from up to eight zero bytes at its end. It keeps each row's
 //! data as stored; what the bytes mean is the field layout of the param type's definition, which the file does not
 //! carry. The only layout this module reads is [`NpcParam`]'s, for the one group of fields it reads (the 32
 //! `modelDispMask` bits), at the offsets each game states ([`NpcLayout`], [`crate::Game::npc_param`]); the other fields
 //! of a row are not read.
-use crate::{Result, bytes::View, bytes::coverage, invalid};
+use crate::{Result, bytes::View, bytes::coverage_split, invalid};
 
 const FORMAT: &str = "PARAM";
 /// The header, up to the row table.
@@ -19,18 +19,23 @@ const ROW_ENTRY: usize = 24;
 /// the unexplained low flag (0x01).
 const FORMAT_2D: u8 = 0x85;
 /// Format flags 2 of Sekiro's and Elden Ring's params: UTF-16 row names (0x01) and two flags whose meaning is not
-/// established.
+/// established. The byte after them (0x2f) is zero in every param of both games.
 const FORMAT_2E: u8 = 0x07;
-/// The zero padding allowed between the parts of the file.
-const PADDING: usize = 4;
+/// The zero padding allowed between the parts of the file: none (the parts follow each other directly).
+const GAP: usize = 0;
+/// The zero bytes a file may end with after its last part: two after the shared empty row name, or eight after the
+/// param type when no row has a name.
+const TAIL: usize = 8;
 
 /// One row as stored.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Row {
     /// The row's ID.
     pub id: i32,
-    /// The row's name; `None` when the row has no name offset. The games' params carry empty names (the names people
-    /// use come from community lists, not the game).
+    /// The row's name; `None` when the row has no name offset. In the params this reader accepts, the rows that have an
+    /// offset all share one empty string, so the name is `Some("")` (or no row has an offset): the names people use come
+    /// from community lists, not the game. Real names exist only in the older 32-bit form of Sekiro's AI and menu
+    /// banks, which is refused.
     pub name: Option<String>,
     /// The row's bytes, `row_size` of them.
     pub data: Vec<u8>,
@@ -43,7 +48,8 @@ pub struct Param {
     pub param_type: String,
     /// The revision of the row layout (the definition's data version).
     pub data_version: u16,
-    /// The header's unexplained field at 0x06 (1 in Sekiro's and Elden Ring's NPC params).
+    /// The header's unexplained field at 0x06: 0, 1 or 2, the same for every file of a param type (1 in Sekiro's and
+    /// Elden Ring's NPC params, 2 in their behaviour params).
     pub unk06: u16,
     /// The bytes of the row layout every row takes.
     pub row_size: usize,
@@ -185,7 +191,7 @@ impl Param {
         names.sort_unstable();
         names.dedup();
         spans.extend(names);
-        coverage(&v, spans, data.len(), PADDING)?;
+        coverage_split(&v, spans, data.len(), GAP, TAIL)?;
         Ok(Param {
             param_type,
             data_version,
@@ -444,10 +450,17 @@ impl NpcStats {
 /// The param type [`GrassParam::from_param`] reads.
 pub const GRASS_PARAM_TYPE: &str = "GRASS_TYPE_PARAM_ST";
 
-/// The bytes of a `GRASS_TYPE_PARAM_ST` row up to the end of its last field (`model1Name`), in Paramdex's
-/// `ER/Defs/GrassTypeParam.xml` as Smithbox ships it (FormatVersion 203; fields laid out as SoulsFormats' `PARAMDEF`
-/// packs them). A row of fewer bytes is not that layout; a longer one appends fields, which are not read.
+/// The layout revision and row size of Elden Ring's `GRASS_TYPE_PARAM_ST` (`GrassTypeParam`, `_Lv1` and `_Lv2`):
+/// Paramdex's `ER/Defs/GrassTypeParam.xml` as Smithbox ships it (FormatVersion 203; fields laid out as SoulsFormats'
+/// `PARAMDEF` packs them). Its last field is `model1Name` at 244.
 const GRASS_ROW: usize = 276;
+const GRASS_VERSION: u16 = 1;
+/// The layout revision and row size of Sekiro's `GRASS_TYPE_PARAM_ST`: the same fields at the same offsets up to
+/// `simpleModelName` (the name at 12 is `modelName`), without `model1Name`.
+const GRASS_ROW_SEKIRO: usize = 244;
+const GRASS_VERSION_SEKIRO: u16 = 6;
+/// Where Elden Ring's row keeps `model1Name`.
+const GRASS_MODEL1: usize = 244;
 
 /// One row of the grass type param: what the game grows where a map part names the row. Only the fields that say which
 /// models and textures: the placement of the blades is the game's (a density over the part's surface and a spacing).
@@ -455,15 +468,15 @@ const GRASS_ROW: usize = 276;
 pub struct GrassType {
     /// The row's ID.
     pub id: i32,
-    /// `lodRange`: the distance the LODs change at.
-    pub lod_range: u16,
+    /// `lodRange`: the distance the LODs change at (signed: five Sekiro rows hold -1).
+    pub lod_range: i16,
     /// `baseDensity` and `spacing`.
     pub base_density: f32,
     /// `spacing`.
     pub spacing: f32,
     /// `model0Name`, `model1Name` and `simpleModelName` (empty: none).
     pub model0: String,
-    /// `model1Name`.
+    /// `model1Name`; empty in Sekiro's rows, which have no such field.
     pub model1: String,
     /// `simpleModelName`.
     pub simple_model: String,
@@ -511,15 +524,20 @@ fn fixed_string(row: &[u8], at: usize, chars: usize) -> Result<String> {
 }
 
 impl GrassParam {
-    /// The models and textures of every row of `param`, which must be `GRASS_TYPE_PARAM_ST` with rows of at least
-    /// 276 bytes whose name fields hold printable ASCII (the one layout whose offsets are known; any other is refused).
+    /// The models and textures of every row of `param`, which must be `GRASS_TYPE_PARAM_ST` of Elden Ring's layout
+    /// (version 1, 276-byte rows) or Sekiro's (version 6, 244-byte rows) whose name fields hold printable ASCII (the
+    /// two layouts whose offsets are known; any other is refused).
     pub fn from_param(param: &Param) -> Result<GrassParam> {
-        if param.param_type != GRASS_PARAM_TYPE || param.row_size < GRASS_ROW {
+        let layout = (param.data_version, param.row_size);
+        let has_model1 = layout == (GRASS_VERSION, GRASS_ROW);
+        if param.param_type != GRASS_PARAM_TYPE
+            || !(has_model1 || layout == (GRASS_VERSION_SEKIRO, GRASS_ROW_SEKIRO))
+        {
             return Err(invalid(
                 FORMAT,
                 0,
                 format!(
-                    "{} version {} with rows of {} bytes, the grass param read is {GRASS_PARAM_TYPE} with rows of at least {GRASS_ROW}",
+                    "{} version {} with rows of {} bytes, the grass param read is {GRASS_PARAM_TYPE} version {GRASS_VERSION} with rows of {GRASS_ROW} or version {GRASS_VERSION_SEKIRO} with rows of {GRASS_ROW_SEKIRO}",
                     param.param_type, param.data_version, param.row_size
                 ),
             ));
@@ -540,7 +558,7 @@ impl GrassParam {
                     lod_range: r
                         .data
                         .first_chunk::<2>()
-                        .map(|b| u16::from_le_bytes(*b))
+                        .map(|b| i16::from_le_bytes(*b))
                         .ok_or_else(|| {
                             invalid(FORMAT, 0, format!("row {} is shorter than its lod range", r.id))
                         })?,
@@ -550,7 +568,11 @@ impl GrassParam {
                     flat_texture: fixed_string(&r.data, 44, 32)?,
                     billboard_texture: fixed_string(&r.data, 108, 32)?,
                     simple_model: fixed_string(&r.data, 212, 16)?,
-                    model1: fixed_string(&r.data, 244, 16)?,
+                    model1: if has_model1 {
+                        fixed_string(&r.data, GRASS_MODEL1, 16)?
+                    } else {
+                        String::new()
+                    },
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -759,6 +781,14 @@ mod tests {
         assert!(GrassParam::from_param(&Param::read(&other).unwrap()).is_err());
         let short = fixture(GRASS_PARAM_TYPE, 1, GRASS_ROW - 4, &[(1, vec![0; GRASS_ROW - 4])]);
         assert!(GrassParam::from_param(&Param::read(&short).unwrap()).is_err());
+        // a layout revision with the other game's row size is not either game's
+        let mixed = fixture(
+            GRASS_PARAM_TYPE,
+            GRASS_VERSION_SEKIRO,
+            GRASS_ROW,
+            &[(1, vec![0; GRASS_ROW])],
+        );
+        assert!(GrassParam::from_param(&Param::read(&mixed).unwrap()).is_err());
         let mut binary = grass_row("x", "", 1.0);
         binary[12..14].copy_from_slice(&0x1234u16.to_le_bytes());
         let garbled = fixture(GRASS_PARAM_TYPE, 1, GRASS_ROW, &[(1, binary)]);
@@ -766,6 +796,61 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(e.contains("not the layout read"), "{e}");
+    }
+
+    #[test]
+    fn sekiros_grass_rows_have_no_second_model_and_a_signed_lod_range() {
+        let mut near = grass_row("o007503", "PlantTest_01_a", 2.0);
+        near.truncate(GRASS_ROW_SEKIRO);
+        let mut far = near.clone();
+        far[0..2].copy_from_slice(&(-1i16).to_le_bytes());
+        // bytes where Elden Ring keeps model1Name are not read
+        let bytes = fixture(
+            GRASS_PARAM_TYPE,
+            GRASS_VERSION_SEKIRO,
+            GRASS_ROW_SEKIRO,
+            &[(1, near), (2, far)],
+        );
+        let grass = GrassParam::from_param(&Param::read(&bytes).unwrap()).unwrap();
+        assert_eq!((grass.data_version, grass.row_size), (6, 244));
+        let (a, b) = (grass.row(1).unwrap(), grass.row(2).unwrap());
+        assert_eq!(
+            (
+                a.lod_range,
+                a.model0.as_str(),
+                a.model1.as_str(),
+                a.billboard_texture.as_str()
+            ),
+            (40, "o007503", "", "PlantTest_01_a")
+        );
+        assert_eq!((b.lod_range, b.spacing, b.base_density), (-1, 0.5, 2.0));
+    }
+
+    #[test]
+    fn a_file_may_end_with_eight_zero_bytes_after_its_last_part_and_no_more() {
+        // a param no row of which has a name: the type string is the last part, and the file ends 8 zero bytes after it
+        let l = Game::Sekiro.npc_param();
+        let named = fixture(NPC_PARAM_TYPE, l.data_version, l.row_size, &[(1, npc_row(&l, 1))]);
+        let unnamed = |tail: usize| {
+            let mut b = named[..named.len() - 2].to_vec();
+            b[HEADER + 16..HEADER + 24].fill(0);
+            b.resize(b.len() + tail, 0);
+            b
+        };
+        for tail in [0, 2, 8] {
+            let p = Param::read(&unnamed(tail)).unwrap();
+            assert_eq!(p.rows[0].name, None);
+        }
+        let e = Param::read(&unnamed(9)).unwrap_err().to_string();
+        assert!(e.contains("unaccounted trailing bytes"), "{e}");
+        // between the parts nothing is allowed: two zero bytes between the type string and the row name
+        let mut gap = named.clone();
+        let name_at = HEADER + 16;
+        let names = u64::from_le_bytes(gap[name_at..name_at + 8].try_into().unwrap());
+        gap.splice(names as usize..names as usize, [0u8; 2]);
+        gap[name_at..name_at + 8].copy_from_slice(&(names + 2).to_le_bytes());
+        let e = Param::read(&gap).unwrap_err().to_string();
+        assert!(e.contains("unaccounted bytes"), "{e}");
     }
 
     #[test]

@@ -187,11 +187,20 @@ impl View<'_> {
         Ok((text, after))
     }
 }
-pub(crate) fn coverage(
+/// Check that `spans` and zero bytes account for the whole of `v` up to `end`: zero padding of at most `padding`
+/// bytes may separate the spans and follow the last one.
+pub(crate) fn coverage(v: &View<'_>, spans: Vec<(usize, usize)>, end: usize, padding: usize) -> Result<()> {
+    coverage_split(v, spans, end, padding, padding)
+}
+
+/// [`coverage`] with separate allowances: at most `gap` zero bytes between spans (and before the first), at most `tail`
+/// after the last.
+pub(crate) fn coverage_split(
     v: &View<'_>,
     mut spans: Vec<(usize, usize)>,
     end: usize,
-    padding: usize,
+    gap: usize,
+    tail: usize,
 ) -> Result<()> {
     spans.sort_unstable();
     spans.dedup();
@@ -201,8 +210,7 @@ pub(crate) fn coverage(
         if start < pos {
             return Err(v.err(start, "overlapping sections"));
         }
-        if start.saturating_sub(pos) > padding
-            || v.slice(pos, start.saturating_sub(pos))?.iter().any(|&b| b != 0)
+        if start.saturating_sub(pos) > gap || v.slice(pos, start.saturating_sub(pos))?.iter().any(|&b| b != 0)
         {
             return Err(v.err(pos, "unaccounted bytes"));
         }
@@ -211,7 +219,7 @@ pub(crate) fn coverage(
             .ok_or_else(|| v.err(start, "size overflow"))?;
     }
     if pos > end
-        || end.saturating_sub(pos) > padding
+        || end.saturating_sub(pos) > tail
         || v.slice(pos, end.saturating_sub(pos))?.iter().any(|&b| b != 0)
     {
         return Err(v.err(pos, "unaccounted trailing bytes"));

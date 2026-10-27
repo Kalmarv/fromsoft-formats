@@ -44,8 +44,9 @@ fn decrypt_cbc(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-/// The game's param binder, from where `install`'s game keeps it.
-fn param_binder(install: &Install, archive: &Archive, decoder: &Decoder<'_>) -> Result<Binder> {
+/// The game's param binder, from where `install`'s game keeps it: every param file of the game, as stored (a member is
+/// read with [`Param::read`]).
+pub fn param_binder(install: &Install, archive: &Archive, decoder: &Decoder<'_>) -> Result<Binder> {
     match install.game.params() {
         ParamSource::Archived(path) => {
             if !archive.contains(path) {
