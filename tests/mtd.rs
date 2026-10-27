@@ -87,3 +87,40 @@ fn rejects_truncation_and_trailing_bytes_but_records_declared_lengths() {
     bad.push(0);
     assert!(MaterialDefinition::read(&bad).is_err());
 }
+#[test]
+fn nonzero_alignment_padding_is_read_past_and_recorded() {
+    let clean = fixture();
+    let clean_read = MaterialDefinition::read(&clean).unwrap();
+    assert!(clean_read.padding.is_empty());
+    // "synthetic.sps" is 13 bytes: its marker is followed by two padding bytes before the next word
+    let name = clean.windows(13).position(|w| w == b"synthetic.sps").unwrap();
+    let pad = (name + 14).next_multiple_of(4) - (name + 14);
+    assert_eq!(pad, 2);
+    let mut odd = clean.clone();
+    odd[name + 14..name + 16].copy_from_slice(&[0x72, 0x34]);
+    let read = MaterialDefinition::read(&odd).unwrap();
+    assert_eq!(
+        read.padding,
+        [fromsoft_formats::mtd::PaddingAnomaly {
+            offset: name + 14,
+            bytes: vec![0x72, 0x34]
+        }]
+    );
+    // everything else reads exactly as in the clean file
+    assert_eq!(read.shader, clean_read.shader);
+    assert_eq!(read.description, clean_read.description);
+    assert_eq!(read.block_lengths, clean_read.block_lengths);
+    // a second anomaly is recorded after the first, in file order
+    let desc = odd
+        .windows(4)
+        .position(|w| w == [0x93, 0xfa, 0x96, 0x7b])
+        .unwrap()
+        + 5;
+    let len = desc.next_multiple_of(4) - desc;
+    assert!(len > 0, "the description's marker is followed by padding");
+    odd[desc] = 0x01;
+    let read = MaterialDefinition::read(&odd).unwrap();
+    assert_eq!(read.padding.len(), 2);
+    assert_eq!(read.padding[1].offset, desc);
+    assert_eq!(read.padding[1].bytes, [&[0x01][..], &vec![0; len - 1]].concat());
+}

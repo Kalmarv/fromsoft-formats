@@ -48,6 +48,15 @@ pub struct BlockLength {
     /// The length the structure actually spans.
     pub consumed: usize,
 }
+/// Non-zero bytes in a marker's alignment padding. Every MTD of Elden Ring and Sekiro has zero padding everywhere but
+/// one Elden Ring file (`c9757_crystal.mtd`), whose padding holds 19 runs of leftover bytes, mostly ASCII fragments.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct PaddingAnomaly {
+    /// The offset of the padding's first byte.
+    pub offset: usize,
+    /// The padding bytes as the file holds them (one to three).
+    pub bytes: Vec<u8>,
+}
 /// A read material definition.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct MaterialDefinition {
@@ -61,12 +70,15 @@ pub struct MaterialDefinition {
     pub textures: Vec<Texture>,
     /// Every block's declared and consumed length, in the order blocks end.
     pub block_lengths: Vec<BlockLength>,
+    /// Every marker whose alignment padding is not all zero, in file order (empty on every MTD of both games but one).
+    pub padding: Vec<PaddingAnomaly>,
 }
 struct Cursor<'a> {
     /// The file, read in order (little-endian).
     c: primase_foundations::bytes::Cursor<'a>,
     stack: Vec<(usize, usize, u32)>,
     blocks: Vec<BlockLength>,
+    padding: Vec<PaddingAnomaly>,
 }
 impl Cursor<'_> {
     fn bytes(&mut self, what: &str, n: usize) -> Result<&[u8]> {
@@ -117,8 +129,11 @@ impl Cursor<'_> {
         }
         // the bytes up to the next multiple of four
         let padding = self.c.position().wrapping_neg() % 4;
-        if self.bytes("alignment padding", padding)?.iter().any(|b| *b != 0) {
-            return Err(invalid("MTD", at, "nonzero alignment"));
+        let offset = self.c.position();
+        let bytes = self.bytes("alignment padding", padding)?;
+        if bytes.iter().any(|b| *b != 0) {
+            let bytes = bytes.to_vec();
+            self.padding.push(PaddingAnomaly { offset, bytes });
         }
         Ok(())
     }
@@ -173,12 +188,14 @@ impl Cursor<'_> {
 impl MaterialDefinition {
     /// Read a decompressed MTD file. The structure is authoritative: typed counts and markers determine where blocks
     /// end, always within the file, and the declared block lengths are kept in [`MaterialDefinition::block_lengths`]
-    /// as diagnostics (the game's own files can overstate them). Bytes after the last block are an error.
+    /// as diagnostics (the game's own files can overstate them). Non-zero alignment padding after a marker is read past and
+    /// recorded in [`MaterialDefinition::padding`]. Bytes after the last block are an error.
     pub fn read(data: &[u8]) -> Result<Self> {
         let mut c = Cursor {
             c: primase_foundations::bytes::Cursor::new(data),
             stack: vec![],
             blocks: vec![],
+            padding: vec![],
         };
         c.block(0, &[3], 1)?;
         c.block(1, &[2], 0xb0)?;
@@ -277,6 +294,7 @@ impl MaterialDefinition {
             parameters,
             textures,
             block_lengths: c.blocks,
+            padding: c.padding,
         })
     }
 }
