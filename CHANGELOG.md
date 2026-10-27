@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Breaking: depends on havok-formats 0.3.0, whose compressed meshes apply each section's page to shared vertices (the
+  Sekiro and Elden Ring `l` collision sets had wrong vertices before) and whose cloth particle indices are `u16`.
 - Collision: `read_map` and `read_bodies` refuse a shape-keyed mesh whose tree stores a `bitsPerKey` other than the
   shape's `numShapeKeyBits` (the two agree in every compressed mesh of the Sekiro and Elden Ring collision).
 - `Body::motion_type` is documented as 0 static, 1 keyframed, 2 dynamic (only 2 stores a positive mass), where it

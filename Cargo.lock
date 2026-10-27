@@ -374,8 +374,8 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
 name = "havok-formats"
-version = "0.2.0"
-source = "git+https://github.com/Kalmarv/havok-formats?rev=d5d04e019121fbf279c56700967daa04cb1a64a3#d5d04e019121fbf279c56700967daa04cb1a64a3"
+version = "0.3.0"
+source = "git+https://github.com/Kalmarv/havok-formats?rev=850a3edbbd563471fc7f4a7d5e56f04592babc89#850a3edbbd563471fc7f4a7d5e56f04592babc89"
 dependencies = [
  "primase-foundations",
  "thiserror",
