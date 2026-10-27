@@ -45,11 +45,23 @@ impl Binder {
     /// envelopes decoded by `decoder`. The members' bytes copied or decoded are bounded by the file's size (a table
     /// that names one range over and over is refused), and every byte of the file must be accounted for, apart from up to 15 zero bytes of padding between parts.
     pub fn read(data: &[u8], decoder: &Decoder<'_>) -> Result<Self> {
-        Self::read_inner(data, None, decoder, false)
+        Self::read_inner(data, None, decoder, false, None)
     }
     /// Read a BHF4 index `header` and its matching BDF4 payload file `payload` (the `.edgebhd`/`.edgebdt` form).
     pub fn read_split(header: &[u8], payload: &[u8], decoder: &Decoder<'_>) -> Result<Self> {
-        Self::read_inner(header, Some(payload), decoder, false)
+        Self::read_inner(header, Some(payload), decoder, false, None)
+    }
+    /// [`Binder::read_split`] keeping only the files whose name `keep` accepts: the others are validated (their bytes
+    /// are within the payload and cover it as the full read demands) and left out, with no bytes (a payload of
+    /// hundreds of texture packages holds the few a map binds, and copying and decoding all of them is what a map's
+    /// read spent its memory on).
+    pub fn read_split_where(
+        header: &[u8],
+        payload: &[u8],
+        decoder: &Decoder<'_>,
+        keep: &dyn Fn(&str) -> bool,
+    ) -> Result<Self> {
+        Self::read_inner(header, Some(payload), decoder, false, Some(keep))
     }
     /// Validate a split index and list names without touching its payload. Full
     /// payload bounds and decompression are checked by `read_split` when loaded.
@@ -62,6 +74,7 @@ impl Binder {
                 max_output: 0,
             },
             true,
+            None,
         )?
         .files
         .into_iter()
@@ -73,6 +86,7 @@ impl Binder {
         payload: Option<&[u8]>,
         decoder: &Decoder<'_>,
         index_only: bool,
+        keep: Option<&dyn Fn(&str) -> bool>,
     ) -> Result<Self> {
         let split = payload.is_some() || index_only;
         let mut v = View {
@@ -244,6 +258,18 @@ impl Binder {
                 } else {
                     spans.push((off, size));
                 }
+            }
+            // a file the caller does not keep is validated above and not copied or decoded
+            if let (Some(keep), Some(name)) = (keep, name.as_deref())
+                && !keep(name)
+            {
+                files.push(BinderFile {
+                    id,
+                    name: Some(name.to_owned()),
+                    flags,
+                    bytes: Vec::new(),
+                });
+                continue;
             }
             let bytes = if flags & 1 != 0 {
                 let want = decoded.ok_or_else(|| invalid("BND4", p, "compressed file lacks output size"))?;
