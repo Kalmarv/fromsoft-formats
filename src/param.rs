@@ -8,6 +8,14 @@
 //! carry. The only layout this module reads is [`NpcParam`]'s, for the one group of fields it reads (the 32
 //! `modelDispMask` bits), at the offsets each game states ([`NpcLayout`], [`crate::Game::npc_param`]); the other fields
 //! of a row are not read.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation
+    )
+)]
 use crate::{Result, bytes::View, bytes::coverage, invalid};
 
 const FORMAT: &str = "PARAM";
@@ -56,14 +64,14 @@ fn utf16(v: &View<'_>, offset: usize) -> Result<(String, usize)> {
     let mut p = offset;
     loop {
         let c = v.u16(p)?;
-        p += 2;
+        p = v.at(p, 2)?;
         if c == 0 {
             break;
         }
         units.push(c);
     }
     let text = String::from_utf16(&units).map_err(|e| invalid(FORMAT, offset, e))?;
-    Ok((text, p - offset))
+    Ok((text, p.saturating_sub(offset)))
 }
 
 impl Param {
@@ -107,22 +115,22 @@ impl Param {
                 .iter()
                 .position(|&b| b == 0)
                 .ok_or_else(|| invalid(FORMAT, type_offset, "param type not terminated"))?;
-            let text = std::str::from_utf8(&rest[..end])
-                .ok()
+            let text = rest
+                .get(..end)
+                .and_then(|name| std::str::from_utf8(name).ok())
                 .filter(|t| t.is_ascii())
                 .ok_or_else(|| invalid(FORMAT, type_offset, "param type is not ASCII"))?;
-            (text.to_owned(), end + 1)
+            (text.to_owned(), end.saturating_add(1))
         };
 
         let mut entries = Vec::with_capacity(count);
         for i in 0..count {
-            let at = HEADER + i * ROW_ENTRY;
+            let at = v.element(HEADER, i, ROW_ENTRY)?;
             let id = v.u32(at)? as i32;
-            v.expect(at + 4, &[0; 4])?;
-            let offset =
-                usize::try_from(v.u64(at + 8)?).map_err(|_| invalid(FORMAT, at + 8, "size overflow"))?;
-            let name =
-                usize::try_from(v.u64(at + 16)?).map_err(|_| invalid(FORMAT, at + 16, "size overflow"))?;
+            v.expect(v.at(at, 4)?, &[0; 4])?;
+            let (offset_at, name_at) = (v.at(at, 8)?, v.at(at, 16)?);
+            let offset = v.size(offset_at)?;
+            let name = v.size(name_at)?;
             entries.push((at, id, offset, name));
         }
 
@@ -139,8 +147,10 @@ impl Param {
             .ok_or_else(|| invalid(FORMAT, 0x30, "row data starts after the strings"))?;
         let row_size = if count == 0 {
             0
-        } else if span % count == 0 && span / count > 0 {
-            span / count
+        } else if let (Some(stride), Some(0)) = (span.checked_div(count), span.checked_rem(count))
+            && stride > 0
+        {
+            stride
         } else {
             return Err(invalid(
                 FORMAT,
@@ -149,16 +159,20 @@ impl Param {
             ));
         };
         let mut rows = Vec::with_capacity(count);
-        let mut spans = vec![(0, HEADER), (HEADER, count * ROW_ENTRY), (type_offset, type_len)];
+        let mut spans = vec![
+            (0, HEADER),
+            (HEADER, v.element(0, count, ROW_ENTRY)?),
+            (type_offset, type_len),
+        ];
         if count > 0 {
             spans.push((data_start, span));
         }
         let mut names: Vec<(usize, usize)> = Vec::new();
         for (i, &(at, id, offset, name)) in entries.iter().enumerate() {
-            if offset != data_start + i * row_size {
+            if offset != v.element(data_start, i, row_size)? {
                 return Err(invalid(
                     FORMAT,
-                    at + 8,
+                    v.at(at, 8)?,
                     format!("row {id} data at {offset:#x}, not in stride after the first"),
                 ));
             }
@@ -247,6 +261,7 @@ impl NpcParam {
         for r in &param.rows {
             let mut display_mask = 0u32;
             for (group, &at) in layout.mask_bytes.iter().enumerate() {
+                let shift = group.saturating_mul(8);
                 let byte = r.data.get(at).ok_or_else(|| {
                     invalid(
                         FORMAT,
@@ -255,12 +270,12 @@ impl NpcParam {
                             "row {} of {} bytes has no byte {at}, which the layout reads as modelDispMask bits {}..{}",
                             r.id,
                             r.data.len(),
-                            group * 8,
-                            group * 8 + 7
+                            shift,
+                            shift.saturating_add(7)
                         ),
                     )
                 })?;
-                display_mask |= u32::from(*byte) << (group * 8);
+                display_mask |= u32::from(*byte) << shift;
             }
             rows.push(NpcRow {
                 id: r.id,
@@ -356,7 +371,11 @@ impl NpcStats {
             f64::from(self.get_soul),
         ];
         let units = ["", "", "deg/sec", "m", "m", "kg", "m", "", "", ""];
-        std::array::from_fn(|i| (Self::NAMES[i], values[i], units[i]))
+        let mut out = [("", 0.0, ""); 10];
+        for (slot, ((name, value), unit)) in out.iter_mut().zip(Self::NAMES.iter().zip(values).zip(units)) {
+            *slot = (*name, value, unit);
+        }
+        out
     }
 
     /// The stats of every row of `param`, which must be `NPC_PARAM_ST` of `layout`'s data version and row size. A row
@@ -476,7 +495,7 @@ pub struct GrassParam {
 /// ASCII, or the row is not this layout.
 fn fixed_string(row: &[u8], at: usize, chars: usize) -> Result<String> {
     let bytes = row
-        .get(at..at + 2 * chars)
+        .get(at..at.saturating_add(chars.saturating_mul(2)))
         .ok_or_else(|| invalid(FORMAT, at, "string beyond the row"))?;
     let mut text = String::new();
     for pair in bytes.as_chunks::<2>().0 {
@@ -513,8 +532,10 @@ impl GrassParam {
             ));
         }
         let f32_at = |data: &[u8], at: usize| -> Result<f32> {
-            data.get(at..at + 4)
-                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            at.checked_add(4)
+                .and_then(|end| data.get(at..end))
+                .and_then(|b| <[u8; 4]>::try_from(b).ok())
+                .map(f32::from_le_bytes)
                 .ok_or_else(|| invalid(FORMAT, at, "float beyond the row"))
         };
         let rows = param
@@ -523,7 +544,13 @@ impl GrassParam {
             .map(|r| {
                 Ok(GrassType {
                     id: r.id,
-                    lod_range: u16::from_le_bytes([r.data[0], r.data[1]]),
+                    lod_range: r
+                        .data
+                        .first_chunk::<2>()
+                        .map(|b| u16::from_le_bytes(*b))
+                        .ok_or_else(|| {
+                            invalid(FORMAT, 0, format!("row {} is shorter than its lod range", r.id))
+                        })?,
                     base_density: f32_at(&r.data, 8)?,
                     spacing: f32_at(&r.data, 204)?,
                     model0: fixed_string(&r.data, 12, 16)?,

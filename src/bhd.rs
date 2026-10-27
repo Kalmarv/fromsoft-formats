@@ -1,8 +1,16 @@
 //! BHD5 archive indexes. The games share the header, buckets and the hash and AES tables; each lays out its 40-byte
 //! file record its own way ([`RecordLayout`]). All integer fields are checked before use.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation
+    )
+)]
 use crate::{
     Result,
-    bytes::{View, coverage},
+    bytes::{Budget, View, coverage},
     invalid,
 };
 use aes::{
@@ -146,6 +154,8 @@ pub struct Header {
 /// Limbs of a 2048-bit number, least significant first.
 const LIMBS: usize = 32;
 type Limbs = [u64; LIMBS];
+/// The bit length of `R^2`, `R = 2^2048`.
+const R2_SHIFT: usize = 64 * LIMBS * 2;
 
 /// The modulus' Montgomery context with 64-bit limbs, made once per key: `-n^-1 mod 2^64` and `R^2 mod n` with
 /// `R = 2^2048`.
@@ -173,16 +183,29 @@ fn at_least(a: &Limbs, b: &Limbs) -> bool {
     true
 }
 
+/// `x + y * z + carry`, which fits 128 bits for 64-bit `x`, `y`, `z` and `carry` below 2^64.
+fn mac(x: u64, y: u64, z: u64, carry: u128) -> u128 {
+    u128::from(x)
+        .wrapping_add(u128::from(y).wrapping_mul(u128::from(z)))
+        .wrapping_add(carry)
+}
+
+/// The low 64 bits of `s`.
+fn low(s: u128) -> u64 {
+    u64::try_from(s & u128::from(u64::MAX)).unwrap_or_default()
+}
+
 impl Montgomery {
     /// The context of the odd 256-byte modulus `n`.
     fn new(modulus: &[u8], n: &BigUint) -> Self {
         let n_limbs = limbs_of(modulus);
         // Newton's iteration for the inverse of the odd low limb modulo 2^64: each step doubles the correct bits
-        let mut inverse = n_limbs[0];
+        let [n_low, ..] = n_limbs;
+        let mut inverse = n_low;
         for _ in 0..6 {
-            inverse = inverse.wrapping_mul(2u64.wrapping_sub(n_limbs[0].wrapping_mul(inverse)));
+            inverse = inverse.wrapping_mul(2u64.wrapping_sub(n_low.wrapping_mul(inverse)));
         }
-        let r2 = (BigUint::from(1u8) << (64 * LIMBS * 2)) % n;
+        let r2 = BigUint::from(2u8).modpow(&BigUint::from(R2_SHIFT), n);
         Montgomery {
             n: n_limbs,
             n0: inverse.wrapping_neg(),
@@ -190,44 +213,50 @@ impl Montgomery {
         }
     }
 
-    /// `a * b / R mod n` for `a`, `b` below `n` (the CIOS method).
+    /// `a * b / R mod n` for `a`, `b` below `n` (the CIOS method). The 128-bit sums below cannot overflow: each is at
+    /// most `(2^64 - 1) + (2^64 - 1)^2 + (2^64 - 1) = 2^128 - 1`.
     fn multiply(&self, a: &Limbs, b: &Limbs) -> Limbs {
-        let mut t = [0u64; LIMBS + 2];
+        let mut t: Limbs = [0; LIMBS];
+        // the two limbs above `t`
+        let mut top0 = 0u64;
+        let [n_low, ..] = self.n;
         for &bi in b {
             let mut carry = 0u128;
             for (tj, aj) in t.iter_mut().zip(a) {
-                let s = u128::from(*tj) + u128::from(*aj) * u128::from(bi) + carry;
-                *tj = s as u64;
+                let s = mac(*tj, *aj, bi, carry);
+                *tj = low(s);
                 carry = s >> 64;
             }
-            let s = u128::from(t[LIMBS]) + carry;
-            t[LIMBS] = s as u64;
-            t[LIMBS + 1] = (s >> 64) as u64;
-            let m = t[0].wrapping_mul(self.n0);
-            let s = u128::from(t[0]) + u128::from(m) * u128::from(self.n[0]);
-            let mut carry = s >> 64;
-            for j in 1..LIMBS {
-                let s = u128::from(t[j]) + u128::from(m) * u128::from(self.n[j]) + carry;
-                t[j - 1] = s as u64;
+            let s = u128::from(top0).wrapping_add(carry);
+            top0 = low(s);
+            let top1 = low(s >> 64);
+            let [t_low, ..] = t;
+            let m = t_low.wrapping_mul(self.n0);
+            let mut carry = mac(t_low, m, n_low, 0) >> 64;
+            // t = (t + m * n) / 2^64, one limb down
+            let mut next: Limbs = [0; LIMBS];
+            for (slot, (tj, nj)) in next.iter_mut().zip(t.iter().skip(1).zip(self.n.iter().skip(1))) {
+                let s = mac(*tj, m, *nj, carry);
+                *slot = low(s);
                 carry = s >> 64;
             }
-            let s = u128::from(t[LIMBS]) + carry;
-            t[LIMBS - 1] = s as u64;
-            t[LIMBS] = t[LIMBS + 1] + (s >> 64) as u64;
-            t[LIMBS + 1] = 0;
+            let s = u128::from(top0).wrapping_add(carry);
+            if let Some(last) = next.last_mut() {
+                *last = low(s);
+            }
+            top0 = top1.wrapping_add(low(s >> 64));
+            t = next;
         }
-        let mut out = [0; LIMBS];
-        out.copy_from_slice(&t[..LIMBS]);
-        if t[LIMBS] != 0 || at_least(&out, &self.n) {
+        if top0 != 0 || at_least(&t, &self.n) {
             let mut borrow = false;
-            for (o, n) in out.iter_mut().zip(&self.n) {
+            for (o, n) in t.iter_mut().zip(&self.n) {
                 let (d, b1) = o.overflowing_sub(*n);
                 let (d, b2) = d.overflowing_sub(u64::from(borrow));
                 *o = d;
                 borrow = b1 || b2;
             }
         }
-        out
+        t
     }
 
     /// `x^e mod n` for `x` below `n`, `e` nonzero, by left-to-right square and multiply.
@@ -240,8 +269,7 @@ impl Montgomery {
                 result = self.multiply(&result, &base);
             }
         }
-        let mut one = [0; LIMBS];
-        one[0] = 1;
+        let one: Limbs = std::array::from_fn(|i| u64::from(i == 0));
         self.multiply(&result, &one)
     }
 }
@@ -279,37 +307,51 @@ pub fn unwrap_rsa_with(
             Some(context) => {
                 let x = limbs_of(b);
                 if at_least(&x, &context.n) {
-                    return Err(invalid("RSA", i * 256, "ciphertext exceeds modulus"));
+                    return Err(invalid(
+                        "RSA",
+                        i.saturating_mul(256),
+                        "ciphertext exceeds modulus",
+                    ));
                 }
                 let power = context.power(&x, &e);
                 let bytes: Vec<u8> = power.iter().rev().flat_map(|l| l.to_be_bytes()).collect();
                 let first = bytes.iter().position(|b| *b != 0).unwrap_or(bytes.len());
-                bytes[first..].to_vec()
+                bytes.get(first..).unwrap_or_default().to_vec()
             }
             None => {
                 let x = BigUint::from_bytes_be(b);
                 if x >= n {
-                    return Err(invalid("RSA", i * 256, "ciphertext exceeds modulus"));
+                    return Err(invalid(
+                        "RSA",
+                        i.saturating_mul(256),
+                        "ciphertext exceeds modulus",
+                    ));
                 }
                 x.modpow(&e, &n).to_bytes_be()
             }
         };
         if p.len() > 255 {
-            return Err(invalid("RSA", i * 256, "plaintext exceeds 255 bytes"));
+            return Err(invalid(
+                "RSA",
+                i.saturating_mul(256),
+                "plaintext exceeds 255 bytes",
+            ));
         }
-        slot[255 - p.len()..].copy_from_slice(&p);
+        slot.get_mut(255usize.saturating_sub(p.len())..)
+            .ok_or_else(|| invalid("RSA", i.saturating_mul(256), "plaintext slot"))?
+            .copy_from_slice(&p);
         Ok(())
     };
     let blocks = input.as_chunks::<256>().0;
     let groups: Vec<(usize, &[[u8; 256]])> = blocks
         .chunks(BLOCKS_PER_TASK)
         .enumerate()
-        .map(|(g, blocks)| (g * BLOCKS_PER_TASK, blocks))
+        .map(|(g, blocks)| (g.saturating_mul(BLOCKS_PER_TASK), blocks))
         .collect();
     let unwrap_group = |&(first, blocks): &(usize, &[[u8; 256]])| -> Result<Vec<u8>> {
-        let mut out = vec![0; blocks.len() * 255];
+        let mut out = vec![0; blocks.len().saturating_mul(255)];
         for (k, (b, slot)) in blocks.iter().zip(out.as_chunks_mut::<255>().0).enumerate() {
-            unwrap(first + k, b, slot)?;
+            unwrap(first.saturating_add(k), b, slot)?;
         }
         Ok(out)
     };
@@ -332,7 +374,7 @@ pub fn unwrap_rsa_with(
                     handle.join().unwrap_or_else(|_| {
                         vec![Err(invalid(
                             "RSA",
-                            part[0].0 * 256,
+                            part.first().map_or(0, |group| group.0.saturating_mul(256)),
                             "unwrapping: a thread panicked",
                         ))]
                     })
@@ -340,32 +382,33 @@ pub fn unwrap_rsa_with(
                 .collect()
         })
     };
-    let mut out = Vec::with_capacity(blocks.len() * 255);
+    let mut out = Vec::with_capacity(blocks.len().saturating_mul(255));
     for group in done {
         out.extend(group?);
     }
     Ok(out)
 }
-fn ranges(v: &View<'_>, o: usize, size: usize, encrypted: bool) -> Result<Vec<Range>> {
+fn ranges(v: &View<'_>, budget: &Budget, o: usize, size: usize, encrypted: bool) -> Result<Vec<Range>> {
     let n = v.u32(o)? as usize;
-    v.slice(
-        o + 4,
-        n.checked_mul(16)
-            .ok_or_else(|| invalid("BHD5", o, "range count overflow"))?,
-    )?;
+    let table = v.at(o, 4)?;
+    let bytes = n
+        .checked_mul(16)
+        .ok_or_else(|| invalid("BHD5", o, "range count overflow"))?;
+    v.slice(table, bytes)?;
+    // entries may name one table over and over: each table read is charged before its ranges are built
+    budget.charge(o, bytes)?;
     let mut out = Vec::new();
     let mut previous = 0;
     for i in 0..n {
-        let p = o + 4 + i * 16;
+        let p = v.element(table, i, 16)?;
         let start = v.u64(p)? as i64;
-        let end = v.u64(p + 8)? as i64;
+        let end = v.u64(v.at(p, 8)?)? as i64;
         if (start, end) != (-1, -1)
             && (start < 0
                 || end < start
                 || end as u64 > size as u64
                 || start < previous
-                || (encrypted
-                    && (!(start as usize).is_multiple_of(16) || !(end as usize).is_multiple_of(16))))
+                || (encrypted && (start & 15 != 0 || end & 15 != 0)))
         {
             return Err(invalid("BHD5", p, "invalid or overlapping range"));
         }
@@ -397,28 +440,26 @@ impl Header {
         }
         let end = v.u32(12)? as usize;
         v.slice(0, end)?;
-        if data.len() - end >= 255 || data[end..].iter().any(|&b| b != 0) {
+        let rsa_padding = data.len().saturating_sub(end);
+        if rsa_padding >= 255 || v.slice(end, rsa_padding)?.iter().any(|&b| b != 0) {
             return Err(invalid("BHD5", end, "invalid RSA padding"));
         }
         let count = v.u32(16)? as usize;
         let table = v.u32(20)? as usize;
         let saltlen = v.u32(24)? as usize;
         let salt = v.slice(28, saltlen)?.to_vec();
-        let mut spans = vec![
-            (0, 28 + saltlen),
-            (
-                table,
-                count
-                    .checked_mul(8)
-                    .ok_or_else(|| invalid("BHD5", 16, "bucket overflow"))?,
-            ),
-        ];
-        v.slice(table, count * 8)?;
+        let bucket_bytes = count
+            .checked_mul(8)
+            .ok_or_else(|| invalid("BHD5", 16, "bucket overflow"))?;
+        v.slice(table, bucket_bytes)?;
+        let mut spans = vec![(0, v.at(28, saltlen)?), (table, bucket_bytes)];
+        let budget = Budget::new("BHD5", data.len());
         let mut entries = Vec::new();
         let mut hashes = std::collections::BTreeSet::new();
         for bucket in 0..count {
-            let n = v.u32(table + bucket * 8)? as usize;
-            let ptr = v.u32(table + bucket * 8 + 4)? as usize;
+            let slot = v.element(table, bucket, 8)?;
+            let n = v.u32(slot)? as usize;
+            let ptr = v.u32(v.at(slot, 4)?)? as usize;
             let bytes = n
                 .checked_mul(40)
                 .ok_or_else(|| invalid("BHD5", ptr, "entry overflow"))?;
@@ -427,14 +468,15 @@ impl Header {
                 spans.push((ptr, bytes));
             }
             for i in 0..n {
-                let p = ptr + i * 40;
-                let hash = sized(&v, (p + record.hash.0, record.hash.1))?;
-                let padded_size = v.u32(p + record.padded_size)? as usize;
-                let offset = v.u64(p + record.offset)?;
-                let sh = v.size(p + record.sha)?;
-                let ae = v.size(p + record.aes)?;
+                let p = v.element(ptr, i, 40)?;
+                let field = |at: usize| v.at(p, at);
+                let hash = sized(&v, (field(record.hash.0)?, record.hash.1))?;
+                let padded_size = v.u32(field(record.padded_size)?)? as usize;
+                let offset = v.u64(field(record.offset)?)?;
+                let sh = v.size(field(record.sha)?)?;
+                let ae = v.size(field(record.aes)?)?;
                 let logical_size =
-                    usize::try_from(sized(&v, (p + record.logical_size.0, record.logical_size.1))?)
+                    usize::try_from(sized(&v, (field(record.logical_size.0)?, record.logical_size.1))?)
                         .map_err(|_| invalid("BHD5", p, "logical size overflow"))?;
                 if logical_size > padded_size {
                     return Err(invalid(
@@ -457,8 +499,8 @@ impl Header {
                         .slice(sh, 32)?
                         .try_into()
                         .map_err(|_| invalid("BHD5", sh, "hash"))?;
-                    let ranges = ranges(&v, sh + 32, padded_size, false)?;
-                    spans.push((sh, 36 + ranges.len() * 16));
+                    let ranges = ranges(&v, &budget, v.at(sh, 32)?, padded_size, false)?;
+                    spans.push((sh, v.element(36, ranges.len(), 16)?));
                     Some(HashInfo { digest, ranges })
                 };
                 let aes = if ae == 0 {
@@ -468,8 +510,8 @@ impl Header {
                         .slice(ae, 16)?
                         .try_into()
                         .map_err(|_| invalid("BHD5", ae, "key"))?;
-                    let ranges = ranges(&v, ae + 16, padded_size, true)?;
-                    spans.push((ae, 20 + ranges.len() * 16));
+                    let ranges = ranges(&v, &budget, v.at(ae, 16)?, padded_size, true)?;
+                    spans.push((ae, v.element(20, ranges.len(), 16)?));
                     Some(AesKey { key, ranges })
                 };
                 entries.push(Entry {
@@ -488,7 +530,7 @@ impl Header {
             salt,
             entries,
             bucket_count: count,
-            rsa_padding: data.len() - end,
+            rsa_padding,
         })
     }
 }
@@ -741,5 +783,23 @@ mod index_tests {
             e,
             "BHD5 at 0x4c: path hash 0x7 is listed twice; each hash names one entry"
         );
+    }
+
+    #[test]
+    fn records_sharing_one_large_range_table_are_refused_before_each_builds_its_ranges() {
+        let (entries, ranges) = (40usize, 600usize);
+        let mut b = index(&(0..entries as u32).map(|i| (i + 1, 16, 1)).collect::<Vec<_>>());
+        let table = b.len();
+        b.resize(table + 36 + ranges * 16, 0xff);
+        b[table..table + 32].fill(0);
+        b[table + 32..table + 36].copy_from_slice(&(ranges as u32).to_le_bytes());
+        for i in 0..entries {
+            let at = 36 + 40 * i + 16;
+            b[at..at + 8].copy_from_slice(&(table as u64).to_le_bytes());
+        }
+        let end = b.len() as u32;
+        b[12..16].copy_from_slice(&end.to_le_bytes());
+        let e = Header::read(&b, &RecordLayout::SEKIRO).unwrap_err().to_string();
+        assert!(e.contains("several times over"), "{e}");
     }
 }
