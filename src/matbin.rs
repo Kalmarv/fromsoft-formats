@@ -5,6 +5,14 @@
 //! from its type: float3 colours are stored with three floats or five, and a few vectors are stored shorter than
 //! their type (kept as [`Value::Truncated`]). A value no item follows is bounded by its type: what follows it is the
 //! unreferenced tail.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation
+    )
+)]
 use crate::{
     Result,
     bytes::{View, coverage},
@@ -90,7 +98,7 @@ fn string(v: &View<'_>, o: usize) -> Result<(String, usize)> {
     let mut p = o;
     loop {
         let c = v.u16(p)?;
-        p += 2;
+        p = v.at(p, 2)?;
         if c == 0 {
             break;
         }
@@ -98,7 +106,7 @@ fn string(v: &View<'_>, o: usize) -> Result<(String, usize)> {
     }
     Ok((
         String::from_utf16(&units).map_err(|e| invalid(v.format, o, e))?,
-        p - o,
+        p.saturating_sub(o),
     ))
 }
 fn float(v: &View<'_>, o: usize) -> Result<f32> {
@@ -111,7 +119,7 @@ fn float(v: &View<'_>, o: usize) -> Result<f32> {
 fn floats<const N: usize>(v: &View<'_>, o: usize) -> Result<[f32; N]> {
     let mut out = [0.; N];
     for (i, f) in out.iter_mut().enumerate() {
-        *f = float(v, o + i * 4)?;
+        *f = float(v, v.element(o, i, 4)?)?;
     }
     Ok(out)
 }
@@ -143,10 +151,10 @@ fn value(v: &View<'_>, at: usize, code: u32, o: usize, extent: usize) -> Result<
     Ok(match code {
         0 => (Value::Bool(v.boolean(o)?), 1),
         4 => (Value::Int(v.u32(o)? as i32), 4),
-        5 => (Value::Int2([v.u32(o)? as i32, v.u32(o + 4)? as i32]), 8),
+        5 => (Value::Int2([v.u32(o)? as i32, v.u32(v.at(o, 4)?)? as i32]), 8),
         8 => (Value::Float(float(v, o)?), 4),
         9 => (Value::Float2(floats(v, o)?), 8),
-        10 if extent >= 20 => (Value::Float3(floats(v, o)?, Some(floats(v, o + 12)?)), 20),
+        10 if extent >= 20 => (Value::Float3(floats(v, o)?, Some(floats(v, v.at(o, 12)?)?)), 20),
         10 => (Value::Float3(floats(v, o)?, None), 12),
         11 => (Value::Float4(floats(v, o)?), 16),
         _ => (Value::Float5(floats(v, o)?), 20),
@@ -174,8 +182,11 @@ impl Material {
         let samplers_bytes = samplers
             .checked_mul(SAMPLER)
             .ok_or_else(|| invalid(v.format, 0x20, "count overflow"))?;
-        let records_end = HEADER + params_bytes + samplers_bytes;
-        v.slice(HEADER, params_bytes + samplers_bytes)?;
+        let record_bytes = params_bytes
+            .checked_add(samplers_bytes)
+            .ok_or_else(|| invalid(v.format, 0x20, "count overflow"))?;
+        let records_end = v.at(HEADER, record_bytes)?;
+        v.slice(HEADER, record_bytes)?;
         let mut spans = vec![(0, records_end)];
         let mut text = |o: usize| -> Result<String> {
             if o < records_end {
@@ -189,24 +200,25 @@ impl Material {
         let source = text(v.size(16)?)?;
         let mut stored = Vec::with_capacity(params);
         for i in 0..params {
-            let r = HEADER + i * PARAM;
-            v.expect(r + 0x18, &[0; 0x10])?;
+            let r = v.element(HEADER, i, PARAM)?;
+            v.expect(v.at(r, 0x18)?, &[0; 0x10])?;
             let name = text(v.size(r)?)?;
-            let o = v.size(r + 8)?;
+            let o = v.size(v.at(r, 8)?)?;
             if o < records_end || o >= data.len() {
-                return Err(invalid(v.format, r + 8, "value outside the data area"));
+                return Err(invalid(v.format, v.at(r, 8)?, "value outside the data area"));
             }
-            stored.push((name, v.u32(r + 0x10)?, r + 0x14, v.u32(r + 0x14)?, o));
+            let code_at = v.at(r, 0x14)?;
+            stored.push((name, v.u32(v.at(r, 0x10)?)?, code_at, v.u32(code_at)?, o));
         }
         let mut sampler_list = Vec::with_capacity(samplers);
         for i in 0..samplers {
-            let r = HEADER + params_bytes + i * SAMPLER;
-            v.expect(r + 0x1c, &[0; 0x14])?;
+            let r = v.element(v.at(HEADER, params_bytes)?, i, SAMPLER)?;
+            v.expect(v.at(r, 0x1c)?, &[0; 0x14])?;
             sampler_list.push(Sampler {
                 kind: text(v.size(r)?)?,
-                path: text(v.size(r + 8)?)?,
-                key: v.u32(r + 0x10)?,
-                unknown: floats(&v, r + 0x14)?,
+                path: text(v.size(v.at(r, 8)?)?)?,
+                key: v.u32(v.at(r, 0x10)?)?,
+                unknown: floats(&v, v.at(r, 0x14)?)?,
             });
         }
         let starts: BTreeSet<usize> = spans
@@ -218,16 +230,18 @@ impl Material {
         for (name, key, at, code, o) in stored {
             // A later item bounds the value's extent; the last one is bounded by its type, so the bytes after it are
             // the unreferenced tail (no later item proves a float3's two further floats).
-            let extent = match starts.range(o + 1..).next() {
-                Some(&next) => next - o,
+            let extent = match starts.range(o.saturating_add(1)..).next() {
+                Some(&next) => next.saturating_sub(o),
                 None => data.len().saturating_sub(o).min(declared(&v, at, code)?),
             };
             let (value, len) = value(&v, at, code, o, extent)?;
             spans.push((o, len));
             param_list.push(Param { name, key, value });
         }
-        let referenced = spans.iter().map(|&(o, n)| o + n).max().unwrap_or(0);
-        let tail_start = referenced + usize::from(referenced % 2 == 1 && data.get(referenced) == Some(&0));
+        let referenced = spans.iter().map(|&(o, n)| o.saturating_add(n)).max().unwrap_or(0);
+        let tail_start = referenced.saturating_add(usize::from(
+            !referenced.is_multiple_of(2) && data.get(referenced) == Some(&0),
+        ));
         coverage(&v, spans, tail_start.min(data.len()), 1)?;
         Ok(Self {
             shader,

@@ -1,4 +1,12 @@
 //! BND4 file tables, names, hash buckets and file payloads.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation
+    )
+)]
 use crate::{
     Result,
     bytes::{Budget, View, coverage},
@@ -101,8 +109,8 @@ impl Binder {
         };
         // what the records copy out of the file, and what they decode: each record is charged for the bytes it names, so
         // records that name one range over and over are refused before they are copied
-        let budget = Budget::new("BND4", data.len() + pv.data.len());
-        let decoded_budget = Budget::times("BND4", data.len() + pv.data.len(), DECODED_TIMES);
+        let budget = Budget::new("BND4", data.len().saturating_add(pv.data.len()));
+        let decoded_budget = Budget::times("BND4", data.len().saturating_add(pv.data.len()), DECODED_TIMES);
         let mut payload_spans = Vec::new();
         if split && !index_only {
             pv.expect(0, b"BDF4")?;
@@ -135,12 +143,16 @@ impl Binder {
         let names = format & 12 != 0;
         let long = format & 16 != 0;
         let compression = format & 32 != 0;
-        let expected = 16
-            + if long { 8 } else { 4 }
-            + if compression { 8 } else { 0 }
-            + if ids { 4 } else { 0 }
-            + if names { 4 } else { 0 }
-            + if format == 4 { 8 } else { 0 };
+        let expected: usize = [
+            16,
+            if long { 8 } else { 4 },
+            if compression { 8 } else { 0 },
+            if ids { 4 } else { 0 },
+            if names { 4 } else { 0 },
+            if format == 4 { 8 } else { 0 },
+        ]
+        .into_iter()
+        .sum();
         if record != expected {
             return Err(invalid("BND4", 32, "record size mismatch"));
         }
@@ -154,44 +166,44 @@ impl Binder {
             .checked_mul(record)
             .ok_or_else(|| invalid("BND4", 12, "count overflow"))?;
         v.slice(64, tablebytes)?;
-        let mut spans = vec![(0, 64 + tablebytes)];
+        let mut spans = vec![(0, v.at(64, tablebytes)?)];
         let mut files = Vec::new();
         for i in 0..n {
-            let p = 64 + i * record;
+            let p = v.element(64, i, record)?;
             let f = v.u8(p)?;
             let flags = if bitbe { f } else { f.reverse_bits() };
             if flags & !3 != 0 {
                 return Err(invalid("BND4", p, "unknown file flags"));
             }
-            v.expect(p + 1, &[0, 0, 0, 255, 255, 255, 255])?;
-            let size = v.size(p + 8)?;
-            let mut q = p + 16;
+            v.expect(v.at(p, 1)?, &[0, 0, 0, 255, 255, 255, 255])?;
+            let size = v.size(v.at(p, 8)?)?;
+            let mut q = v.at(p, 16)?;
             let decoded = if compression {
                 let s = v.size(q)?;
-                q += 8;
+                q = v.at(q, 8)?;
                 Some(s)
             } else {
                 None
             };
             let off = if long {
                 let x = v.size(q)?;
-                q += 8;
+                q = v.at(q, 8)?;
                 x
             } else {
                 let x = v.u32(q)? as usize;
-                q += 4;
+                q = v.at(q, 4)?;
                 x
             };
             let mut id = if ids {
                 let x = v.u32(q)? as i32;
-                q += 4;
+                q = v.at(q, 4)?;
                 Some(x)
             } else {
                 None
             };
             let name = if names {
                 let o = v.u32(q)? as usize;
-                q += 4;
+                q = v.at(q, 4)?;
                 let (text, end) = if unicode {
                     v.utf16z(o, &budget)?
                 } else {
@@ -200,14 +212,14 @@ impl Binder {
                 if end > headerend {
                     return Err(invalid("BND4", o, "name outside header"));
                 }
-                spans.push((o, end - o));
+                spans.push((o, end.saturating_sub(o)));
                 Some(text)
             } else {
                 None
             };
             if format == 4 {
                 id = Some(v.u32(q)? as i32);
-                v.expect(q + 4, &[0; 4])?;
+                v.expect(v.at(q, 4)?, &[0; 4])?;
             }
             if index_only {
                 if off < 48 {
@@ -274,35 +286,33 @@ impl Binder {
         }
         if ext == 4 {
             v.slice(hashptr, 16)?;
-            v.expect(hashptr + 12, &[16, 8, 8, 0])?;
+            v.expect(v.at(hashptr, 12)?, &[16, 8, 8, 0])?;
             let hashes = v.size(hashptr)?;
-            v.slice(
-                hashes,
-                n.checked_mul(8)
-                    .ok_or_else(|| invalid("BND4", hashptr, "hash size overflow"))?,
-            )?;
-            let buckets = v.u32(hashptr + 8)? as usize;
-            v.slice(
-                hashptr + 16,
-                buckets
-                    .checked_mul(8)
-                    .ok_or_else(|| invalid("BND4", hashptr, "bucket overflow"))?,
-            )?;
-            spans.push((hashptr, 16 + buckets * 8));
+            let hash_bytes = n
+                .checked_mul(8)
+                .ok_or_else(|| invalid("BND4", hashptr, "hash size overflow"))?;
+            v.slice(hashes, hash_bytes)?;
+            let buckets = v.u32(v.at(hashptr, 8)?)? as usize;
+            let bucket_bytes = buckets
+                .checked_mul(8)
+                .ok_or_else(|| invalid("BND4", hashptr, "bucket overflow"))?;
+            let bucket_table = v.at(hashptr, 16)?;
+            v.slice(bucket_table, bucket_bytes)?;
+            spans.push((hashptr, v.at(16, bucket_bytes)?));
             let mut total = 0usize;
             let mut seen = std::collections::BTreeSet::new();
             for b in 0..buckets {
-                let p = hashptr + 16 + b * 8;
+                let p = v.element(bucket_table, b, 8)?;
                 let count = v.u32(p)? as usize;
-                let first = v.u32(p + 4)? as usize;
+                let first = v.u32(v.at(p, 4)?)? as usize;
                 if first != total || count > n.saturating_sub(total) {
                     return Err(invalid("BND4", p, "noncontiguous hash groups"));
                 }
                 for j in 0..count {
-                    let h = hashes + (first + j) * 8;
+                    let h = v.element(hashes, first.saturating_add(j), 8)?;
                     let hash = v.u32(h)?;
-                    let index = v.u32(h + 4)? as usize;
-                    if index >= n || !seen.insert(index) || hash as usize % buckets != b {
+                    let index = v.u32(v.at(h, 4)?)? as usize;
+                    if index >= n || !seen.insert(index) || (hash as usize).checked_rem(buckets) != Some(b) {
                         return Err(invalid("BND4", h, "invalid hash index/bucket"));
                     }
                 }
@@ -313,8 +323,8 @@ impl Binder {
             if total != n {
                 return Err(invalid("BND4", hashptr, "hash count mismatch"));
             }
-            spans.push((hashes, total * 8));
-            if !split && hashes + total * 8 != headerend {
+            spans.push((hashes, hash_bytes));
+            if !split && v.at(hashes, hash_bytes)? != headerend {
                 return Err(invalid("BND4", 40, "header end mismatch"));
             }
         } else if hashptr != 0 {
