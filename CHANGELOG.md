@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-10-27)
+
+- Breaking: depends on havok-formats 0.2.0, whose packfile members are renamed (`RigidBody`, `MeshMaterial`,
+  `Packfile`, `AnimationType::ReferencePose`) and which checks its collision-mesh census on every file.
+- Breaking: `Tae` has a new public field, `group`.
 
 - TAE: an animation binder's event files are numbered by their binder slot (`Tae::read_member`, the `group` field): the
   player's binder holds one file per animation group, storing numbers within the group. `Tae::number` gives an
