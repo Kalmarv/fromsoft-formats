@@ -118,6 +118,8 @@ fn sized(v: &View<'_>, (o, width): (usize, usize)) -> Result<u64> {
 pub struct Entry {
     /// The archive path hash, in the width the game's records store it (Sekiro's u32 zero-extended).
     pub hash: u64,
+    /// Where the entry's record starts in the unwrapped index it was read from.
+    pub index_offset: usize,
     /// Where the entry starts in the BDT file.
     pub offset: u64,
     /// Its stored size in the BDT file, including padding.
@@ -434,8 +436,19 @@ impl Header {
                 let logical_size =
                     usize::try_from(sized(&v, (p + record.logical_size.0, record.logical_size.1))?)
                         .map_err(|_| invalid("BHD5", p, "logical size overflow"))?;
-                if logical_size > padded_size || !hashes.insert(hash) {
-                    return Err(invalid("BHD5", p, "size mismatch or duplicate hash"));
+                if logical_size > padded_size {
+                    return Err(invalid(
+                        "BHD5",
+                        p,
+                        format!("logical size {logical_size} exceeds the padded size {padded_size}"),
+                    ));
+                }
+                if !hashes.insert(hash) {
+                    return Err(invalid(
+                        "BHD5",
+                        p,
+                        format!("path hash {hash:#x} is listed twice; each hash names one entry"),
+                    ));
                 }
                 let sha = if sh == 0 {
                     None
@@ -460,6 +473,7 @@ impl Header {
                     Some(AesKey { key, ranges })
                 };
                 entries.push(Entry {
+                    index_offset: p,
                     hash,
                     offset,
                     padded_size,
@@ -677,5 +691,55 @@ mod tests {
                 "{e:?}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod index_tests {
+    use super::*;
+
+    /// A Sekiro-layout index of one bucket holding records `(hash, padded size, logical size)`.
+    fn index(records: &[(u32, u32, u64)]) -> Vec<u8> {
+        let end = 36 + 40 * records.len();
+        let mut b = vec![0u8; end];
+        b[0..4].copy_from_slice(b"BHD5");
+        b[4] = 255;
+        b[8..12].copy_from_slice(&1u32.to_le_bytes());
+        b[12..16].copy_from_slice(&(end as u32).to_le_bytes());
+        b[16..20].copy_from_slice(&1u32.to_le_bytes());
+        b[20..24].copy_from_slice(&28u32.to_le_bytes());
+        b[28..32].copy_from_slice(&(records.len() as u32).to_le_bytes());
+        b[32..36].copy_from_slice(&36u32.to_le_bytes());
+        for (i, &(hash, padded, logical)) in records.iter().enumerate() {
+            let at = 36 + 40 * i;
+            b[at..at + 4].copy_from_slice(&hash.to_le_bytes());
+            b[at + 4..at + 8].copy_from_slice(&padded.to_le_bytes());
+            b[at + 32..at + 40].copy_from_slice(&logical.to_le_bytes());
+        }
+        b
+    }
+
+    #[test]
+    fn records_are_read_with_the_offset_they_are_stored_at() {
+        let header = Header::read(&index(&[(1, 16, 10), (2, 32, 32)]), &RecordLayout::SEKIRO).unwrap();
+        assert_eq!(
+            header.entries.iter().map(|e| e.index_offset).collect::<Vec<_>>(),
+            [36, 76]
+        );
+    }
+
+    #[test]
+    fn a_size_beyond_the_padded_size_and_a_repeated_hash_are_told_apart() {
+        let e = Header::read(&index(&[(1, 16, 17)]), &RecordLayout::SEKIRO)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(e, "BHD5 at 0x24: logical size 17 exceeds the padded size 16");
+        let e = Header::read(&index(&[(7, 16, 1), (7, 16, 1)]), &RecordLayout::SEKIRO)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            e,
+            "BHD5 at 0x4c: path hash 0x7 is listed twice; each hash names one entry"
+        );
     }
 }

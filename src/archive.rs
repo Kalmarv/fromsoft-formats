@@ -10,7 +10,7 @@
 pub use crate::bhd::{PathHash, path_hash, path_hash64};
 use crate::{
     Game, Result,
-    bhd::{Entry, Header, unwrap_rsa_with},
+    bhd::{Entry, Header, RecordLayout, unwrap_rsa_with},
     dcx::Decoder,
     game::ArchivePair,
     invalid,
@@ -42,17 +42,28 @@ impl NameDictionary {
     pub fn parse(text: &str) -> Result<Self> {
         Self::parse_for(text, Game::Sekiro)
     }
-    /// `game`'s paths from text. A non-ASCII path is refused; the error's offset is its zero-based line number.
+    /// `game`'s paths from text. A non-ASCII path is refused; the error's offset is the byte offset in `text` of its first non-ASCII byte.
     pub fn parse_for(text: &str, game: Game) -> Result<Self> {
         let hash = game.archives().hash;
         let mut names: BTreeMap<u64, Vec<String>> = BTreeMap::new();
-        for (i, line) in text.lines().enumerate() {
-            let s = line.trim().trim_start_matches('\u{feff}');
+        let mut next_line = 0usize;
+        for raw in text.split_inclusive('\n') {
+            let line_at = next_line;
+            next_line = next_line.saturating_add(raw.len());
+            let line = raw.trim_end_matches(['\n', '\r']);
+            let trimmed = line.trim();
+            let s = trimmed.trim_start_matches('\u{feff}');
             if s.is_empty() || s.starts_with('#') {
                 continue;
             }
-            if !s.is_ascii() {
-                return Err(invalid("dictionary", i, "non-ASCII archive path unsupported"));
+            if let Some(bad) = s.bytes().position(|b| !b.is_ascii()) {
+                // `s` is `line` less its edges: the bytes cut from the front come before the first bad byte
+                let lead = line.len() - line.trim_start().len() + (trimmed.len() - s.len());
+                return Err(invalid(
+                    "dictionary",
+                    line_at.saturating_add(lead).saturating_add(bad),
+                    format!("archive path {s:?} holds a non-ASCII byte; paths are ASCII"),
+                ));
             }
             let mut s = crate::names::fold(s).replace('\\', "/");
             if !s.starts_with('/') {
@@ -168,6 +179,53 @@ impl Install {
     }
 }
 
+/// `header`, the index of `pair` whose BDT file is `bdt_size` bytes, added to `entries`. An entry that ends beyond the
+/// BDT file, or whose hash another pair of `pairs` already lists, is refused at its record in the index (offsets are
+/// those of the unwrapped index).
+fn index_pair(
+    entries: &mut BTreeMap<u64, IndexedEntry>,
+    pairs: &[ArchivePair],
+    pair: &ArchivePair,
+    header: &Header,
+    record: &RecordLayout,
+    bdt_size: u64,
+) -> Result<()> {
+    for entry in &header.entries {
+        let padded = u64::try_from(entry.padded_size).ok();
+        if padded
+            .and_then(|padded| entry.offset.checked_add(padded))
+            .is_none_or(|end| end > bdt_size)
+        {
+            return Err(invalid(
+                "BHD5",
+                entry.index_offset.saturating_add(record.offset),
+                format!(
+                    "{}.bdt entry {:#x} at {:#x} of {} bytes ends beyond the {bdt_size} bytes of the file",
+                    pair.stem, entry.hash, entry.offset, entry.padded_size
+                ),
+            ));
+        }
+        let indexed = IndexedEntry {
+            shard: pair.shard,
+            entry: entry.clone(),
+        };
+        if let Some(first) = entries.insert(entry.hash, indexed) {
+            let first_pair = pairs
+                .iter()
+                .find(|p| p.shard == first.shard)
+                .map_or("an earlier pair", |p| p.stem);
+            return Err(invalid(
+                "BHD5",
+                entry.index_offset,
+                format!(
+                    "path hash {:#x} is listed by {} and by {first_pair}; each hash names one entry across the archives",
+                    entry.hash, pair.stem
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
 /// An index entry and the archive pair it came from.
 #[derive(Debug)]
 pub struct IndexedEntry {
@@ -229,27 +287,7 @@ impl Archive {
             let plain = unwrap_rsa_with(threads, &std::fs::read(&bhd)?, n, e)?;
             let header = Header::read(&plain, &set.record)?;
             let size = std::fs::metadata(root.join(format!("{}.bdt", pair.stem)))?.len();
-            for entry in &header.entries {
-                if entry
-                    .offset
-                    .checked_add(entry.padded_size as u64)
-                    .is_none_or(|end| end > size)
-                {
-                    return Err(invalid("BDT", entry.offset as usize, "entry beyond file"));
-                }
-                if entries
-                    .insert(
-                        entry.hash,
-                        IndexedEntry {
-                            shard: pair.shard,
-                            entry: entry.clone(),
-                        },
-                    )
-                    .is_some()
-                {
-                    return Err(invalid("BHD5", 0, "cross-archive hash collision"));
-                }
-            }
+            index_pair(&mut entries, set.pairs, pair, &header, &set.record, size)?;
             headers.push(header);
         }
         Ok(Self {
@@ -302,5 +340,76 @@ impl Archive {
     /// [`Archive::read_hash`] of the hash of the archive path `path`; [`crate::Error::Missing`] if the index lacks it.
     pub fn read(&self, path: &str, decoder: &Decoder<'_>) -> Result<Vec<u8>> {
         self.read_hash(self.hash(path), decoder)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_non_ascii_path_is_refused_at_its_byte() {
+        let text = "/a.txt\r\n# note\n  /b\u{e9}.txt\n";
+        let e = NameDictionary::parse(text).unwrap_err();
+        let crate::Error::Invalid { offset, detail, .. } = &e else {
+            panic!("{e}")
+        };
+        assert_eq!(text.as_bytes().get(*offset), Some(&0xc3), "{e}");
+        assert_eq!(*offset, text.find('\u{e9}').unwrap());
+        assert!(detail.contains("non-ASCII"), "{e}");
+        // a byte order mark at the start of the first line is not a path byte
+        let bom = "\u{feff}/a.txt\n";
+        assert_eq!(NameDictionary::parse(bom).unwrap().names.len(), 1);
+        let e = NameDictionary::parse("\u{feff}/\u{e9}").unwrap_err();
+        assert!(e.to_string().starts_with("dictionary at 0x4:"), "{e}");
+    }
+
+    fn entry(hash: u64, index_offset: usize, offset: u64, padded_size: usize) -> Entry {
+        Entry {
+            index_offset,
+            hash,
+            offset,
+            padded_size,
+            logical_size: 0,
+            aes: None,
+            sha: None,
+        }
+    }
+    fn header(entries: Vec<Entry>) -> Header {
+        Header {
+            salt: Vec::new(),
+            entries,
+            bucket_count: 1,
+            rsa_padding: 0,
+        }
+    }
+
+    #[test]
+    fn an_entry_beyond_the_bdt_and_a_repeated_hash_are_refused_at_their_records() {
+        let pairs = [
+            ArchivePair::required(0, "Data0"),
+            ArchivePair::required(1, "Data1"),
+        ];
+        let record = RecordLayout::SEKIRO;
+        let mut entries = BTreeMap::new();
+        let ok = header(vec![entry(5, 36, 0, 100)]);
+        index_pair(&mut entries, &pairs, &pairs[0], &ok, &record, 100).unwrap();
+        // offset + size wrapping around u64, and plainly beyond the end
+        for (offset, padded) in [(u64::MAX - 3, 16), (90, 16)] {
+            let bad = header(vec![entry(6, 76, offset, padded)]);
+            let e = index_pair(&mut entries, &pairs, &pairs[1], &bad, &record, 100)
+                .unwrap_err()
+                .to_string();
+            assert!(e.starts_with("BHD5 at 0x54: Data1.bdt entry 0x6"), "{e}");
+            assert!(e.contains("beyond the 100 bytes"), "{e}");
+        }
+        let again = header(vec![entry(5, 116, 0, 1)]);
+        let e = index_pair(&mut entries, &pairs, &pairs[1], &again, &record, 100)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            e,
+            "BHD5 at 0x74: path hash 0x5 is listed by Data1 and by Data0; each hash names one entry across the archives"
+        );
     }
 }

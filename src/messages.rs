@@ -280,6 +280,7 @@ mod tests {
             crate::archive::IndexedEntry {
                 shard: 1,
                 entry: crate::bhd::Entry {
+                    index_offset: 0,
                     hash,
                     offset: 0,
                     padded_size: 0,
