@@ -144,23 +144,62 @@ fn section_chain(v: &View<'_>) -> Result<Vec<String>> {
         if names.len() == 16 {
             return Err(invalid(v.format, start, "section chain too long"));
         }
-        let n = v.u32(start + 4)? as usize;
-        if n == 0 {
-            return Err(invalid(v.format, start + 4, "section has no next pointer"));
-        }
-        let table = n
-            .checked_mul(8)
-            .ok_or_else(|| invalid(v.format, start, "section size overflow"))?;
-        v.slice(start + 16, table)?;
-        names.push(text(v, v.size(start + 8)?)?);
-        let next = v.size(start + 16 + (n - 1) * 8)?;
-        if next == 0 {
+        let table = SectionTable::at(v, start)?;
+        names.push(text(v, v.size(v.at(start, 8)?)?)?);
+        if table.next == 0 {
             return Ok(names);
         }
-        if next <= start {
-            return Err(invalid(v.format, start, "section chain goes backwards"));
+        if table.next <= start {
+            return Err(invalid(v.format, table.next_at, "section chain goes backwards"));
         }
-        start = next;
+        if table.next >= v.data.len() {
+            return Err(invalid(
+                v.format,
+                table.next_at,
+                format!(
+                    "next section at {:#x} is beyond the {} bytes of the file",
+                    table.next,
+                    v.data.len()
+                ),
+            ));
+        }
+        start = table.next;
+    }
+}
+
+/// A section's header: its entry table, whose last slot points at the next section.
+struct SectionTable {
+    /// The slot count (the entries and the next pointer).
+    slots: usize,
+    /// The table's size in bytes.
+    bytes: usize,
+    /// Where the next-section pointer is stored.
+    next_at: usize,
+    /// The next section's offset, or zero after the last.
+    next: usize,
+}
+impl SectionTable {
+    /// The table of the section at `start`, which must lie within the data.
+    fn at(v: &View<'_>, start: usize) -> Result<Self> {
+        let count_at = v.at(start, 4)?;
+        let slots =
+            usize::try_from(v.u32(count_at)?).map_err(|_| invalid(v.format, count_at, "size overflow"))?;
+        let Some(last) = slots.checked_sub(1) else {
+            return Err(invalid(v.format, count_at, "section has no next pointer"));
+        };
+        let bytes = slots
+            .checked_mul(8)
+            .ok_or_else(|| invalid(v.format, count_at, "section size overflow"))?;
+        let table_at = v.at(start, 16)?;
+        v.slice(table_at, bytes)?;
+        // `last * 8` is below `bytes`, which fits
+        let next_at = v.at(table_at, last.saturating_mul(8))?;
+        Ok(Self {
+            slots,
+            bytes,
+            next_at,
+            next: v.size(next_at)?,
+        })
     }
 }
 
@@ -343,20 +382,14 @@ impl MapLayout {
         for (section_index, &name) in generation.sections.iter().enumerate() {
             let start = next;
             let version = v.u32(start)?;
-            let n = v.u32(start + 4)? as usize;
-            if n == 0 {
-                return Err(invalid(v.format, start + 4, "section has no next pointer"));
-            }
-            let bytes = n
-                .checked_mul(8)
-                .ok_or_else(|| invalid(v.format, start, "section size overflow"))?;
-            v.slice(start + 16, bytes)?;
-            next = v.size(start + 16 + (n - 1) * 8)?;
+            let table = SectionTable::at(&v, start)?;
+            let (n, bytes) = (table.slots, table.bytes);
+            next = table.next;
             let end = if next == 0 { data.len() } else { next };
             if (section_index == last) != (next == 0) || end <= start || end > data.len() {
-                return Err(invalid(v.format, start, "invalid section chain"));
+                return Err(invalid(v.format, table.next_at, "invalid section chain"));
             }
-            let header_end = start + 16 + bytes;
+            let header_end = v.at(v.at(start, 16)?, bytes)?;
             if header_end > end {
                 return Err(invalid(v.format, start, "section table overlaps next section"));
             }
@@ -1141,11 +1174,26 @@ impl MapLayout {
             let type_code = r.u32(8)?;
             let shape_code = r.u32(16)?;
             let shape_data = r.size(72)?;
-            let floats = |n: usize| -> Result<Vec<f32>> {
+            let shape_data_at = |delta: usize| -> Result<usize> {
                 if shape_data < 96 {
                     return Err(invalid(r.format, 72, "a shape without data"));
                 }
-                (0..n).map(|i| f32_at(&r, shape_data + 4 * i)).collect()
+                if shape_data >= r.data.len() {
+                    return Err(invalid(
+                        r.format,
+                        72,
+                        format!(
+                            "shape data at {shape_data:#x} is beyond the {} bytes of the record",
+                            r.data.len()
+                        ),
+                    ));
+                }
+                r.at(shape_data, delta)
+            };
+            let floats = |n: usize| -> Result<Vec<f32>> {
+                (0..n)
+                    .map(|i| f32_at(&r, shape_data_at(i.saturating_mul(4))?))
+                    .collect()
             };
             let shape = match shape_code {
                 0xFFFF_FFFF => RegionShape::None,
@@ -1178,21 +1226,16 @@ impl MapLayout {
                         height: f[2],
                     }
                 }
-                6 => {
-                    if shape_data < 96 {
-                        return Err(invalid(r.format, 72, "a shape without data"));
-                    }
-                    RegionShape::Composite {
-                        children: (0..8)
-                            .map(|i| {
-                                Ok((
-                                    r.u32(shape_data + 8 * i)? as i32,
-                                    r.u32(shape_data + 8 * i + 4)? as i32,
-                                ))
-                            })
-                            .collect::<Result<_>>()?,
-                    }
-                }
+                6 => RegionShape::Composite {
+                    children: (0..8)
+                        .map(|i| {
+                            Ok((
+                                r.u32(shape_data_at(8 * i)?)? as i32,
+                                r.u32(shape_data_at(8 * i + 4)?)? as i32,
+                            ))
+                        })
+                        .collect::<Result<_>>()?,
+                },
                 code => RegionShape::Unknown { code },
             };
             let entity = r.size(80)?;
@@ -1465,6 +1508,34 @@ mod region_tests {
                 .map_regions()
                 .is_err()
         );
+    }
+
+    /// A section chain whose next pointer lies beyond the file, or near the top of the address range, is an error at
+    /// the pointer, not an overflow.
+    #[test]
+    fn a_section_chain_pointer_beyond_the_file_is_an_error() {
+        for next in [u64::MAX - 1, u64::MAX - 3, 1 << 40] {
+            let mut data = b"MSB \x01\0\0\0\x10\0\0\0\0\0\x01\xff".to_vec();
+            data.extend([0u8; 4]);
+            data.extend(1u32.to_le_bytes());
+            data.extend(0u64.to_le_bytes());
+            data.extend(next.to_le_bytes());
+            let err = MapLayout::read(&data).unwrap_err().to_string();
+            assert!(err.starts_with("MSB at 0x20"), "{err}");
+        }
+    }
+
+    /// A shape-data pointer near the top of the address range is an error at the pointer.
+    #[test]
+    fn a_shape_pointer_near_the_address_limit_is_an_error() {
+        for shape in [5, 3, 6] {
+            let mut bad = region("Wind", 6, shape, &[4.0, 5.0, 6.0], 1, &[]);
+            bad[72..80].copy_from_slice(&(u64::MAX - 2).to_le_bytes());
+            let err = layout(&Generation::ELDEN_RING, vec![bad])
+                .map_regions()
+                .unwrap_err();
+            assert!(err.to_string().starts_with("MSB region at 0x48"), "{err}");
+        }
     }
 
     /// Type data is serialised as hexadecimal text, not a list of numbers.

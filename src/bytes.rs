@@ -19,6 +19,11 @@ impl<'a> View<'a> {
         };
         invalid(self.format, o, detail)
     }
+    /// The offset `delta` bytes after `base`, or an error at `base` when the sum does not fit an offset.
+    pub fn at(&self, base: usize, delta: usize) -> Result<usize> {
+        base.checked_add(delta)
+            .ok_or_else(|| invalid(self.format, base, "offset overflow"))
+    }
     pub fn slice(&self, o: usize, n: usize) -> Result<&'a [u8]> {
         primase_foundations::bytes::View::new(self.data)
             .slice(o, n)
