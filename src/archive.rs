@@ -8,13 +8,13 @@ use crate::{
     Game, Result,
     bhd::{Entry, Header, unwrap_rsa_with},
     dcx::Decoder,
-    game::{ArchivePair, KeySource},
+    game::ArchivePair,
     invalid,
 };
-use primase_foundations::parallel::Threads;
 use std::{
     collections::BTreeMap,
     io::{Read, Seek, SeekFrom},
+    num::NonZeroUsize,
     path::{Path, PathBuf},
 };
 
@@ -78,24 +78,14 @@ impl std::fmt::Debug for Keys {
     }
 }
 impl Keys {
-    /// The keys built in for a game whose keys the community unpackers publish (Sekiro); `None` for a game whose
-    /// keys the caller supplies.
-    pub fn published(game: Game) -> Option<Self> {
-        let set = game.archives();
-        let KeySource::Published(keys) = set.keys else {
-            return None;
-        };
-        Some(Self {
-            pairs: set
-                .pairs
-                .iter()
-                .zip(keys)
-                .map(|(pair, (n, e))| (pair.stem, (n.to_vec(), e.to_vec())))
-                .collect(),
+    /// No keys: an install opened with them fails at its first archive pair, naming it.
+    pub fn none() -> Self {
+        Self {
+            pairs: BTreeMap::new(),
             regulation: None,
-        })
+        }
     }
-    /// Keys the caller supplies: a PKCS#1 `RSA PUBLIC KEY` PEM file per archive pair in `folder`, named after the
+    /// The keys the caller supplies: a PKCS#1 `RSA PUBLIC KEY` PEM file per archive pair in `folder`, named after the
     /// last component of the pair's stem (`Data0.pem`, `sd.pem`), and, for a game whose params are encrypted, their key
     /// in the file the game names ([`crate::game::ParamSource::Regulation`]: 64 hexadecimal digits, refused unless its
     /// SHA-256 is the one the game states). A pair without a file has no key; opening an install that holds it then
@@ -143,29 +133,21 @@ pub struct Install {
     pub root: PathBuf,
     pub game: Game,
     pub keys: Keys,
-    /// The threads opening its archives may use (the index files' RSA blocks): the program states them; one by default.
-    pub threads: Threads,
+    /// The threads opening its archives may use (the index files' RSA blocks): the caller states them; one by default.
+    pub threads: NonZeroUsize,
 }
 impl Install {
-    /// A Sekiro install, with the published keys.
-    pub fn sekiro(root: impl Into<PathBuf>) -> Self {
-        Self {
-            root: root.into(),
-            game: Game::Sekiro,
-            keys: Keys::published(Game::Sekiro).expect("Sekiro's keys are published"),
-            threads: Threads::ONE,
-        }
-    }
+    /// The install of `game` in the folder `root`, its archives opened with `keys` on one thread.
     pub fn new(root: impl Into<PathBuf>, game: Game, keys: Keys) -> Self {
         Self {
             root: root.into(),
             game,
             keys,
-            threads: Threads::ONE,
+            threads: NonZeroUsize::MIN,
         }
     }
     /// The same install opened on `threads` ([`Install::threads`]).
-    pub fn with_threads(mut self, threads: Threads) -> Self {
+    pub fn with_threads(mut self, threads: NonZeroUsize) -> Self {
         self.threads = threads;
         self
     }
@@ -193,9 +175,8 @@ pub struct Archive {
     pub absent: Vec<&'static str>,
 }
 impl Archive {
-    /// An archive of `game` that holds nothing: for a reader test that must read none of it.
-    #[cfg(test)]
-    pub(crate) fn empty(game: Game) -> Self {
+    /// An archive of `game` that holds nothing: for a reader that must read none of it.
+    pub fn empty(game: Game) -> Self {
         Self {
             root: PathBuf::new(),
             game,
@@ -204,18 +185,18 @@ impl Archive {
             absent: Vec::new(),
         }
     }
-    /// Sekiro's archives, with the published keys.
-    pub fn open(root: impl AsRef<Path>) -> Result<Self> {
-        let keys = Keys::published(Game::Sekiro).expect("Sekiro's keys are published");
-        Self::open_game(root, Game::Sekiro, &keys)
-    }
     /// `game`'s archives under `root`, each index unwrapped with its pair's key in `keys`. An entry hash present in
     /// two pairs is an error.
     pub fn open_game(root: impl AsRef<Path>, game: Game, keys: &Keys) -> Result<Self> {
-        Self::open_game_with(Threads::ONE, root, game, keys)
+        Self::open_game_with(NonZeroUsize::MIN, root, game, keys)
     }
     /// [`Archive::open_game`] with each index file's RSA blocks unwrapped on `threads`: the same archive on any count.
-    pub fn open_game_with(threads: Threads, root: impl AsRef<Path>, game: Game, keys: &Keys) -> Result<Self> {
+    pub fn open_game_with(
+        threads: NonZeroUsize,
+        root: impl AsRef<Path>,
+        game: Game,
+        keys: &Keys,
+    ) -> Result<Self> {
         let root = root.as_ref().to_path_buf();
         let set = game.archives();
         let mut entries = BTreeMap::new();

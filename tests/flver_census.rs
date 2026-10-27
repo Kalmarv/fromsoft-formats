@@ -3,9 +3,7 @@
 //! (`oracles.soulsformats.elden/census`). A FLVER the reference refuses (a record with `error`) must be refused by ours
 //! too, except a SpeedTree FLVER: the reference refuses every one of Elden Ring's (an index out of range), ours
 //! reads their stored members; they are counted.
-mod inputs;
-
-use primase_fromsoft::{Binder, Game, NameDictionary, bhd::PathHash, dcx::Decoder, flver::Model};
+use fromsoft_formats::{Binder, Game, NameDictionary, bhd::PathHash, dcx::Decoder, flver::Model};
 
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -14,15 +12,10 @@ mod common;
 #[allow(unsafe_code)]
 mod native {
     pub fn load(
-        path: crate::inputs::OodleLibrary,
+        path: primase_testdata::OodleLibrary,
     ) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
         // SAFETY: caller explicitly supplies a trusted version-6 native library.
-        unsafe {
-            primase_foundations::compress::oodle::Oodle::open(
-                path.path(),
-                primase_foundations::compress::oodle::Version::V6,
-            )
-        }
+        unsafe { primase_foundations::compress::oodle::Oodle::open(path.path(), primase_foundations::compress::oodle::Version::V6) }
     }
 }
 fn sha(bytes: &[u8]) -> String {
@@ -59,7 +52,7 @@ static REFERENCE_NEXT: std::sync::atomic::AtomicBool = std::sync::atomic::Atomic
 /// the unorm lanes as they are, the half lanes through their 16-bit words. SoulsFormats' census of Sekiro has one UV
 /// per member.
 fn reference_uvs(
-    v: &primase_fromsoft::flver::Vertex,
+    v: &fromsoft_formats::flver::Vertex,
     kinds: &[u32],
     next: bool,
     sekiro_words: bool,
@@ -305,7 +298,7 @@ fn visit(
 }
 #[test]
 fn all_flver_models() -> Result<()> {
-    let Some(dll) = inputs::oodle(inputs::Tool::Oodle6) else {
+    let Some(dll) = primase_testdata::oodle(primase_testdata::Tool::Oodle6) else {
         return Ok(());
     };
     let dll = native::load(dll)?;
@@ -316,13 +309,29 @@ fn all_flver_models() -> Result<()> {
     for (game, oracle, names) in [
         (
             Game::Sekiro,
-            inputs::oracle(inputs::OracleSet::SoulsFormats, inputs::Game::Sekiro, "census"),
-            inputs::oracle(inputs::OracleSet::Uxm, inputs::Game::Sekiro, "dictionary.txt"),
+            primase_testdata::oracle(
+                primase_testdata::OracleSet::SoulsFormats,
+                primase_testdata::Game::Sekiro,
+                "census",
+            ),
+            primase_testdata::oracle(
+                primase_testdata::OracleSet::Uxm,
+                primase_testdata::Game::Sekiro,
+                "dictionary.txt",
+            ),
         ),
         (
             Game::EldenRing,
-            inputs::oracle(inputs::OracleSet::SoulsFormats, inputs::Game::Elden, "census"),
-            inputs::oracle(inputs::OracleSet::Uxm, inputs::Game::Elden, "dictionary.txt"),
+            primase_testdata::oracle(
+                primase_testdata::OracleSet::SoulsFormats,
+                primase_testdata::Game::Elden,
+                "census",
+            ),
+            primase_testdata::oracle(
+                primase_testdata::OracleSet::Uxm,
+                primase_testdata::Game::Elden,
+                "dictionary.txt",
+            ),
         ),
     ] {
         let (Some(archive), Some(oracle), Some(names)) = (common::archive(game)?, oracle, names) else {
@@ -341,7 +350,7 @@ fn all_flver_models() -> Result<()> {
 
 fn flver_models(
     game: Game,
-    archive: &primase_fromsoft::Archive,
+    archive: &fromsoft_formats::Archive,
     oracle: &std::path::Path,
     names: &NameDictionary,
     decoder: &Decoder<'_>,

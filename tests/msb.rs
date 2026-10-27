@@ -1,4 +1,4 @@
-use primase_fromsoft::msb::{MapOffset, Part, PartKind};
+use fromsoft_formats::msb::{MapOffset, Part, PartKind};
 fn part() -> Part {
     Part {
         index: 0,
@@ -26,11 +26,10 @@ fn euler_order_is_x_then_z_then_y() {
     p.rotation_degrees = [90., 90., 90.];
     p.scale = [2., 3., 4.];
     p.position = [10., 20., 30.];
-    // X->Z->Y rotates +X to +Y, +Y to +X and +Z to -Z.
-    // Conjugating the Z reflection keeps this particular basis unchanged.
+    // X->Z->Y rotates +X to +Y, +Y to +X and +Z to -Z, in the map's own frame; the translation is the stored one.
     close(
-        p.transform().unwrap().cols,
-        [[0., 2., 0.], [3., 0., 0.], [0., 0., -4.], [10., 20., -30.]],
+        p.matrix().unwrap(),
+        [[0., 2., 0.], [3., 0., 0.], [0., 0., -4.], [10., 20., 30.]],
     );
 }
 #[test]
@@ -44,10 +43,11 @@ fn offset_is_separate_from_part_world_position() {
         position: [100., 0., 200.],
         degrees: 90.,
     };
-    assert_eq!(p.transform().unwrap().cols[3], [1., 2., -3.]);
+    assert_eq!(p.matrix().unwrap()[3], [1., 2., 3.]);
+    // a quarter turn about y: +X to -Z, +Z to +X
     close(
-        o.transform().unwrap().cols,
-        [[0., 0., 1.], [0., 1., 0.], [-1., 0., 0.], [100., 0., -200.]],
+        o.matrix().unwrap(),
+        [[0., 0., -1.], [0., 1., 0.], [1., 0., 0.], [100., 0., 200.]],
     );
 }
 #[test]
@@ -56,7 +56,7 @@ fn invalid_transform_values_are_errors() {
         rotation_degrees: [f32::NAN, 0., 0.],
         ..part()
     };
-    assert!(p.transform().is_err());
+    assert!(p.matrix().is_err());
 }
 
 fn put64(data: &mut [u8], offset: usize, value: usize) {
@@ -127,7 +127,7 @@ fn part_record(entity_id: i32, groups: [i32; 8], tail: [u8; 16]) -> Vec<u8> {
 }
 #[test]
 fn shadow_flags_retain_false_renderer_bytes_and_contradictions() {
-    use primase_fromsoft::msb::{MapLayout, ShadowFlags};
+    use fromsoft_formats::msb::{MapLayout, ShadowFlags};
     let mut record = part_record(5, [-1; 8], [0; 16]);
     let entity = u64::from_le_bytes(record[96..104].try_into().unwrap()) as usize;
     for (offset, value) in [(0x0a, 1), (0x0c, 0), (0x0d, 2), (0x0e, 255), (0x11, 1), (0x12, 1)] {
@@ -145,7 +145,7 @@ fn shadow_flags_retain_false_renderer_bytes_and_contradictions() {
     assert_eq!(map.parts[0].shadows, expected);
     // Contradiction is preserved, not silently normalized into an enum.
     assert!(map.parts[0].shadows.only && !map.parts[0].shadows.cast);
-    let json = primase_core::json::to_value(&expected).unwrap();
+    let json = serde_json::to_value(expected).unwrap();
     assert_eq!(json["cast"], false);
     assert_eq!(json["static_cast"], 2);
     assert_eq!(json["cascade3_cast"], 255);
@@ -160,7 +160,7 @@ fn shadow_flags_retain_false_renderer_bytes_and_contradictions() {
 fn entity_ids_and_groups_as_stored() {
     let groups = [1117201, -1, 0, 1116201, -1, -1, -1, -1];
     let map =
-        primase_fromsoft::msb::MapLayout::read(&map_with_parts(&[part_record(-1, groups, [0; 16])])).unwrap();
+        fromsoft_formats::msb::MapLayout::read(&map_with_parts(&[part_record(-1, groups, [0; 16])])).unwrap();
     let p = &map.parts[0];
     assert_eq!(
         (p.entity_id, p.entity_group_ids),
@@ -173,13 +173,13 @@ fn entity_ids_and_groups_as_stored() {
         "only positive IDs address the part"
     );
     let map =
-        primase_fromsoft::msb::MapLayout::read(&map_with_parts(&[part_record(1110432, [-1; 8], [0; 16])]))
+        fromsoft_formats::msb::MapLayout::read(&map_with_parts(&[part_record(1110432, [-1; 8], [0; 16])]))
             .unwrap();
     assert_eq!(map.parts[0].entity_ids().collect::<Vec<_>>(), [1110432]);
 }
 #[test]
 fn part_graphics_config_and_scene_ids_as_stored() {
-    use primase_fromsoft::msb::{MapLayout, PartGparam};
+    use fromsoft_formats::msb::{MapLayout, PartGparam};
     let plain = part_record(1, [-1; 8], [0; 16]);
     let mut with = part_record(2, [-1; 8], [0; 16]);
     // the config at +112: four value IDs and sixteen zero bytes; the scene config at +120: sixty zero bytes, the four
@@ -225,7 +225,7 @@ fn only_elden_rings_layout_has_a_grass_slot() {
     let extra = record.len();
     put64(&mut record, 128, extra);
     record.resize(extra + 8, 0);
-    let map = primase_fromsoft::msb::MapLayout::read(&map_with_parts(&[record])).unwrap();
+    let map = fromsoft_formats::msb::MapLayout::read(&map_with_parts(&[record])).unwrap();
     assert_eq!(map.grass_parts().unwrap(), 0);
 }
 #[test]
@@ -233,7 +233,7 @@ fn entity_block_tail_must_be_zero() {
     let mut tail = [0u8; 16];
     tail[15] = 1;
     assert!(
-        primase_fromsoft::msb::MapLayout::read(&map_with_parts(&[part_record(-1, [-1; 8], tail)])).is_err()
+        fromsoft_formats::msb::MapLayout::read(&map_with_parts(&[part_record(-1, [-1; 8], tail)])).is_err()
     );
 }
 #[test]
@@ -242,17 +242,17 @@ fn truncated_entity_block_is_an_error() {
     // point the entity block 8 bytes before the record's end
     let end = r.len() - 8;
     put64(&mut r, 96, end);
-    assert!(primase_fromsoft::msb::MapLayout::read(&map_with_parts(&[r])).is_err());
+    assert!(fromsoft_formats::msb::MapLayout::read(&map_with_parts(&[r])).is_err());
 }
 #[test]
 fn empty_sections_and_truncated_envelopes() {
     let data = empty_map();
-    let map = primase_fromsoft::msb::MapLayout::read(&data).unwrap();
+    let map = fromsoft_formats::msb::MapLayout::read(&data).unwrap();
     assert_eq!(map.sections.len(), 8);
     assert!(map.models.is_empty() && map.parts.is_empty());
     for end in 0..data.len() - 8 {
         assert!(
-            primase_fromsoft::msb::MapLayout::read(&data[..end]).is_err(),
+            fromsoft_formats::msb::MapLayout::read(&data[..end]).is_err(),
             "{end}"
         );
     }
@@ -261,8 +261,8 @@ fn empty_sections_and_truncated_envelopes() {
 fn rejects_cycles_and_names_pointing_into_headers() {
     let mut data = empty_map();
     put64(&mut data, 32, 16);
-    assert!(primase_fromsoft::msb::MapLayout::read(&data).is_err());
+    assert!(fromsoft_formats::msb::MapLayout::read(&data).is_err());
     let mut data = empty_map();
     put64(&mut data, 24, 16);
-    assert!(primase_fromsoft::msb::MapLayout::read(&data).is_err());
+    assert!(fromsoft_formats::msb::MapLayout::read(&data).is_err());
 }

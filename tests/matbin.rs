@@ -1,4 +1,4 @@
-use primase_fromsoft::matbin::{Material, Value};
+use fromsoft_formats::matbin::{Material, Value};
 
 fn utf16(s: &str) -> Vec<u8> {
     s.encode_utf16().chain([0]).flat_map(u16::to_le_bytes).collect()

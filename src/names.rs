@@ -1,9 +1,16 @@
-//! The case key for FromSoftware resource names. Stored names remain unchanged for reporting.
+//! The case key of FromSoftware resource names, as the archive dictionary and binder lookup compare them. Stored names
+//! remain unchanged for reporting.
 
 /// Fold ASCII letters as the archive dictionary and binder lookup do. This does not strip a path,
 /// normalise separators, remove extensions, or case-fold Unicode: those are separate operations.
-pub(crate) fn fold(name: &str) -> String {
+pub fn fold(name: &str) -> String {
     name.to_ascii_lowercase()
+}
+
+/// The case key of a resource path's file name without its last extension: `N:\Tex\Rock_A.tif`'s is `rock_a`.
+pub fn stem(path: &str) -> String {
+    let leaf = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    fold(leaf.rsplit_once('.').map_or(leaf, |x| x.0))
 }
 
 #[cfg(test)]

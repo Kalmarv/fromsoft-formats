@@ -1,7 +1,7 @@
 //! Records that name one range, or one string, over and over cost the file 32 bytes a record and the reader a copy
 //! each: every reader that copies what its records name refuses them before the copy (a reader spends at most four
 //! times its input), while a file that shares a little reads.
-use primase_fromsoft::{Binder, dcx::Decoder, emevd::Script, flver::Model, tpf::Package};
+use fromsoft_formats::{Binder, dcx::Decoder, emevd::Script, flver::Model, tpf::Package};
 
 fn u32le(b: &mut [u8], p: usize, x: u32) {
     b[p..p + 4].copy_from_slice(&x.to_le_bytes());
@@ -128,7 +128,7 @@ fn decoder() -> Decoder<'static> {
     }
 }
 
-fn refused_for_sharing(e: &primase_fromsoft::Error) -> bool {
+fn refused_for_sharing(e: &fromsoft_formats::Error) -> bool {
     e.to_string().contains("several times over")
 }
 

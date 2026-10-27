@@ -1,4 +1,4 @@
-use primase_fromsoft::mtd::MaterialDefinition;
+use fromsoft_formats::mtd::MaterialDefinition;
 fn word(b: &mut Vec<u8>, x: u32) {
     b.extend(x.to_le_bytes());
 }

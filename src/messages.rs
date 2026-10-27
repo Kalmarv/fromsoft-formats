@@ -1,7 +1,7 @@
 //! The game's own text: the names it shows for what its params describe. An NPC param row states a `nameId`
 //! ([`crate::param::NpcStats`]); the item message binder's NPC-name FMG ([`crate::fmg`]) holds the string for it, in the
-//! language the caller explicitly requests. This is the game's statement of what a character is called, the first source of a name
-//! (a community list's guesses come after it).
+//! language the caller explicitly requests. This is the game's statement of what a character is called, the first
+//! source of a name (a community list's guesses come after it).
 use std::collections::BTreeMap;
 
 use crate::fmg::Fmg;
@@ -9,30 +9,6 @@ use crate::param::NpcStats;
 use crate::{Archive, Binder, Game, Install, Result, dcx::Decoder, invalid};
 
 const FORMAT: &str = "FromSoftware messages";
-
-/// Read the authored NPC-row/FMG join into the World for name-fromsoft-entities.
-/// This is explicit reader work: any error leaves the old table unchanged, and a
-/// later pure naming pass neither reopens an install nor picks a different language.
-pub fn npc_names_into_world(
-    install: &Install,
-    archive: &Archive,
-    decoder: &Decoder<'_>,
-    dictionary: &crate::NameDictionary,
-    language: &str,
-    world: &mut primase_core::World,
-) -> Result<usize> {
-    let read = npc_names(install, archive, decoder, dictionary, language)?;
-    let count = read.names.len();
-    let names = crate::sekiro::character_data::NpcNames {
-        game: install.game,
-        language: language.into(),
-        names: read.names,
-        report: read.report,
-    };
-    primase_core::Resource::verify(&names, world).map_err(|reason| invalid(FORMAT, 0, reason))?;
-    world.insert_resource(names);
-    Ok(count)
-}
 
 /// NPC text together with every absent optional binder and repeated FMG id.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -143,7 +119,7 @@ pub fn npc_names(
     }
     let languages = message_languages(archive, dictionary);
     let language = choose_language(language, &languages)?;
-    let param = super::params::read_param(install, archive, decoder, "NpcParam.param")?;
+    let param = crate::game_params::read_param(install, archive, decoder, "NpcParam.param")?;
     let stats = NpcStats::from_param(&param, &install.game.npc_stats())?;
     let mut text = BTreeMap::new();
     let mut origins = BTreeMap::new();

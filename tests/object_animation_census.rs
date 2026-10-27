@@ -11,25 +11,16 @@
 //!
 //! It asserts only that the binders read. Runs where the install, the dictionary and the Oodle library are configured;
 //! otherwise it does nothing.
-mod inputs;
-
-use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
-use primase_fromsoft::{Archive, Binder, NameDictionary, dcx::Decoder};
+use fromsoft_formats::{Archive, Binder, NameDictionary, dcx::Decoder};
+use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 use std::collections::BTreeMap;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 #[allow(unsafe_code)]
-fn native(
-    path: &inputs::OodleLibrary,
-) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
+fn native(path: &primase_testdata::OodleLibrary) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
     // SAFETY: caller explicitly supplies a trusted native version-6 decoder.
-    unsafe {
-        primase_foundations::compress::oodle::Oodle::open(
-            path.path(),
-            primase_foundations::compress::oodle::Version::V6,
-        )
-    }
+    unsafe { primase_foundations::compress::oodle::Oodle::open(path.path(), primase_foundations::compress::oodle::Version::V6) }
 }
 
 fn leaf(name: &str) -> String {
@@ -41,7 +32,7 @@ fn leaf(name: &str) -> String {
 
 fn census(
     game: Game,
-    kind: primase_fromsoft::Game,
+    kind: fromsoft_formats::Game,
     label: &str,
     is_object_binder: impl Fn(&str) -> Option<&'static str>,
 ) -> Result<()> {
@@ -49,11 +40,8 @@ fn census(
         return Ok(());
     };
     // each game opens with its own keys: Sekiro's are published, Elden Ring's are the install owner's folder
-    let keys = match (kind, inputs::keys(game)) {
-        (primase_fromsoft::Game::Sekiro, _) => {
-            primase_fromsoft::Keys::published(kind).ok_or("Sekiro's keys")?
-        }
-        (_, Some(folder)) => primase_fromsoft::Keys::from_folder(folder, kind)?,
+    let keys = match (kind, primase_testdata::keys(game)) {
+        (_, Some(folder)) => fromsoft_formats::Keys::from_folder(folder, kind)?,
         (_, None) => return Ok(()),
     };
     let Some(names) = oracle(OracleSet::Uxm, game, "dictionary.txt") else {
@@ -136,10 +124,10 @@ fn census(
 
 #[test]
 fn what_the_object_binders_hold() -> Result<()> {
-    census(Game::Sekiro, primase_fromsoft::Game::Sekiro, "sekiro", |p| {
+    census(Game::Sekiro, fromsoft_formats::Game::Sekiro, "sekiro", |p| {
         (p.starts_with("/obj/") && p.ends_with(".objbnd.dcx")).then_some(".objbnd.dcx")
     })?;
-    census(Game::Elden, primase_fromsoft::Game::EldenRing, "elden", |p| {
+    census(Game::Elden, fromsoft_formats::Game::EldenRing, "elden", |p| {
         (p.starts_with("/asset/aeg/") && p.ends_with(".geombnd.dcx")).then_some(".geombnd.dcx")
     })?;
     Ok(())

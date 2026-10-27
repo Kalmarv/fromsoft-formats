@@ -10,7 +10,7 @@ use aes::{
     cipher::{Array, BlockCipherDecrypt, KeyInit},
 };
 use num_bigint::BigUint;
-use primase_foundations::parallel::Threads;
+use std::num::NonZeroUsize;
 /// Half-open byte range. (-1,-1) in an archive is an explicitly disabled range.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Range {
@@ -224,15 +224,20 @@ impl Montgomery {
 /// bytes. This is the archive signature envelope, not PKCS#1 encryption. The modulus' Montgomery context is made
 /// once for all the blocks; an even modulus (no key has one) is computed by `BigUint::modpow`.
 pub fn unwrap_rsa(input: &[u8], modulus: &[u8], exponent: &[u8]) -> Result<Vec<u8>> {
-    unwrap_rsa_with(Threads::ONE, input, modulus, exponent)
+    unwrap_rsa_with(NonZeroUsize::MIN, input, modulus, exponent)
 }
 
 /// The blocks a thread unwraps at a time: enough that a block's work (about 50 us) outweighs handing it out.
 const BLOCKS_PER_TASK: usize = 64;
 
-/// [`unwrap_rsa`] with the blocks unwrapped on `threads`, in groups ([`BLOCKS_PER_TASK`]) joined in order: the same
+/// [`unwrap_rsa`] with the blocks unwrapped on `threads`, in groups of 64 joined in order: the same
 /// bytes on any count, and the first failing block's error, as one thread meets it.
-pub fn unwrap_rsa_with(threads: Threads, input: &[u8], modulus: &[u8], exponent: &[u8]) -> Result<Vec<u8>> {
+pub fn unwrap_rsa_with(
+    threads: NonZeroUsize,
+    input: &[u8],
+    modulus: &[u8],
+    exponent: &[u8],
+) -> Result<Vec<u8>> {
     if input.is_empty() || !input.len().is_multiple_of(256) || modulus.len() != 256 {
         return Err(invalid("RSA", 0, "expected 256-byte blocks and modulus"));
     }
@@ -275,20 +280,40 @@ pub fn unwrap_rsa_with(threads: Threads, input: &[u8], modulus: &[u8], exponent:
         .enumerate()
         .map(|(g, blocks)| (g * BLOCKS_PER_TASK, blocks))
         .collect();
-    let done = primase_foundations::parallel::map(threads, &groups, |_, &(first, blocks)| {
+    let unwrap_group = |&(first, blocks): &(usize, &[[u8; 256]])| -> Result<Vec<u8>> {
         let mut out = vec![0; blocks.len() * 255];
         for (k, (b, slot)) in blocks.iter().zip(out.as_chunks_mut::<255>().0).enumerate() {
             unwrap(first + k, b, slot)?;
         }
-        Ok::<_, crate::Error>(out)
-    })
-    .map_err(|p| {
-        invalid(
-            "RSA",
-            groups[p.item].0 * 256,
-            format!("unwrapping: {}", p.message),
-        )
-    })?;
+        Ok(out)
+    };
+    let workers = threads.get().min(groups.len());
+    let done: Vec<Result<Vec<u8>>> = if workers <= 1 {
+        groups.iter().map(unwrap_group).collect()
+    } else {
+        // each thread a contiguous share of the groups, the shares joined in order
+        let share = groups.len().div_ceil(workers);
+        let unwrap_group = &unwrap_group;
+        std::thread::scope(|s| {
+            let handles: Vec<_> = groups
+                .chunks(share)
+                .map(|part| s.spawn(move || part.iter().map(unwrap_group).collect::<Vec<_>>()))
+                .collect();
+            handles
+                .into_iter()
+                .zip(groups.chunks(share))
+                .flat_map(|(handle, part)| {
+                    handle.join().unwrap_or_else(|_| {
+                        vec![Err(invalid(
+                            "RSA",
+                            part[0].0 * 256,
+                            "unwrapping: a thread panicked",
+                        ))]
+                    })
+                })
+                .collect()
+        })
+    };
     let mut out = Vec::with_capacity(blocks.len() * 255);
     for group in done {
         out.extend(group?);
@@ -508,17 +533,36 @@ mod tests {
             .collect()
     }
 
-    /// Every published Sekiro key, with its exponent and others (1, 3, 65537, a wide one), on the edge blocks and
-    /// random ones: `x^e mod n` is `BigUint::modpow`'s, bit for bit.
+    /// `count` odd 2048-bit moduli with the top bit set, as an archive key's are, from a xorshift stream.
+    fn moduli(count: usize) -> Vec<[u8; 256]> {
+        let mut state = 0x6a09_e667_f3bc_c908u64;
+        (0..count)
+            .map(|_| {
+                let mut m: [u8; 256] = std::array::from_fn(|_| {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    state as u8
+                });
+                m[0] |= 0x80;
+                m[255] |= 1;
+                m
+            })
+            .collect()
+    }
+
+    /// Odd 2048-bit moduli with exponents 1, 3, 65537, a four-byte and a wide one, on the edge blocks and random
+    /// ones: `x^e mod n` is `BigUint::modpow`'s, bit for bit.
     #[test]
     fn the_montgomery_power_is_biguint_modpow() {
         let wide: Vec<u8> = (1..=32).collect();
-        for (key, (modulus, exponent)) in crate::keys::SEKIRO.iter().enumerate() {
+        for (key, modulus) in moduli(5).iter().map(|m| &m[..]).enumerate() {
+            let exponent = &[0x2a, 0x48, 0xf9, 0x27][..];
             let n = BigUint::from_bytes_be(modulus);
             let context = Montgomery::new(modulus, &n);
             for block in blocks(modulus, 24).chunks(256) {
                 let x = BigUint::from_bytes_be(block);
-                for e in [*exponent, &[1][..], &[3], &[1, 0, 1], &wide] {
+                for e in [exponent, &[1][..], &[3], &[1, 0, 1], &wide] {
                     let e = BigUint::from_bytes_be(e);
                     let got: Vec<u8> = context
                         .power(&limbs_of(block), &e)
@@ -579,7 +623,8 @@ mod tests {
     /// two failing blocks is the first one's, with its offset, on both.
     #[test]
     fn the_blocks_unwrap_the_same_on_any_thread_count() {
-        let (modulus, exponent) = crate::keys::SEKIRO[0];
+        let moduli = moduli(1);
+        let modulus = &moduli[0][..];
         let mut state = 0x1234_5678_9abc_def1u64;
         let mut input = Vec::new();
         for _ in 0..200 {
@@ -593,15 +638,15 @@ mod tests {
             input.extend(block);
         }
         // exponent 3 keeps a 60-byte block's plaintext in 255 bytes, whatever the key's own exponent
-        let one = unwrap_rsa_with(Threads::ONE, &input, modulus, &[3]).unwrap();
-        let four = unwrap_rsa_with(Threads::new(4).unwrap(), &input, modulus, &[3]).unwrap();
+        let four_threads = NonZeroUsize::new(4).unwrap();
+        let one = unwrap_rsa_with(NonZeroUsize::MIN, &input, modulus, &[3]).unwrap();
+        let four = unwrap_rsa_with(four_threads, &input, modulus, &[3]).unwrap();
         assert_eq!(one, four);
         assert_eq!(one, reference(&input, modulus, &[3]));
-        let _ = exponent;
         for at in [150usize, 70] {
             input[at * 256..(at + 1) * 256].copy_from_slice(&[0xff; 256]);
         }
-        for threads in [Threads::ONE, Threads::new(4).unwrap()] {
+        for threads in [NonZeroUsize::MIN, four_threads] {
             let e = unwrap_rsa_with(threads, &input, modulus, &[3]).unwrap_err();
             assert!(
                 matches!(&e, crate::Error::Invalid { offset, detail, .. } if *offset == 70 * 256 && detail.contains("exceeds modulus")),

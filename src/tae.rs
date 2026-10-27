@@ -16,8 +16,6 @@
 use crate::bytes::{Budget, View};
 use crate::{Result, invalid};
 
-pub mod visibility;
-
 const FORMAT: &str = "TAE";
 
 /// The only version read: Sekiro's and Elden Ring's.
@@ -107,7 +105,7 @@ fn float(v: &View<'_>, o: usize) -> Result<f32> {
 /// The number of the animation a clip named `a000_003000` stands for: its group (the digits after `a`) times a million
 /// plus its number (the digits after the underscore), `3000` for that one and `50003000` for `a050_003000`. This is the
 /// numbering community tools use for these files; a program that finds the numbers disagree with a file's counts the
-/// animations that match none ([`crate::sekiro::AnimationReport`]).
+/// animations that match none.
 pub fn clip_animation_id(stem: &str) -> Option<i64> {
     let rest = stem.strip_prefix('a')?;
     let (group, number) = rest.split_once('_')?;

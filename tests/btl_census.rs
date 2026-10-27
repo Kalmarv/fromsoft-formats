@@ -2,9 +2,7 @@
 //! format oracle: SoulsFormatsNEXT ee1dd61's BTL for Elden Ring, `oracles.soulsformats.elden/format`): the stored
 //! version and every light's name, type, colours, powers, shadow flag, cone, position, rotation and radius, floats as
 //! bit patterns. A bank the reference refuses must be refused by ours too.
-mod inputs;
-
-use primase_fromsoft::{Game, btl::LightBank, dcx::Decoder};
+use fromsoft_formats::{Game, btl::LightBank, dcx::Decoder};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 mod common;
@@ -13,12 +11,16 @@ mod common;
 fn every_light_bank_matches_an_independent_reading() -> Result<()> {
     for (game, format) in [(
         Game::EldenRing,
-        inputs::oracle(inputs::OracleSet::SoulsFormats, inputs::Game::Elden, "format"),
+        primase_testdata::oracle(
+            primase_testdata::OracleSet::SoulsFormats,
+            primase_testdata::Game::Elden,
+            "format",
+        ),
     )] {
         let (Some(archive), Some(oracle), Some(dll)) = (
             common::archive(game)?,
             format,
-            inputs::oodle(inputs::Tool::Oodle6),
+            primase_testdata::oodle(primase_testdata::Tool::Oodle6),
         ) else {
             continue;
         };
@@ -67,9 +69,9 @@ fn every_light_bank_matches_an_independent_reading() -> Result<()> {
                         .map(|a| a.iter().filter_map(serde_json::Value::as_i64).collect::<Vec<_>>())
                 };
                 let kind = match l.kind {
-                    primase_fromsoft::btl::Kind::Point => 0,
-                    primase_fromsoft::btl::Kind::Spot => 1,
-                    primase_fromsoft::btl::Kind::Directional => 2,
+                    fromsoft_formats::btl::Kind::Point => 0,
+                    fromsoft_formats::btl::Kind::Spot => 1,
+                    fromsoft_formats::btl::Kind::Directional => 2,
                 };
                 let same = Some(l.name.as_str()) == w["name"].as_str()
                     && Some(kind) == w["type"].as_i64()

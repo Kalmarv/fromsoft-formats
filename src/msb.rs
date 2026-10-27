@@ -6,9 +6,6 @@
 //! The generations share the section chain and the record envelopes; the [`Generation`] the file's section chain
 //! names supplies what differs.
 use crate::{Result, bytes::View, invalid};
-use primase_core::components::Transform;
-
-use crate::pose::FRAME;
 
 /// How a part's point-light shadow byte is stored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -223,13 +220,6 @@ pub struct ShadowFlags {
     /// Uninterpreted byte at entity-block offset 0x0e; all byte values are retained.
     pub cascade3_cast: u8,
 }
-impl primase_core::Component for ShadowFlags {
-    const NAME: &'static str = "fromsoft.shadow_flags";
-    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
-    fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, primase_core::json::JsonError> {
-        primase_core::json::to_value(self).map(Some)
-    }
-}
 #[derive(Clone, Debug)]
 pub struct MapOffset {
     pub name: String,
@@ -253,16 +243,15 @@ pub struct MapLayout {
     pub sections: Vec<Section>,
 }
 
-/// Ground-plane points for the model parts the area reader draws: map pieces, objects
-/// and assets, in source x/z metres (core z negated). Enemy/player/collision/placeholder
-/// records are excluded. Uses each part's own transform, never the map-offset event,
-/// which places map-local resources rather than the already-positioned MSB parts.
+/// Ground-plane points of the parts drawn as models: map pieces, objects and assets, as stored x and z metres.
+/// Enemy, player, collision and placeholder records are excluded. Each is the part's own place, never offset by the
+/// map-offset event, which places map-local resources rather than the already-positioned parts.
 pub fn drawn_part_points(layout: &MapLayout) -> Result<Vec<[f32; 2]>> {
     layout
         .parts
         .iter()
         .filter(|part| matches!(part.kind, PartKind::MapPiece | PartKind::Object | PartKind::Asset))
-        .map(|part| part.transform().map(|t| [t.cols[3][0], -t.cols[3][2]]))
+        .map(|part| part.matrix().map(|m| [m[3][0], m[3][2]]))
         .collect()
 }
 fn text(v: &View<'_>, mut o: usize) -> Result<String> {
@@ -504,9 +493,9 @@ impl MapLayout {
     }
 }
 impl Part {
-    /// See [`euler_transform`].
-    pub fn transform(&self) -> Result<Transform> {
-        euler_transform(self.position, self.rotation_degrees, self.scale, self.index)
+    /// Its placement in the map's frame ([`euler_matrix`] of its stored position, rotation and scale).
+    pub fn matrix(&self) -> Result<[[f32; 3]; 4]> {
+        euler_matrix(self.position, self.rotation_degrees, self.scale, self.index)
     }
 
     /// The IDs an event script can address this part by: its entity ID and its groups, the positive ones only
@@ -547,16 +536,16 @@ impl MapLayout {
     }
 }
 
-/// Scale, X-Z-Y Euler rotation, translation in the source frame, then the
-/// core's handedness conversion. Trigonometry/matrix products use f64 and
-/// round once to each stored f32 basis component; translations remain exact.
-/// `index` names the record in errors.
-pub fn euler_transform(
+/// The affine map (columns: the x, y and z axes, then the translation) a layout record's stored place states: scale,
+/// X-Z-Y Euler rotation (degrees), then translation, in the map's own frame as the game stores it (y up, z toward the
+/// viewer; no handedness change). Trigonometry and matrix products use f64 and round once to each f32 basis component;
+/// the translation is the stored one exactly. `index` names the record in errors.
+pub fn euler_matrix(
     position: [f32; 3],
     rotation_degrees: [f32; 3],
     scale: [f32; 3],
     index: usize,
-) -> Result<Transform> {
+) -> Result<[[f32; 3]; 4]> {
     if !position
         .iter()
         .chain(&rotation_degrees)
@@ -575,20 +564,21 @@ pub fn euler_transform(
         [sy * sx - cy * sz * cx, cz * cx, cy * sx + sy * sz * cx],
         [cy * sz * sx + sy * cx, -cz * sx, cy * cx - sy * sz * sx],
     ];
-    let mut transform = Transform { cols: [[0.; 3]; 4] };
+    let mut cols = [[0.; 3]; 4];
     for (i, col) in basis.into_iter().enumerate() {
-        transform.cols[i] = col.map(|x| (x * f64::from(scale[i])) as f32);
+        cols[i] = col.map(|x| (x * f64::from(scale[i])) as f32);
     }
-    transform.cols[3] = position;
-    if !transform.cols.iter().flatten().all(|x| x.is_finite()) {
+    cols[3] = position;
+    if !cols.iter().flatten().all(|x| x.is_finite()) {
         return Err(invalid("MSB transform", index, "basis overflow"));
     }
-    Ok(FRAME.transform(&transform))
+    Ok(cols)
 }
 impl MapOffset {
-    /// Map-local data to the common world frame, never compounded onto parts.
-    pub fn transform(&self) -> Result<Transform> {
-        euler_transform(self.position, [0., self.degrees, 0.], [1.; 3], 0)
+    /// The map offset's placement of the map in the common frame ([`euler_matrix`] of its position and its rotation
+    /// about y). It places map-local data only; parts are not compounded with it.
+    pub fn matrix(&self) -> Result<[[f32; 3]; 4]> {
+        euler_matrix(self.position, [0., self.degrees, 0.], [1.; 3], 0)
     }
 }
 /// The graphics config a part stores (SoulsFormats' `GparamConfig`, the part header's slot at +112): the value IDs it
@@ -712,7 +702,7 @@ pub struct PartGrass {
 }
 
 /// Checkpoint/warp spawn region stored in the common world frame. Its facing
-/// convention and human-readable labels are lowering policy.
+/// convention and human-readable labels are the caller's to choose.
 #[derive(Clone, Debug)]
 pub struct SpawnPoint {
     pub name: String,
@@ -815,7 +805,7 @@ pub enum RegionShape {
     },
 }
 
-/// One region of the layout as stored (`POINT_PARAM_ST`, `fromsoft.region` once read into a world): what every type
+/// One region of the layout as stored (`POINT_PARAM_ST`): what every type
 /// shares, and the type's own data as bytes. SoulsFormats' `MSBS`/`MSBE` `Region` read the header alike: name offset at
 /// +0, type at +8, the index at +12, the shape at +16, position at +20, rotation (degrees) at +32, the shape data
 /// offset at +72, the entity block offset at +80 (an activation part index, then the entity ID) and the type data
@@ -832,7 +822,7 @@ pub struct Region {
     pub type_name: Option<&'static str>,
     #[serde(flatten)]
     pub shape: RegionShape,
-    /// In the map's frame, as stored: the transform of `euler_transform` places it in the world frame.
+    /// In the map's frame, as stored: [`euler_matrix`] places it.
     pub position: [f32; 3],
     pub rotation_degrees: [f32; 3],
     /// The region's own entity ID as stored (event scripts address it; 0 or -1: none).
@@ -841,7 +831,7 @@ pub struct Region {
     pub type_data: Vec<u8>,
 }
 
-/// One event of the layout as stored (`EVENT_PARAM_ST`, `fromsoft.event` once read into a world): what every type
+/// One event of the layout as stored (`EVENT_PARAM_ST`): what every type
 /// shares, and the type's own data as bytes. SoulsFormats' `MSBS`/`MSBE` `Event` read the header alike: the event ID at
 /// +8, the type at +12, the index at +16, the base data offset at +24 (a part index, a region index, the entity ID) and
 /// the type data offset at +32. The part and region an event names are resolved to their names where the index is in
@@ -862,30 +852,8 @@ pub struct Event {
     pub type_data: Vec<u8>,
 }
 
-impl primase_core::Component for Region {
-    const NAME: &'static str = "fromsoft.region";
-    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
-    /// The stored place is the map's frame as stored: the entity's transform places the region in the world.
-    fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
-        primase_core::world::Linearity::Invariant
-    }
-    fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, primase_core::json::JsonError> {
-        primase_core::json::to_value(self).map(Some)
-    }
-}
-impl primase_core::Component for Event {
-    const NAME: &'static str = "fromsoft.event";
-    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
-    fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
-        primase_core::world::Linearity::Invariant
-    }
-    fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, primase_core::json::JsonError> {
-        primase_core::json::to_value(self).map(Some)
-    }
-}
-
 impl PartKind {
-    /// The word for the kind (a lower-case word, as a marker's kind is).
+    /// The word for the kind (a lower-case word).
     pub fn word(self) -> &'static str {
         match self {
             PartKind::MapPiece => "map_piece",
@@ -902,7 +870,7 @@ impl PartKind {
     }
 }
 
-/// A part of a kind the area read does not place as a model (`fromsoft.unplaced_part`): an enemy, a player start, a
+/// A part of a kind that places no map model: an enemy, a player start, a
 /// dummy object, asset or enemy, a connect collision. What the layout stores of it, as stored: its place in the map's
 /// frame, its model's name, its entity ID and groups, and an enemy's NPC param row. What an enemy does (its think
 /// param, patrol, talk) lives in other parts of the record and in the event scripts and is not read.
@@ -920,18 +888,8 @@ pub struct UnplacedPart {
     pub entity_id: i32,
     pub entity_group_ids: [i32; 8],
 }
-impl primase_core::Component for UnplacedPart {
-    const NAME: &'static str = "fromsoft.unplaced_part";
-    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
-    fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
-        primase_core::world::Linearity::Invariant
-    }
-    fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, primase_core::json::JsonError> {
-        primase_core::json::to_value(self).map(Some)
-    }
-}
 impl MapLayout {
-    /// The parts of the kinds the area read does not place as models, in part order.
+    /// The parts of the kinds that place no map model ([`UnplacedPart`]), in part order.
     pub fn unplaced_parts(&self) -> Vec<UnplacedPart> {
         self.parts
             .iter()

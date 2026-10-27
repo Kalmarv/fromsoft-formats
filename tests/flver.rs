@@ -1,4 +1,4 @@
-use primase_fromsoft::flver::{FaceSet, FaceSetKind, Model, is_speedtree};
+use fromsoft_formats::flver::{FaceSet, FaceSetKind, Model, is_speedtree};
 fn put(b: &mut [u8], o: usize, v: u32) {
     b[o..o + 4].copy_from_slice(&v.to_le_bytes());
 }
@@ -363,14 +363,6 @@ fn a_speedtree_vertex_takes_its_attributes_from_the_members_its_programs_read() 
     assert_eq!(v.normal, [1., -1., -1.]);
     // the tangent of the ordinary convention: the stored one (-1, -1, 1) crossed with the normal, w 1
     assert_eq!(v.tangents, [[2., 0., 2., 1.]]);
-    // and the geometry decodes as an ordinary model's: positions mirrored in z, the normal of unit length
-    let part = m.decode(0, 0).unwrap().unwrap();
-    assert_eq!(part.mesh.positions[1], [1., 0., 0.]);
-    assert_eq!(part.mesh.uv[1], [0.5, 0.25]);
-    let s = 1. / 3f32.sqrt();
-    for (got, want) in part.mesh.normals[1].iter().zip([s, -s, s]) {
-        assert!((got - want).abs() < 1e-6, "{:?}", part.mesh.normals[1]);
-    }
 }
 #[test]
 fn a_speedtree_mesh_takes_the_normal_and_tangent_a_program_reads() {
@@ -410,7 +402,6 @@ fn a_speedtree_billboard_card_is_read_and_refused_as_geometry() {
     assert_eq!(v.speedtree.len(), 2);
     assert_eq!(v.position, [0.; 3]);
     assert!(v.uvs.is_empty() && v.tangents.is_empty());
-    assert!(m.decode(0, 0).unwrap_err().to_string().contains("billboard"));
 }
 #[test]
 fn speedtree_layouts_are_read_strictly() {

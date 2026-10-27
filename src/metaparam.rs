@@ -25,7 +25,7 @@ pub fn texture_number(name: &str) -> Option<u32> {
 /// states one: the `Texture2D_N` of a declared slot that none of the material's binding keys `bound` names
 /// ([`texture_number`] of each). Elden Ring's engine binds the default there. The reader loads these defaults and the
 /// layer bake's resolve binds them, both by this one rule.
-pub(crate) fn unbound_slots<K: AsRef<str>>(
+pub fn unbound_slots<K: AsRef<str>>(
     bound: impl IntoIterator<Item = K>,
     meta: &Metaparam,
 ) -> impl Iterator<Item = (u32, String)> + '_ {
@@ -36,7 +36,7 @@ pub(crate) fn unbound_slots<K: AsRef<str>>(
     meta.textures.iter().filter_map(move |t| {
         let n = texture_number(&t.name)?;
         (!t.default_texture.is_empty() && !bound.contains(&n))
-            .then(|| (n, crate::materials::stem(&t.default_texture)))
+            .then(|| (n, crate::names::stem(&t.default_texture)))
     })
 }
 
@@ -103,7 +103,7 @@ pub struct MtdParam {
     /// The byte at 0x2f of the record: 1 on the colours.
     pub colour: bool,
     /// MaterialEx override key: CRC-32 of the UTF-16LE logical parameter name, zero for no override.
-    /// This need not equal `name`: C[PixelKill]_Int addresses the petal shader's opaque `_float_2` name.
+    /// This need not equal `name`: `C[PixelKill]_Int` addresses the petal shader's opaque `_float_2` name.
     pub key: u32,
     pub default: [f32; 5],
 }

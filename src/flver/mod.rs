@@ -1,12 +1,10 @@
 //! Sekiro FLVER2 geometry, retaining file coordinates and material bindings.
-mod geometry;
 mod vertex;
 use crate::{
     Result,
     bytes::{Budget, View},
     invalid,
 };
-pub use geometry::{FaceSetKind, Part, tangent_to_scene};
 pub use vertex::Vertex;
 
 #[derive(Clone, Debug)]
@@ -232,7 +230,7 @@ fn refs(v: &View<'_>, o: usize, n: usize, limit: usize, budget: &Budget) -> Resu
 impl Model {
     /// The bytes the model's meshes hold: each vertex as it sits in memory with the lengths of its channels, and each
     /// face set's indices. A copy of the model costs about this much (the bones, layouts and materials are small beside
-    /// it), which is what a component's `payload_bytes` states.
+    /// it).
     pub fn resident_bytes(&self) -> u64 {
         let channel = std::mem::size_of::<[f32; 4]>();
         self.meshes
@@ -828,5 +826,24 @@ impl Model {
             v.speedtree_frame(normal, tangent);
         }
         Ok(())
+    }
+}
+/// What a face set is for, from its flags: a level of detail (0 the finest) or the motion-blur variant of one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum FaceSetKind {
+    Lod(u8),
+    MotionBlur(u8),
+}
+
+impl FaceSet {
+    /// Bits 24 to 26 of the flags are the level of detail (`0x0100_0000` level 1 ... `0x0400_0000` level 4),
+    /// `0x8000_0000` the motion-blur variant; edge compression is refused when the model is read.
+    pub fn kind(&self) -> FaceSetKind {
+        let level = ((self.flags >> 24) & 7) as u8;
+        if self.flags & 0x8000_0000 != 0 {
+            FaceSetKind::MotionBlur(level)
+        } else {
+            FaceSetKind::Lod(level)
+        }
     }
 }

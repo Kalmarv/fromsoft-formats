@@ -1,7 +1,7 @@
 //! Collision scope: every named map collision binder and every HKX in object
 //! binders, including broken states for census coverage. Character/ragdoll
 //! binders are counted as outside the map/object reader's scope.
-use primase_fromsoft::{Archive, Binder, NameDictionary, dcx::Decoder};
+use fromsoft_formats::{Archive, Binder, NameDictionary, dcx::Decoder};
 use havok_formats::{Compendium, Tagfile};
 use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 use std::collections::BTreeMap;
@@ -27,7 +27,14 @@ fn installed_collision_types() -> Result<()> {
         oodle: Some(&oodle),
         max_output: 1024 * 1024 * 1024,
     };
-    let archive = Archive::open(dir)?;
+    let Some(sekiro_keys) = primase_testdata::keys(primase_testdata::Game::Sekiro) else {
+        return Ok(());
+    };
+    let archive = Archive::open_game(
+        dir,
+        fromsoft_formats::Game::Sekiro,
+        &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro)?,
+    )?;
     let names = NameDictionary::read(names)?;
     let unnamed = archive
         .entries

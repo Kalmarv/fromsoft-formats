@@ -87,9 +87,8 @@ pub fn read_param(install: &Install, archive: &Archive, decoder: &Decoder<'_>, l
     Param::read(&file.bytes)
 }
 
-/// The NPC param of the install's game params: every row's id and display mask bits.
-/// [`super::character::character_display_masks`] exposes the authored model groups
-/// beside these rows; neither reader query chooses which row dresses a model.
+/// The NPC param of the install's game params: every row's id and display mask bits, with no row chosen for any
+/// model.
 pub fn read_npc_param(install: &Install, archive: &Archive, decoder: &Decoder<'_>) -> Result<NpcParam> {
     NpcParam::from_param(
         &read_param(install, archive, decoder, "NpcParam.param")?,

@@ -7,12 +7,10 @@
 //!
 //! Needs `installs.sekiro` and `tools.oodle6`.
 #![allow(clippy::unwrap_used)]
-mod inputs;
-
-use inputs::{Game, Tool, install, oodle};
-use primase_fromsoft::dcx::Decoder;
-use primase_fromsoft::metaparam::Metaparam;
-use primase_fromsoft::{Archive, Binder};
+use fromsoft_formats::dcx::Decoder;
+use fromsoft_formats::metaparam::Metaparam;
+use fromsoft_formats::{Archive, Binder};
+use primase_testdata::{Game, Tool, install, oodle};
 use std::collections::BTreeMap;
 mod common;
 
@@ -26,7 +24,15 @@ fn every_metaparam_of_the_install() {
         oodle: Some(&dll),
         max_output: 1024 * 1024 * 1024,
     };
-    let archive = Archive::open(root).unwrap();
+    let Some(sekiro_keys) = primase_testdata::keys(primase_testdata::Game::Sekiro) else {
+        return;
+    };
+    let archive = Archive::open_game(
+        root,
+        fromsoft_formats::Game::Sekiro,
+        &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro).unwrap(),
+    )
+    .unwrap();
     let outer = Binder::read(
         &archive
             .read("/shader/shaderbdle.shaderbdlebnd.dcx", &decoder)
@@ -100,13 +106,13 @@ fn words(v: serde_json::Value) -> serde_json::Value {
 /// ee1dd61's `METAPARAM` (`metaparam.jsonl` of `oracles.soulsformats.elden/format`, one record per bundle: its binder,
 /// bundle and member names, the header words, every texture slot, render pass, CAParam and MtdParam, floats as bit
 /// patterns). Words compare as 32-bit words. The reference skips the word Elden Ring stores at 0x20 of some texture
-/// records ([`primase_fromsoft::metaparam::Texture::unknown_20`]), so it is not compared.
+/// records ([`fromsoft_formats::metaparam::Texture::unknown_20`]), so it is not compared.
 #[test]
 fn every_elden_ring_metaparam_matches_an_independent_reading() {
-    use inputs::{OracleSet, Query, expect_found, oracle};
+    use primase_testdata::{OracleSet, Query, expect_found, oracle};
     use serde_json::json;
     let (Some(archive), Some(format), Some(dll)) = (
-        common::archive(primase_fromsoft::Game::EldenRing).unwrap(),
+        common::archive(fromsoft_formats::Game::EldenRing).unwrap(),
         oracle(OracleSet::SoulsFormats, Game::Elden, "format"),
         oodle(Tool::Oodle6),
     ) else {

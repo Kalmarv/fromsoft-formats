@@ -1,5 +1,5 @@
 //! BTL light-bank values: versions 16 (Sekiro) and 18 (Elden Ring) share the 232-byte light record. The file stores
-//! RGB bytes; their transfer function and the mapping of intensity into target watts are lowering policy.
+//! RGB bytes; their transfer function and the mapping of intensity into target watts are the caller's to choose.
 use crate::{
     Result,
     bytes::{Budget, View},

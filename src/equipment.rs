@@ -2,11 +2,9 @@
 //! NpcParam has display masks, not this equipment link. Offsets below are the SDT Paramdex v4 definitions:
 //! initializer armor IDs +32..48 and npcPlayerSex +228; protector equipModelId +160 and gender +209.
 //! Only the stated fields are read; no face-generation, body-shape or runtime equipment replacement is invented.
-use super::params::{npc_placements, read_param};
+use crate::game_params::{NpcPlacement, npc_placements, read_param};
 use crate::param::{Param, Row};
 use crate::{Archive, Binder, Game, Install, NameDictionary, Result, dcx::Decoder, flver::Model, invalid};
-use primase_core::convert::{Notice, NoticeKind};
-use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct NpcOutfit {
@@ -18,7 +16,7 @@ pub struct NpcOutfit {
     pub parts: Vec<String>,
     pub unresolved: Vec<String>,
     /// Every part the read named by which binders the archive holds, not by a field the param states ([`GENDER_BY_PRESENCE`],
-    /// [`FACE_OR_HEAD_BY_PRESENCE`]); [`outfit_notices`] counts them by name.
+    /// [`FACE_OR_HEAD_BY_PRESENCE`], [`LEVEL_SUFFIX_BY_PRESENCE`]).
     pub chosen_by_presence: Vec<PresenceChoice>,
 }
 
@@ -43,55 +41,6 @@ pub const FACE_OR_HEAD_BY_PRESENCE: &str =
 /// A part is held with the level suffix `_l` and without it; the param does not say which, so `_l` is taken where the
 /// archive holds it (also where it holds both), else the one without.
 pub const LEVEL_SUFFIX_BY_PRESENCE: &str = "outfit part named with or without the level suffix _l by which binder the archive holds: the param does not say which";
-
-/// What the outfits' choices by presence are, as the read's notices: each reason once, counted over the outfits, with a
-/// few examples (the placement and the part). A program that wants the outfits to be exact sees here which are not.
-pub fn outfit_notices(stage: &str, outfits: &[NpcOutfit]) -> Vec<Notice> {
-    let mut by_reason: BTreeMap<&'static str, (u64, Vec<String>)> = BTreeMap::new();
-    let mut unnamed: Option<(u64, Vec<String>)> = None;
-    for outfit in outfits {
-        if outfit.init.is_none() {
-            let entry = unnamed.get_or_insert((0, Vec::new()));
-            entry.0 += 1;
-            entry.1.push(format!(
-                "{} {} (NPC row {})",
-                outfit.map, outfit.placement, outfit.npc
-            ));
-        }
-        for choice in &outfit.chosen_by_presence {
-            let entry = by_reason.entry(choice.reason).or_default();
-            entry.0 += 1;
-            entry
-                .1
-                .push(format!("{} {}: {}", outfit.map, outfit.placement, choice.example));
-        }
-    }
-    by_reason
-        .into_iter()
-        .map(|(reason, found)| (reason, found, NoticeKind::Selection))
-        .chain(unnamed.map(|found| (NO_INITIALIZER, found, NoticeKind::Unsupported)))
-        .map(|(reason, (count, examples), kind)| {
-            examples
-                .into_iter()
-                .fold(Notice::new(stage, kind, reason, count), |n, e| n.example(e))
-        })
-        .collect()
-}
-
-/// Characters that SDT's character alias list names "Invisible" placeholders (`interactable_placeholder`), by game:
-/// a named table of ids to a purpose, the only source of the label. It never overrides an actual FLVER or an
-/// MSB-authored outfit, and an id not in it is reported as the general miss.
-const PLACEHOLDER_CHARACTERS: &[(Game, &str)] = &[(Game::Sekiro, "c1000"), (Game::Sekiro, "c1001")];
-
-/// Why a binder already observed to have no drawable geometry and no resolved parts has none: a placeholder the
-/// table above names, else the general miss (source geometry remains an unresolved miss).
-pub fn empty_character_reason(game: Game, id: &str) -> &'static str {
-    if PLACEHOLDER_CHARACTERS.contains(&(game, id)) {
-        "an invisible placeholder character: no model (no authored equipment parts resolved)"
-    } else {
-        "no drawable character model or resolved part outfit; source geometry remains an unresolved miss"
-    }
-}
 
 fn row<'a>(param: &'a Param, name: &str, id: i32) -> Result<&'a Row> {
     param
@@ -280,7 +229,7 @@ fn outfits_from_placements(
     install: &Install,
     archive: &Archive,
     decoder: &Decoder<'_>,
-    placements: Vec<super::params::NpcPlacement>,
+    placements: Vec<NpcPlacement>,
 ) -> Result<Vec<NpcOutfit>> {
     if placements.iter().all(|p| p.character_init.is_none()) {
         return Ok(placements
@@ -373,32 +322,6 @@ pub fn character_mesh_count(archive: &Archive, decoder: &Decoder<'_>, id: &str) 
     Ok(meshes)
 }
 
-/// Model skeletons only, for pair validation before a program decides whether to read a character's geometry.
-/// Names identify the FLVER member; several members stay separate. No material, texture or animation is read.
-pub fn character_skeletons(
-    archive: &Archive,
-    decoder: &Decoder<'_>,
-    id: &str,
-) -> Result<Vec<(String, primase_core::Skeleton)>> {
-    if id.len() != 5 || !id.starts_with('c') || !id[1..].bytes().all(|b| b.is_ascii_digit()) {
-        return Err(invalid("character skeleton", 0, "expected c and four digits"));
-    }
-    let path = format!("/chr/{id}.chrbnd.dcx");
-    let binder = Binder::read(&archive.read(&path, decoder)?, decoder)?;
-    let mut out = Vec::new();
-    for file in &binder.files {
-        if let Some(name) = file
-            .name
-            .as_deref()
-            .filter(|n| n.to_ascii_lowercase().ends_with(".flver"))
-        {
-            let model = Model::read(&decoder.decode_if_dcx(&file.bytes)?)?;
-            out.push((name.to_owned(), crate::pose::skeleton(&model)));
-        }
-    }
-    Ok(out)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -468,21 +391,6 @@ mod tests {
         assert_eq!(
             chosen.iter().map(|c| c.reason).collect::<Vec<_>>(),
             [GENDER_BY_PRESENCE]
-        );
-        let outfit = NpcOutfit {
-            npc: 1,
-            init: Some(15030),
-            map: "m".into(),
-            placement: "p".into(),
-            parts,
-            unresolved: why,
-            chosen_by_presence: chosen,
-        };
-        let named = outfit_notices("stage", &[outfit.clone(), outfit]);
-        assert_eq!(named.len(), 1);
-        assert_eq!(
-            (named[0].reason.as_str(), named[0].count),
-            (GENDER_BY_PRESENCE, 2)
         );
         let (parts, why, _) = resolve_parts(&initializers, &protectors, 15030, |name| {
             matches!(name, "bd_m_9040_l" | "bd_f_9040_l")

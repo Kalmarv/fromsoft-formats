@@ -1,9 +1,10 @@
-//! Sekiro collision metadata. The tagfile and mesh mechanism live in the toolkit;
-//! fsnp material tables and source-frame conventions belong here.
-use crate::pose::{pose, pose_columns, posed};
+//! Collision as FromSoftware stores it in Havok tagfiles: map compressed meshes with the fsnp material table that maps
+//! their shape keys to HitMtrlParam IDs ([`read_map`]), and object bodies as meshes and convex shapes
+//! ([`read_bodies`]). The tagfile, compressed mesh and convex shape readers are `havok-formats`'.
+use crate::affine::{compose, pose, pose_columns};
 use crate::{Result, invalid};
+use havok_formats::convex::ConvexShape;
 use havok_formats::{Compendium, CustomKind, Tagfile, Value};
-use primase_havok::ConvexCore;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -187,12 +188,13 @@ pub fn read_map(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Soup> {
 pub enum BodyGeometry {
     /// A compressed mesh: its triangles posed by the body, in the file frame, and their HitMtrl IDs.
     Mesh(Soup),
-    /// A convex shape (box, polytope, capsule, cylinder, plain convex, triangle, sphere): its stored core and convex radius in its own space,
+    /// A convex shape (box, polytope, capsule, cylinder, plain convex, triangle, sphere): its stored core and convex
+    /// radius in its own space,
     /// a capsule's stored segment, the shape's placement in the body's space where a compressed mesh holds it as an
     /// extern shape (`instance`, columns: rotation x, y and z, then the translation), and the body's pose in the file
     /// frame. It stores no material.
     Convex {
-        core: ConvexCore,
+        core: ConvexShape,
         /// A capsule's segment end points `a`, `b` (its radius is the core's).
         capsule: Option<[[f32; 3]; 2]>,
         instance: Option<[[f32; 3]; 4]>,
@@ -201,7 +203,7 @@ pub enum BodyGeometry {
     },
 }
 
-/// The convex shape classes a body or an extern shape instance may be, read as their core ([`ConvexCore::read`]).
+/// The convex shape classes a body or an extern shape instance may be, read as their core ([`ConvexShape::read`]).
 const CONVEX_SHAPES: [&str; 7] = [
     "hknpBoxShape",
     "hknpConvexPolytopeShape",
@@ -224,7 +226,7 @@ pub fn shape_to_file(
         None => body,
         Some(inner) => {
             let wide = |m: &[[f32; 3]; 4]| m.map(|c| c.map(f64::from));
-            crate::pose::compose(&wide(&body), &wide(inner)).map(|c| c.map(|x| x as f32))
+            compose(&wide(&body), &wide(inner)).map(|c| c.map(|x| x as f32))
         }
     }
 }
@@ -257,37 +259,12 @@ fn convex(
         None
     };
     Ok(BodyGeometry::Convex {
-        core: ConvexCore::read(shape)?,
+        core: ConvexShape::read(shape)?,
         capsule,
         instance,
         position: [p[0], p[1], p[2]],
         orientation: q,
     })
-}
-
-impl BodyGeometry {
-    /// Triangles in the file frame: a mesh's as stored; a convex shape's core tessellated as the intersection of its
-    /// planes offset by the radius ([`ConvexCore::expanded_triangles`]: sharp where the shape is rounded, a capsule a
-    /// box around its core), posed by the body. The convex tessellation is an approximation.
-    pub fn triangles(&self) -> Result<Vec<[[f32; 3]; 3]>> {
-        match self {
-            BodyGeometry::Mesh(soup) => Ok(soup.triangles.clone()),
-            BodyGeometry::Convex {
-                core,
-                instance,
-                position,
-                orientation,
-                ..
-            } => {
-                let pose = shape_to_file(instance.as_ref(), *position, *orientation);
-                Ok(core
-                    .expanded_triangles()?
-                    .into_iter()
-                    .map(|t| t.map(|v| posed(&pose, v)))
-                    .collect())
-            }
-        }
-    }
 }
 
 #[derive(Debug)]

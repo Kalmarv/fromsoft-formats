@@ -1,7 +1,7 @@
 //! The event-script reader on synthetic files built here in the stored layout (header, events, instructions, layers,
 //! arguments padded to 4 and the block to 16, parameters, linked files, strings): a script reads back as written, and
 //! every structural fault is an error.
-use primase_fromsoft::emevd::{Event, Instruction, Parameter, Script};
+use fromsoft_formats::emevd::{Event, Instruction, Parameter, Script};
 
 /// One synthetic script in Sekiro's layout.
 fn build(events: &[Event], layers: &[u32], linked: &[i64], strings: &[u8]) -> Vec<u8> {

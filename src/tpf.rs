@@ -145,13 +145,3 @@ impl Package {
         })
     }
 }
-impl Texture {
-    /// Import a 2D DDS through the shared container reader, retaining encoded mips
-    /// and colour-space metadata. Roles and normal conventions belong to bindings.
-    pub fn image(&self) -> Result<primase_core::Texture> {
-        if self.kind != TextureKind::Image2D {
-            return Err(invalid("TPF", 0, "cube/volume image import is not supported"));
-        }
-        primase_dds::read(&self.dds).map_err(|e| invalid("TPF DDS", 0, e))
-    }
-}

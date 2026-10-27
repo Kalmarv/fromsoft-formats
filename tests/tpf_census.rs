@@ -1,27 +1,20 @@
 //! Whole-install PC texture-package differential against independent C# metadata.
-mod inputs;
-
-use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
-use primase_fromsoft::{
+use fromsoft_formats::{
     Archive, Binder, NameDictionary,
     dcx::Decoder,
     tpf::{Package, TextureKind},
 };
+use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[allow(unsafe_code)]
 mod native {
     pub fn load(
-        path: crate::inputs::OodleLibrary,
+        path: primase_testdata::OodleLibrary,
     ) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
         // SAFETY: caller explicitly supplies a trusted version-6 native library.
-        unsafe {
-            primase_foundations::compress::oodle::Oodle::open(
-                path.path(),
-                primase_foundations::compress::oodle::Version::V6,
-            )
-        }
+        unsafe { primase_foundations::compress::oodle::Oodle::open(path.path(), primase_foundations::compress::oodle::Version::V6) }
     }
 }
 fn sha(bytes: &[u8]) -> String {
@@ -105,7 +98,7 @@ fn all_texture_packages() -> Result<()> {
     let Some(oracle) = oracle(OracleSet::SoulsFormats, Game::Sekiro, "tpf") else {
         return Ok(());
     };
-    let Some(names) = inputs::oracle(OracleSet::Uxm, Game::Sekiro, "dictionary.txt") else {
+    let Some(names) = primase_testdata::oracle(OracleSet::Uxm, Game::Sekiro, "dictionary.txt") else {
         return Ok(());
     };
     let Some(dll) = oodle(Tool::Oodle6) else {
@@ -116,7 +109,14 @@ fn all_texture_packages() -> Result<()> {
         oodle: Some(&dll),
         max_output: 512 * 1024 * 1024,
     };
-    let archive = Archive::open(root)?;
+    let Some(sekiro_keys) = primase_testdata::keys(primase_testdata::Game::Sekiro) else {
+        return Ok(());
+    };
+    let archive = Archive::open_game(
+        root,
+        fromsoft_formats::Game::Sekiro,
+        &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro)?,
+    )?;
     let names = NameDictionary::read(names)?;
     let mut expected = BTreeMap::new();
     for line in std::fs::read_to_string(oracle.join("packages.jsonl"))?.lines() {

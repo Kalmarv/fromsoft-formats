@@ -1,10 +1,10 @@
 //! Elden Ring's own rules: what differs from the other FromSoftware games and is not stated by the files themselves.
 use crate::bhd::{PathHash, RecordLayout};
-use crate::game::{ArchivePair, ArchiveSet, CollisionSource, KeySource, ObjectModel, Resolution};
+use crate::game::{ArchivePair, ArchiveSet, CollisionSource, ObjectModel, Resolution};
 use crate::{Result, invalid};
 
 /// Data0 to Data3, the downloadable content's DLC and the sound archives `sd/sd` and `sd/sd_dlc02`, as the community
-/// unpacker (UXM's `EldenRingGameInfo.xml`) lists them; base-133 u64 path hashes; keys supplied by the caller.
+/// unpacker (UXM's `EldenRingGameInfo.xml`) lists them; base-133 u64 path hashes.
 pub(crate) const ARCHIVES: ArchiveSet = ArchiveSet {
     pairs: &[
         ArchivePair::required(0, "Data0"),
@@ -17,12 +17,11 @@ pub(crate) const ARCHIVES: ArchiveSet = ArchiveSet {
     ],
     hash: PathHash::Base133,
     record: RecordLayout::ELDEN_RING,
-    keys: KeySource::Supplied,
 };
 
 /// Elden Ring's params: `regulation.bin` beside the executable, AES-256-CBC encrypted (the file's first 16 bytes the
 /// initialisation vector), holding a DCX envelope (ZSTD in the game's current release) around the param binder. The key
-/// is the user's key material, as the archives' are ([`KeySource::Supplied`]): `regulation.key` in the keys folder, the
+/// is the user's key material, as the archives' are: `regulation.key` in the keys folder, the
 /// 32 bytes as 64 hexadecimal digits (the key SoulsFormats' `RegulationDecryptor` names for the game), held to its
 /// SHA-256 here.
 pub(crate) const PARAMS: crate::game::ParamSource = crate::game::ParamSource::Regulation {
