@@ -60,9 +60,9 @@ fn row<'a>(param: &'a Param, name: &str, id: i32) -> Result<&'a Row> {
 }
 
 fn word(row: &Row, at: usize) -> Result<i32> {
-    let bytes: [u8; 4] = row
-        .data
-        .get(at..at + 4)
+    let bytes: [u8; 4] = at
+        .checked_add(4)
+        .and_then(|end| row.data.get(at..end))
         .and_then(|b| b.try_into().ok())
         .ok_or_else(|| invalid("NPC outfit", at, format!("short row {}", row.id)))?;
     Ok(i32::from_le_bytes(bytes))
@@ -410,5 +410,19 @@ mod tests {
         .expect("fields");
         assert!(parts.is_empty());
         assert!(why.iter().any(|s| s.contains("ambiguous")));
+    }
+
+    #[test]
+    fn a_word_past_the_row_is_an_error_at_its_offset() {
+        let row = Row {
+            id: 3,
+            name: None,
+            data: vec![1, 0, 0, 0],
+        };
+        assert_eq!(word(&row, 0).unwrap(), 1);
+        for at in [1, 4, usize::MAX - 1, usize::MAX] {
+            let e = word(&row, at).unwrap_err().to_string();
+            assert_eq!(e, format!("NPC outfit at {at:#x}: short row 3"));
+        }
     }
 }
