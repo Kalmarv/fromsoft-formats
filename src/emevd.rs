@@ -6,12 +6,22 @@
 //! instructions, an unused table, layers, parameters and linked files, length and offset of arguments and strings),
 //! then the tables. Every byte is accounted for: the tables, each instruction's arguments and the strings, with at most
 //! 15 zero bytes of alignment between them.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation
+    )
+)]
 
 use crate::bytes::{Budget, View, coverage};
 use crate::{Result, invalid};
 
 const FORMAT: &str = "EMEVD";
 const HEADER: usize = 0x90;
+/// Where the header's sixteen 64-bit fields start.
+const HEADER_FIELDS: usize = HEADER - 16 * 8;
 const EVENT: usize = 0x30;
 const INSTRUCTION: usize = 0x20;
 const LAYER: usize = 0x20;
@@ -113,7 +123,8 @@ impl Script {
         if v.u32(12)? as usize != data.len() {
             return Err(invalid(FORMAT, 12, "file size differs from the data"));
         }
-        let h = |i: usize| HEADER - 16 * 8 + 8 * i;
+        // the offset of the header's `i`th 64-bit field
+        let h = |i: usize| HEADER_FIELDS.saturating_add(i.saturating_mul(8));
         let (n_events, events_at) = (count(&v, h(0))?, v.size(h(1))?);
         let (n_instructions, instructions_at) = (count(&v, h(2))?, v.size(h(3))?);
         if count(&v, h(4))? != 0 {
@@ -137,45 +148,47 @@ impl Script {
 
         let mut layers = Vec::with_capacity(n_layers);
         for i in 0..n_layers {
-            let o = layers_at + i * LAYER;
+            let o = v.element(layers_at, i, LAYER)?;
             if v.u32(o)? != 2
-                || i64_at(&v, o + 8)? != 0
-                || i64_at(&v, o + 16)? != -1
-                || i64_at(&v, o + 24)? != 1
+                || i64_at(&v, v.at(o, 8)?)? != 0
+                || i64_at(&v, v.at(o, 16)?)? != -1
+                || i64_at(&v, v.at(o, 24)?)? != 1
             {
                 return Err(invalid(FORMAT, o, "layer record outside its known values"));
             }
-            layers.push(v.u32(o + 4)?);
+            layers.push(v.u32(v.at(o, 4)?)?);
         }
 
         let (mut next_instruction, mut next_parameter) = (0usize, 0usize);
         let mut events = Vec::with_capacity(n_events);
         for i in 0..n_events {
-            let o = events_at + i * EVENT;
+            let o = v.element(events_at, i, EVENT)?;
             let id = i64_at(&v, o)?;
-            let n_ins = count(&v, o + 8)?;
-            let ins_at = v.size(o + 16)?;
-            let n_par = count(&v, o + 24)?;
-            let par_at = v.size(o + 32)?;
-            let rest = v.u32(o + 40)?;
-            if rest > 2 || v.u32(o + 44)? != 0 {
+            let n_ins = count(&v, v.at(o, 8)?)?;
+            let ins_at = v.size(v.at(o, 16)?)?;
+            let n_par = count(&v, v.at(o, 24)?)?;
+            let par_at = v.size(v.at(o, 32)?)?;
+            let rest = v.u32(v.at(o, 40)?)?;
+            if rest > 2 || v.u32(v.at(o, 44)?)? != 0 {
                 return Err(invalid(
                     FORMAT,
-                    o + 40,
+                    v.at(o, 40)?,
                     "rest behaviour or padding outside its known values",
                 ));
             }
             // counts are checked against what the tables have left before anything is sized by them
-            if n_ins > n_instructions - next_instruction || n_par > n_parameters - next_parameter {
+            if n_ins > n_instructions.saturating_sub(next_instruction)
+                || n_par > n_parameters.saturating_sub(next_parameter)
+            {
                 return Err(invalid(
                     FORMAT,
-                    o + 8,
+                    v.at(o, 8)?,
                     "more instructions or parameters than the tables hold",
                 ));
             }
             // events own consecutive runs of the instruction and parameter tables, in order
-            if (n_ins > 0 && ins_at != next_instruction * INSTRUCTION)
-                || (n_par > 0 && par_at != next_parameter * PARAMETER)
+            if (n_ins > 0 && ins_at != v.element(0, next_instruction, INSTRUCTION)?)
+                || (n_par > 0 && par_at != v.element(0, next_parameter, PARAMETER)?)
             {
                 return Err(invalid(
                     FORMAT,
@@ -185,32 +198,37 @@ impl Script {
             }
             let mut instructions = Vec::with_capacity(n_ins);
             for k in 0..n_ins {
-                let p = instructions_at + (next_instruction + k) * INSTRUCTION;
+                let p = v.element(instructions_at, next_instruction.saturating_add(k), INSTRUCTION)?;
                 let bank = v.u32(p)? as i32;
-                let id = v.u32(p + 4)? as i32;
-                let len = count(&v, p + 8)?;
-                let at = i64_at(&v, p + 16)?;
-                let layer_at = i64_at(&v, p + 24)?;
+                let id = v.u32(v.at(p, 4)?)? as i32;
+                let len = count(&v, v.at(p, 8)?)?;
+                let at_slot = v.at(p, 16)?;
+                let at = i64_at(&v, at_slot)?;
+                let layer_slot = v.at(p, 24)?;
+                let layer_at = i64_at(&v, layer_slot)?;
                 let args = if len == 0 {
                     Vec::new()
                 } else {
-                    let at = usize::try_from(at).map_err(|_| invalid(FORMAT, p + 16, "argument offset"))?;
+                    let at = usize::try_from(at).map_err(|_| invalid(FORMAT, at_slot, "argument offset"))?;
                     if at.checked_add(len).is_none_or(|end| end > args_len) {
-                        return Err(invalid(FORMAT, p + 16, "arguments outside the argument block"));
+                        return Err(invalid(FORMAT, at_slot, "arguments outside the argument block"));
                     }
-                    spans.push((args_at + at, len));
-                    budget.charge(p + 8, len)?;
-                    v.slice(args_at + at, len)?.to_vec()
+                    let arg_start = v.at(args_at, at)?;
+                    spans.push((arg_start, len));
+                    budget.charge(v.at(p, 8)?, len)?;
+                    v.slice(arg_start, len)?.to_vec()
                 };
                 let layer = match layer_at {
                     -1 => None,
-                    at if at >= 0
-                        && (at as usize).is_multiple_of(LAYER)
-                        && (at as usize) / LAYER < n_layers =>
-                    {
-                        Some(layers[at as usize / LAYER])
-                    }
-                    _ => return Err(invalid(FORMAT, p + 24, "layer offset")),
+                    at => match usize::try_from(at) {
+                        Ok(at) if at.is_multiple_of(LAYER) => at
+                            .checked_div(LAYER)
+                            .and_then(|index| layers.get(index))
+                            .copied()
+                            .map(Some)
+                            .ok_or_else(|| invalid(FORMAT, layer_slot, "layer offset"))?,
+                        _ => return Err(invalid(FORMAT, layer_slot, "layer offset")),
+                    },
                 };
                 instructions.push(Instruction {
                     bank,
@@ -221,13 +239,13 @@ impl Script {
             }
             let mut parameters = Vec::with_capacity(n_par);
             for k in 0..n_par {
-                let p = parameters_at + (next_parameter + k) * PARAMETER;
+                let p = v.element(parameters_at, next_parameter.saturating_add(k), PARAMETER)?;
                 let par = Parameter {
                     instruction: count(&v, p)?,
-                    target: count(&v, p + 8)?,
-                    source: count(&v, p + 16)?,
-                    bytes: v.u32(p + 24)?,
-                    unk: v.u32(p + 28)? as i32,
+                    target: count(&v, v.at(p, 8)?)?,
+                    source: count(&v, v.at(p, 16)?)?,
+                    bytes: v.u32(v.at(p, 24)?)?,
+                    unk: v.u32(v.at(p, 28)?)? as i32,
                 };
                 let fits = instructions.get(par.instruction).is_some_and(|ins| {
                     par.target
@@ -243,8 +261,8 @@ impl Script {
                 }
                 parameters.push(par);
             }
-            next_instruction += n_ins;
-            next_parameter += n_par;
+            next_instruction = next_instruction.saturating_add(n_ins);
+            next_parameter = next_parameter.saturating_add(n_par);
             events.push(Event {
                 id,
                 rest,
@@ -260,7 +278,7 @@ impl Script {
             ));
         }
         let linked_files = (0..n_linked)
-            .map(|i| i64_at(&v, linked_at + 8 * i))
+            .map(|i| i64_at(&v, v.element(linked_at, i, 8)?))
             .collect::<Result<Vec<_>>>()?;
         budget.charge(h(14), strings_len)?;
         let strings = v.slice(strings_at, strings_len)?.to_vec();

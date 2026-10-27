@@ -23,6 +23,14 @@
 //! What this reads is everything but the three blocks it does not interpret, which [`Gparam::unread`] counts: the comment
 //! tables, the opaque `data30` block and the extras (SoulsFormats: `UnkParamExtra`, which tie value IDs of groups
 //! together).
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation
+    )
+)]
 use crate::{
     Result,
     bytes::{Budget, View},
@@ -281,13 +289,13 @@ impl Gparam {
         let mut groups = Vec::with_capacity(group_count);
         for g in 0..group_count {
             let at = groups_at
-                .checked_add(int(group_offsets + g * 4)?)
+                .checked_add(int(v.element(group_offsets, g, 4)?)?)
                 .ok_or_else(|| invalid(FORMAT, group_offsets, "size overflow"))?;
             let field_count = int(at)?;
             let field_table = field_offsets
-                .checked_add(int(at + 4)?)
+                .checked_add(int(v.at(at, 4)?)?)
                 .ok_or_else(|| invalid(FORMAT, at, "size overflow"))?;
-            let (key, end) = v.utf16z(at + 8, &budget)?;
+            let (key, end) = v.utf16z(v.at(at, 8)?, &budget)?;
             let (name, _) = v.utf16z(end, &budget)?;
             v.slice(
                 field_table,
@@ -295,11 +303,11 @@ impl Gparam {
                     .checked_mul(4)
                     .ok_or_else(|| invalid(FORMAT, at, "count overflow"))?,
             )?;
-            budget.charge(field_table, field_count * 4)?;
+            budget.charge(field_table, field_count.saturating_mul(4))?;
             let mut fields = Vec::with_capacity(field_count);
             for f in 0..field_count {
                 let record = fields_at
-                    .checked_add(int(field_table + f * 4)?)
+                    .checked_add(int(v.element(field_table, f, 4)?)?)
                     .ok_or_else(|| invalid(FORMAT, field_table, "size overflow"))?;
                 fields.push(read_field(&v, version, record, values_at, ids_at, &budget)?);
             }
@@ -328,14 +336,15 @@ fn read_field(
 ) -> Result<Field> {
     let values_offset =
         usize::try_from(v.u32(record)?).map_err(|_| invalid(FORMAT, record, "size overflow"))?;
+    let ids_slot = v.at(record, 4)?;
     let ids_offset =
-        usize::try_from(v.u32(record + 4)?).map_err(|_| invalid(FORMAT, record + 4, "size overflow"))?;
+        usize::try_from(v.u32(ids_slot)?).map_err(|_| invalid(FORMAT, ids_slot, "size overflow"))?;
     let (kind, capacity) = if version < 6 {
-        (v.u8(record + 8)?, usize::from(v.u8(record + 9)?))
+        (v.u8(v.at(record, 8)?)?, usize::from(v.u8(v.at(record, 9)?)?))
     } else {
-        (v.u8(record + 10)?, usize::from(v.u16(record + 8)?))
+        (v.u8(v.at(record, 10)?)?, usize::from(v.u16(v.at(record, 8)?)?))
     };
-    let (key, end) = v.utf16z(record + 12, budget)?;
+    let (key, end) = v.utf16z(v.at(record, 12)?, budget)?;
     let (name, _) = v.utf16z(end, budget)?;
     let mut at = values_at
         .checked_add(values_offset)
@@ -345,16 +354,17 @@ fn read_field(
     let mut times = Vec::new();
     let mut id_at = ids_at
         .checked_add(ids_offset)
-        .ok_or_else(|| invalid(FORMAT, record + 4, "size overflow"))?;
+        .ok_or_else(|| invalid(FORMAT, ids_slot, "size overflow"))?;
     let stride = if version >= 5 { 8 } else { 4 };
-    v.slice(id_at, capacity * stride)?;
-    budget.charge(id_at, capacity * stride)?;
+    let id_bytes = capacity.saturating_mul(stride);
+    v.slice(id_at, id_bytes)?;
+    budget.charge(id_at, id_bytes)?;
     for _ in 0..capacity {
         ids.push(v.u32(id_at)? as i32);
         if version >= 5 {
-            times.push(f32::from_bits(v.u32(id_at + 4)?));
+            times.push(f32::from_bits(v.u32(v.at(id_at, 4)?)?));
         }
-        id_at += stride;
+        id_at = v.at(id_at, stride)?;
     }
     Ok(Field {
         key,
@@ -377,13 +387,14 @@ fn read_values(v: &View<'_>, kind: u8, n: usize, at: &mut usize, budget: &Budget
         other => return Err(invalid(FORMAT, *at, format!("field type {other}"))),
     };
     if size > 0 {
-        v.slice(*at, n * size)?;
-        budget.charge(*at, n * size)?;
+        let bytes = n.saturating_mul(size);
+        v.slice(*at, bytes)?;
+        budget.charge(*at, bytes)?;
     }
     let start = *at;
     let mut each = |width: usize| -> Result<usize> {
         let o = *at;
-        *at += width;
+        *at = v.at(o, width)?;
         Ok(o)
     };
     // `take` reads n values of `width` bytes with `f`
@@ -411,16 +422,26 @@ fn read_values(v: &View<'_>, kind: u8, n: usize, at: &mut usize, budget: &Budget
         10 => Values::F64(take!(8, |o| v.u64(o).map(f64::from_bits))),
         11 => Values::Bool(take!(1, |o| v.boolean(o))),
         12 => Values::Vec2(take!(16, |o| -> Result<[f32; 2]> {
-            Ok([f32_at(o)?, f32_at(o + 4)?])
+            Ok([f32_at(o)?, f32_at(v.at(o, 4)?)?])
         })),
         13 => Values::Vec3(take!(16, |o| -> Result<[f32; 3]> {
-            Ok([f32_at(o)?, f32_at(o + 4)?, f32_at(o + 8)?])
+            Ok([f32_at(o)?, f32_at(v.at(o, 4)?)?, f32_at(v.at(o, 8)?)?])
         })),
         14 => Values::Vec4(take!(16, |o| -> Result<[f32; 4]> {
-            Ok([f32_at(o)?, f32_at(o + 4)?, f32_at(o + 8)?, f32_at(o + 12)?])
+            Ok([
+                f32_at(o)?,
+                f32_at(v.at(o, 4)?)?,
+                f32_at(v.at(o, 8)?)?,
+                f32_at(v.at(o, 12)?)?,
+            ])
         })),
         15 => Values::Rgba(take!(4, |o| -> Result<[u8; 4]> {
-            Ok([v.u8(o)?, v.u8(o + 1)?, v.u8(o + 2)?, v.u8(o + 3)?])
+            Ok([
+                v.u8(o)?,
+                v.u8(v.at(o, 1)?)?,
+                v.u8(v.at(o, 2)?)?,
+                v.u8(v.at(o, 3)?)?,
+            ])
         })),
         _ => {
             let mut out = Vec::with_capacity(n.min(v.data.len()));

@@ -4,6 +4,14 @@
 //! (offsets in the constant buffer, defaults, name hashes). Every length, offset and zero field is checked; a file
 //! that breaks one is refused with its offset. Names follow the third-party SoulsFormatsNEXT reader of the format;
 //! a field it calls unknown is kept under its offset.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation
+    )
+)]
 use crate::{
     Result,
     bytes::{Budget, View},
@@ -189,12 +197,22 @@ impl Reader<'_> {
             return Err(invalid(FORMAT, start, "unterminated string"));
         };
         // charged once its end is found, before it is built: names naming one long string over and over are refused
-        self.budget.charge(start, 2 * length + 2)?;
-        let units: Vec<u16> = rest.as_chunks::<2>().0[..length]
+        self.budget
+            .charge(start, length.saturating_add(1).saturating_mul(2))?;
+        let units: Vec<u16> = rest
+            .as_chunks::<2>()
+            .0
             .iter()
+            .take(length)
             .map(|pair| u16::from_le_bytes(*pair))
             .collect();
         String::from_utf16(&units).map_err(|_| invalid(FORMAT, start, "unpaired surrogate"))
+    }
+    fn string_at(&self, base: usize, delta: usize) -> Result<String> {
+        self.string(self.v.at(base, delta)?)
+    }
+    fn f32_at(&self, base: usize, delta: usize) -> Result<f32> {
+        self.f32(self.v.at(base, delta)?)
     }
     fn f32(&self, at: usize) -> Result<f32> {
         let x = f32::from_bits(self.v.u32(at)?);
@@ -205,7 +223,7 @@ impl Reader<'_> {
     }
     fn count(&self, at: usize, stride: usize) -> Result<usize> {
         let n = usize::try_from(self.v.u32(at)?).map_err(|_| invalid(FORMAT, at, "count"))?;
-        if n > self.v.data.len() / stride {
+        if n > self.v.data.len().checked_div(stride).unwrap_or(0) {
             return Err(invalid(FORMAT, at, "count exceeds the file"));
         }
         Ok(n)
@@ -245,38 +263,38 @@ impl Metaparam {
         let mut textures = Vec::with_capacity(texture_count);
         r.table(0x98, texture_count, 48)?;
         for i in 0..texture_count {
-            let at = 0x98 + i * 48;
-            r.zero(at + 10, 1)?;
-            r.zero(at + 0x24, 0xc)?;
+            let at = r.v.element(0x98, i, 48)?;
+            r.zero(r.v.at(at, 10)?, 1)?;
+            r.zero(r.v.at(at, 0x24)?, 0xc)?;
             textures.push(Texture {
                 name: r.string(at)?,
-                default_texture: r.string(at + 0x10)?,
-                uv_group: r.string(at + 0x18)?,
-                slot: r.v.u8(at + 9)?,
-                kind: r.v.u8(at + 11)?,
-                unknown_08: r.v.u8(at + 8)?,
-                unknown_0c: r.v.u32(at + 12)? as i32,
-                unknown_20: r.v.u32(at + 0x20)?,
+                default_texture: r.string_at(at, 0x10)?,
+                uv_group: r.string_at(at, 0x18)?,
+                slot: r.v.u8_at(at, 9)?,
+                kind: r.v.u8_at(at, 11)?,
+                unknown_08: r.v.u8_at(at, 8)?,
+                unknown_0c: r.v.u32_at(at, 12)? as i32,
+                unknown_20: r.v.u32_at(at, 0x20)?,
             });
         }
-        let passes_at = 0x98 + texture_count * 48;
+        let passes_at = r.v.element(0x98, texture_count, 48)?;
         let entries_at = r.offset(passes_at)?;
-        let pass_count = r.count(passes_at + 8, 24)?;
-        r.zero(passes_at + 12, 4)?;
-        r.zero(passes_at + 16, 0x18)?;
+        let pass_count = r.count(r.v.at(passes_at, 8)?, 24)?;
+        r.zero(r.v.at(passes_at, 12)?, 4)?;
+        r.zero(r.v.at(passes_at, 16)?, 0x18)?;
         let mut passes = Vec::with_capacity(pass_count);
         if pass_count > 0 {
             r.table(entries_at, pass_count, 24)?;
         }
         for i in 0..pass_count {
-            let at = entries_at + i * 24;
-            r.zero(at + 4, 4)?;
-            r.zero(at + 20, 4)?;
+            let at = r.v.element(entries_at, i, 24)?;
+            r.zero(r.v.at(at, 4)?, 4)?;
+            r.zero(r.v.at(at, 20)?, 4)?;
             passes.push(RenderPass {
                 pass_id: r.v.u32(at)?,
-                pixel_samplers: r.v.u32(at + 8)?,
-                hull_samplers: r.v.u32(at + 12)?,
-                vertex_samplers: r.v.u32(at + 16)?,
+                pixel_samplers: r.v.u32_at(at, 8)?,
+                hull_samplers: r.v.u32_at(at, 12)?,
+                vertex_samplers: r.v.u32_at(at, 16)?,
             });
         }
         let mut ca_params = Vec::with_capacity(ca_count);
@@ -284,18 +302,18 @@ impl Metaparam {
             r.table(ca_at, ca_count, 0x60)?;
         }
         for i in 0..ca_count {
-            let at = ca_at + i * 0x60;
-            r.zero(at + 8, 0x1c + 4)?;
-            r.zero(at + 0x40, 8)?;
-            r.zero(at + 0x48, 0x18)?;
+            let at = r.v.element(ca_at, i, 0x60)?;
+            r.zero(r.v.at(at, 8)?, 0x1c + 4)?;
+            r.zero(r.v.at(at, 0x40)?, 8)?;
+            r.zero(r.v.at(at, 0x48)?, 0x18)?;
             ca_params.push(CaParam {
                 name: r.string(at)?,
-                sequence_index: r.v.u32(at + 0x28)?,
-                param_id: r.v.u32(at + 0x2c)?,
-                component: r.v.u32(at + 0x30)?,
-                default: r.f32(at + 0x34)?,
-                unknown_40: r.v.u32(at + 0x38)?,
-                key: r.v.u32(at + 0x3c)?,
+                sequence_index: r.v.u32_at(at, 0x28)?,
+                param_id: r.v.u32_at(at, 0x2c)?,
+                component: r.v.u32_at(at, 0x30)?,
+                default: r.f32_at(at, 0x34)?,
+                unknown_40: r.v.u32_at(at, 0x38)?,
+                key: r.v.u32_at(at, 0x3c)?,
             });
         }
         let mut mtd_params = Vec::with_capacity(mtd_count);
@@ -303,30 +321,30 @@ impl Metaparam {
             r.table(mtd_at, mtd_count, 0x50)?;
         }
         for i in 0..mtd_count {
-            let at = mtd_at + i * 0x50;
-            r.zero(at + 8, 0x1c)?;
-            r.zero(at + 0x48, 8)?;
-            let value_type = r.v.u8(at + 0x2c)?;
-            let not_shader_input = match r.v.u8(at + 0x2d)? {
+            let at = r.v.element(mtd_at, i, 0x50)?;
+            r.zero(r.v.at(at, 8)?, 0x1c)?;
+            r.zero(r.v.at(at, 0x48)?, 8)?;
+            let value_type = r.v.u8_at(at, 0x2c)?;
+            let not_shader_input = match r.v.u8_at(at, 0x2d)? {
                 0 => false,
                 2 => true,
-                _ => return Err(invalid(FORMAT, at + 0x2d, "not-a-shader-input flag")),
+                _ => return Err(invalid(FORMAT, r.v.at(at, 0x2d)?, "not-a-shader-input flag")),
             };
-            let srgb = r.v.boolean(at + 0x2e)?;
-            let colour = r.v.boolean(at + 0x2f)?;
+            let srgb = r.v.boolean(r.v.at(at, 0x2e)?)?;
+            let colour = r.v.boolean(r.v.at(at, 0x2f)?)?;
             let mut default = [0.; 5];
             for (j, d) in default.iter_mut().enumerate() {
-                *d = r.f32(at + 0x34 + j * 4)?;
+                *d = r.f32(r.v.element(r.v.at(at, 0x34)?, j, 4)?)?;
             }
             mtd_params.push(MtdParam {
                 name: r.string(at)?,
-                start: r.v.u32(at + 0x24)?,
-                sequence_index: r.v.u32(at + 0x28)? as i32,
+                start: r.v.u32_at(at, 0x24)?,
+                sequence_index: r.v.u32_at(at, 0x28)? as i32,
                 value_type,
                 not_shader_input,
                 srgb,
                 colour,
-                key: r.v.u32(at + 0x30)?,
+                key: r.v.u32_at(at, 0x30)?,
                 default,
             });
         }

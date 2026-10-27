@@ -39,6 +39,14 @@ impl<'a> View<'a> {
             .and_then(|delta| base.checked_add(delta))
             .ok_or_else(|| invalid(self.format, base, "offset overflow"))
     }
+    /// [`View::u8`] at `delta` bytes after `base`.
+    pub fn u8_at(&self, base: usize, delta: usize) -> Result<u8> {
+        self.u8(self.at(base, delta)?)
+    }
+    /// [`View::u32`] at `delta` bytes after `base`.
+    pub fn u32_at(&self, base: usize, delta: usize) -> Result<u32> {
+        self.u32(self.at(base, delta)?)
+    }
     pub fn slice(&self, o: usize, n: usize) -> Result<&'a [u8]> {
         primase_foundations::bytes::View::new(self.data)
             .slice(o, n)
