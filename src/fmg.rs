@@ -14,8 +14,11 @@
 //! string offset: u64 (u32 in version 1) from the file's start to a NUL-terminated UTF-16 string, 0 for none
 //! ```
 //!
-//! A group holds the ids `first..=last`, its strings the offsets from `index` on. The layout is SoulsFormats' `FMG`
-//! (as SoulsFormatsNEXT states it); a file that departs from it is refused, naming the byte.
+//! A group holds the ids `first..=last`, its strings the offsets from `index` on. The groups follow each other: ids
+//! strictly ascending (no id twice), each group's index the sum of the counts before it, the counts adding up to the
+//! string count. In version 2 the size field is the file's length and the groups' table ends where the string offsets
+//! begin. The layout is SoulsFormats' `FMG` (as SoulsFormatsNEXT states it); a file that departs from it is refused,
+//! naming the byte.
 use std::collections::BTreeMap;
 
 use crate::{Result, invalid};
@@ -104,8 +107,29 @@ impl Fmg {
                 format!("{groups} groups and {strings} strings in {} bytes", data.len()),
             ));
         }
+        if wide {
+            if u32_at(0x14)? != 0xff {
+                return Err(invalid(
+                    FORMAT,
+                    0x14,
+                    "the word at 0x14 is 0xff in the games' files",
+                ));
+            }
+            if u64_at(0x20)? != 0 {
+                return Err(invalid(FORMAT, 0x20, "the word at 0x20 is 0 in the games' files"));
+            }
+            let table_end = offset_plus(first_group, groups.saturating_mul(group_size))?;
+            if table_end != offsets {
+                return Err(invalid(
+                    FORMAT,
+                    0x18,
+                    format!("string offsets at {offsets:#x}, the groups end at {table_end:#x}"),
+                ));
+            }
+        }
         let mut entries = BTreeMap::new();
         let mut counted = 0usize;
+        let mut previous_last: Option<i32> = None;
         for g in 0..groups {
             let at = offset_plus(first_group, g.saturating_mul(group_size))?;
             let (index, first, last) = (
@@ -115,6 +139,24 @@ impl Fmg {
             );
             if last < first {
                 return Err(invalid(FORMAT, at, format!("a group of ids {first} to {last}")));
+            }
+            if previous_last.is_some_and(|before| first <= before) {
+                return Err(invalid(
+                    FORMAT,
+                    at,
+                    format!(
+                        "a group of ids {first} to {last} after one that ends at {}",
+                        previous_last.unwrap_or(0)
+                    ),
+                ));
+            }
+            previous_last = Some(last);
+            if index != counted {
+                return Err(invalid(
+                    FORMAT,
+                    at,
+                    format!("a group whose strings start at {index}, after {counted} strings"),
+                ));
             }
             let count = usize::try_from(last.abs_diff(first))
                 .ok()
@@ -145,6 +187,20 @@ impl Fmg {
                     .ok_or_else(|| invalid(FORMAT, at, format!("a group of ids {first} to {last}")))?;
                 entries.insert(id, utf16_at(data, offset)?);
             }
+        }
+        if counted != strings {
+            return Err(invalid(
+                FORMAT,
+                0x10,
+                format!("the groups hold {counted} strings, it states {strings}"),
+            ));
+        }
+        if wide && u32_at(0x04)? as usize != data.len() {
+            return Err(invalid(
+                FORMAT,
+                4,
+                format!("a size of {} for a file of {} bytes", u32_at(0x04)?, data.len()),
+            ));
         }
         Ok(Fmg { entries })
     }
@@ -283,5 +339,41 @@ pub(crate) mod tests {
         assert!(refused(&|b| b[0x30..0x34].copy_from_slice(&0i32.to_le_bytes())).contains("ids 1 to 0"));
         // a count the file cannot hold
         assert!(refused(&|b| b[0x0c..0x10].copy_from_slice(&u32::MAX.to_le_bytes())).contains("groups and"));
+        // a string count the groups do not fill
+        assert!(refused(&|b| b[0x10] = 2).contains("the groups hold 1 strings, it states 2"));
+        // a size that is not the file's, a word the games' files hold as 0xff or 0, an offset table that is not where
+        // the groups end
+        assert!(refused(&|b| b[4] ^= 1).contains("a size of"));
+        assert!(refused(&|b| b[0x14] = 0).contains("0xff"));
+        assert!(refused(&|b| b[0x20] = 1).contains("0x20"));
+        assert!(refused(&|b| b[0x18] += 8).contains("the groups end at"));
+    }
+
+    /// Ids appear once, in ascending groups, whose strings follow each other.
+    #[test]
+    fn groups_that_repeat_overlap_or_skip_are_refused() {
+        let one: &[Option<&str>] = &[Some("a"), Some("b")];
+        let refused = |groups: &[(i32, &[Option<&str>])], wide: bool| {
+            Fmg::read(&build(groups, wide)).unwrap_err().to_string()
+        };
+        for wide in [true, false] {
+            // the same id in two groups, and a group that starts inside the one before
+            assert!(refused(&[(5, one), (5, one)], wide).contains("after one that ends at 6"));
+            assert!(refused(&[(5, one), (6, one)], wide).contains("after one that ends at 6"));
+            // groups in descending order
+            assert!(refused(&[(9, one), (5, one)], wide).contains("after one that ends at 10"));
+            // adjacent groups are fine, and so is a negative id
+            let fmg = Fmg::read(&build(&[(-3, one), (-1, one), (7, one)], wide)).unwrap();
+            assert_eq!(fmg.entries.len(), 6);
+        }
+        // a group whose strings do not start after the previous group's
+        let mut bytes = build(&[(5, one), (9, one)], true);
+        bytes[0x28 + 16] = 1;
+        assert!(
+            Fmg::read(&bytes)
+                .unwrap_err()
+                .to_string()
+                .contains("start at 1, after 2 strings")
+        );
     }
 }
