@@ -17,7 +17,7 @@
 mod inputs;
 
 use fromsoft_formats::collision;
-use havok_formats::Compendium;
+use havok_formats::{Compendium, Tagfile, sections};
 
 /// The position bound in units of `EPSILON * m` (the module comment derives it).
 const BOUND: f32 = 8.;
@@ -101,6 +101,72 @@ fn castle_raw_soups() -> Result<(), Box<dyn std::error::Error>> {
     assert!(count > 0);
     eprintln!(
         "collision files {count}, triangles {triangles}, unmapped {unmapped} ({placement_dependent} of them placement-dependent), invalid material keys {invalid_keys}: counts, order and determined materials exact; positions {positions}, {inexact} not exact, widest {widest} * EPSILON * m (bound {BOUND})"
+    );
+    Ok(())
+}
+
+/// The mesh tree stores the key width the shape stores: a real castle tree with its `bitsPerKey` raised by one is
+/// refused, naming both. Skips without the Sekiro corpus.
+#[test]
+fn a_tree_key_width_that_differs_from_the_shapes_is_refused() -> Result<(), Box<dyn std::error::Error>> {
+    let Some(dir) = inputs::oracle(inputs::OracleSet::Corpus, inputs::Game::Sekiro, "havok") else {
+        return Ok(());
+    };
+    let mut files = std::fs::read_dir(dir)?
+        .map(|p| p.map(|p| p.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+    files.sort();
+    let comp = files
+        .iter()
+        .find(|p| p.extension().is_some_and(|e| e == "compendium"))
+        .ok_or("missing compendium")?;
+    let comp = Compendium::read(&std::fs::read(comp)?)?;
+    let path = files
+        .iter()
+        .find(|p| p.extension().is_some_and(|e| e == "hkx"))
+        .ok_or("missing tagfile")?;
+    let bytes = std::fs::read(path)?;
+    collision::read_map(&bytes, Some(&comp))?;
+    // the file offset of the first mesh tree's bitsPerKey: DATA's payload plus the value's offset in it
+    let tag = Tagfile::read(&bytes, Some(&comp))?;
+    let variants = tag.root()?.field("namedVariants")?.array()?;
+    let systems = variants
+        .get(0)?
+        .field("variant")?
+        .dereference()?
+        .field("systemDatas")?
+        .array()?;
+    let bodies = systems.get(0)?.dereference()?.field("bodyCinfos")?.array()?;
+    let bits = bodies
+        .get(0)?
+        .field("shape")?
+        .dereference()?
+        .field("data")?
+        .dereference()?
+        .field("meshTree")?
+        .field("bitsPerKey")?;
+    let stored = bits.signed()?;
+    let data = sections(&bytes)?
+        .first()
+        .ok_or("no root section")?
+        .children()?
+        .into_iter()
+        .find(|s| s.signature == *b"DATA")
+        .ok_or("no DATA section")?;
+    let mut patched = bytes.clone();
+    let at = data.offset + 8 + bits.offset;
+    assert_eq!(
+        i64::from(patched[at]),
+        stored,
+        "the first byte of the little-endian int"
+    );
+    patched[at] += 1;
+    let e = collision::read_map(&patched, Some(&comp))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        e.contains("numShapeKeyBits is") && e.contains("bitsPerKey"),
+        "{e}"
     );
     Ok(())
 }

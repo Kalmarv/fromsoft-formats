@@ -60,6 +60,21 @@ fn material_keys(shape: Value<'_, '_>, has_triangles: bool) -> Result<KeyMateria
     let primitive_data = parameter.field("primitiveDataArray")?.array()?;
     let keys = shape.field("triangleIndexToShapeKey")?.array()?;
     let bits = shape.field("numShapeKeyBits")?.unsigned()?;
+    // The shape's key width is the tree's: every compressed mesh of the Sekiro and Elden Ring installs stores the same
+    // count in both. A tree that disagrees would put the keys' section and primitive bits elsewhere.
+    let tree_bits = shape
+        .field("data")?
+        .dereference()?
+        .field("meshTree")?
+        .field("bitsPerKey")?
+        .signed()?;
+    if i64::try_from(bits).ok() != Some(tree_bits) {
+        return Err(invalid(
+            "collision",
+            shape.offset,
+            format!("numShapeKeyBits is {bits}, the mesh tree's bitsPerKey {tree_bits}"),
+        ));
+    }
     // A mesh of no triangles has no key bits: its rows identify nothing, and are counted as no key's.
     if bits == 0 && !has_triangles && keys.len() <= triangle_data.len() {
         return Ok(KeyMaterials {
@@ -290,7 +305,8 @@ fn convex(
 pub struct Body {
     /// The body's stored name.
     pub name: String,
-    /// Stored motion classification; interpreting 2 as keyframed is policy.
+    /// `motionType`, as stored: 0 static, 1 keyframed, 2 dynamic. Map bodies are all 0; among object and asset bodies
+    /// only 2 stores a positive mass (the meaning is inferred from that, not from a name in the files).
     pub motion_type: u64,
     /// The Havok class name of the shape (for a compressed mesh that holds extern shapes, of the shape read).
     pub shape: String,
