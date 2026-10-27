@@ -22,15 +22,10 @@ pub(crate) const ARCHIVES: ArchiveSet = ArchiveSet {
 /// Elden Ring's params: `regulation.bin` beside the executable, AES-256-CBC encrypted (the file's first 16 bytes the
 /// initialisation vector), holding a DCX envelope (ZSTD in the game's current release) around the param binder. The key
 /// is the user's key material, as the archives' are: `regulation.key` in the keys folder, the
-/// 32 bytes as 64 hexadecimal digits (the key SoulsFormats' `RegulationDecryptor` names for the game), held to its
-/// SHA-256 here.
+/// 32 bytes as 64 hexadecimal digits (the key SoulsFormats' `RegulationDecryptor` names for the game).
 pub(crate) const PARAMS: crate::game::ParamSource = crate::game::ParamSource::Regulation {
     file: "regulation.bin",
     key_file: "regulation.key",
-    key_sha256: [
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    ],
 };
 
 /// Elden Ring's NPC param, `NPC_PARAM_ST` data version 9 with rows of 736 bytes: `modelDispMask0..15` in bytes 330 and
