@@ -8,6 +8,10 @@
 //! on Sekiro's castle (m11_01): the walls with the charcoal layer are the group hidden while flag 8302 is off, and a
 //! live save with 8301, 8302 and 8306 off shows the intact walls.
 //!
+//! These are Sekiro's functions and Sekiro's layout of the call: in Elden Ring's scripts `2000:6` takes a slot number
+//! (below 100) before the function, and the numbers 20004110, 20004112 and 20004114 are no part-state functions, so
+//! no call of an Elden Ring script is decided here and the calls are counted by the function they name.
+//!
 //! Calls that cannot be decided
 //! statically (another argument count, or arguments filled by parameter substitution), other common functions that
 //! touch parts, and state instructions with literal entities in story events are not interpreted: the parts they name
@@ -15,6 +19,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::Game;
 use crate::emevd::Script;
 use crate::msb::{Part, PartKind};
 
@@ -68,9 +73,15 @@ fn key(kind: PartKind) -> PartKindKey {
 }
 
 impl Rules {
-    /// The rules of one script.
-    pub fn read(script: &Script) -> Self {
+    /// The rules of one script of `game`. Sekiro's `2000:6` calls name the function first; Elden Ring's name a slot
+    /// first, and none of its functions is a part-state function (every call is counted in
+    /// [`Rules::other_calls`] by the function it names).
+    pub fn read(script: &Script, game: Game) -> Self {
         let mut s = Rules::default();
+        let (slot_words, state_functions): (usize, &[(i32, PartKind)]) = match game {
+            Game::Sekiro => (0, &STATE_FUNCTIONS),
+            Game::EldenRing => (1, &[]),
+        };
         for e in &script.events {
             for (k, ins) in e.instructions.iter().enumerate() {
                 let substituted = e.parameters.iter().any(|p| p.instruction == k);
@@ -88,10 +99,10 @@ impl Rules {
                 if (ins.bank, ins.id) != (2000, 6) {
                     continue;
                 }
-                let Some((&function, tail)) = args.split_first() else {
+                let Some((&function, tail)) = args.get(slot_words..).and_then(<[i32]>::split_first) else {
                     continue;
                 };
-                let Some(&(_, kind)) = STATE_FUNCTIONS.iter().find(|(f, _)| *f == function) else {
+                let Some(&(_, kind)) = state_functions.iter().find(|(f, _)| *f == function) else {
                     {
                         let calls = s.other_calls.entry(function).or_default();
                         *calls = calls.saturating_add(1);
@@ -144,5 +155,68 @@ impl Rules {
             .flatten()
             .flat_map(|r| r.disabled_when.iter().map(|&(f, _)| f))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::emevd::{Event, Instruction};
+
+    fn call(arguments: &[i32]) -> Script {
+        Script {
+            events: vec![Event {
+                id: 50,
+                rest: 0,
+                instructions: vec![Instruction {
+                    bank: 2000,
+                    id: 6,
+                    args: arguments.iter().flat_map(|x| x.to_le_bytes()).collect(),
+                    layer: None,
+                }],
+                parameters: Vec::new(),
+            }],
+            linked_files: Vec::new(),
+            strings: Vec::new(),
+        }
+    }
+
+    /// Sekiro's `2000:6` names the function first; Elden Ring's names a slot first, and the part-state function numbers
+    /// are Sekiro's alone.
+    #[test]
+    fn the_function_follows_the_slot_in_elden_rings_calls() {
+        let sekiro = Rules::read(&call(&[20004110, 1117204, 8302, 0, 0, 0, 0x01]), Game::Sekiro);
+        assert_eq!(sekiro.decided, BTreeMap::from([(20004110, 1)]));
+        assert!(sekiro.other_calls.is_empty());
+        assert_eq!(sekiro.flags(), BTreeSet::from([8302]));
+        // the same words read as Elden Ring's: slot 20004110 is no slot, so the call is another function's
+        let elden = Rules::read(
+            &call(&[7, 20004110, 1117204, 8302, 0, 0, 0, 0x01]),
+            Game::EldenRing,
+        );
+        assert!(elden.decided.is_empty() && elden.flags().is_empty());
+        assert_eq!(elden.other_calls, BTreeMap::from([(20004110, 1)]));
+        // the entities the call names are left open, not the slot
+        let part = |id| Part {
+            index: 0,
+            name: String::new(),
+            kind: PartKind::MapPiece,
+            model: None,
+            hit_filter: None,
+            npc_param: None,
+            position: [0.; 3],
+            rotation_degrees: [0.; 3],
+            scale: [1.; 3],
+            entity_id: id,
+            entity_group_ids: [-1; 8],
+            shadows: Default::default(),
+            draw: Default::default(),
+            tile_load: None,
+        };
+        assert!(elden.left_open(&part(1117204)) && elden.left_open(&part(8302)));
+        assert!(!elden.left_open(&part(7)));
+        // an Elden Ring call of no arguments after the slot, or of none at all, names no function
+        assert!(Rules::read(&call(&[7]), Game::EldenRing).other_calls.is_empty());
+        assert!(Rules::read(&call(&[]), Game::EldenRing).other_calls.is_empty());
     }
 }
