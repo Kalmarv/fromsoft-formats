@@ -22,6 +22,9 @@ folder or reference output skips with one line naming the missing input. To run 
   altered file and checks the error.
 - Check each length, count and offset against the data before following it; use the helpers in `src/bytes.rs`
   (`View`, `Budget`, `coverage`) rather than indexing.
+  `src/lib.rs` denies `clippy::indexing_slicing`, `clippy::arithmetic_side_effects` and
+  `clippy::cast_possible_truncation` outside tests: add offsets with `View::at` and `View::element`, read with `get`,
+  convert with `try_from`, and give an allocation sized from the file a bound (`Budget`, or a table slice) first.
 - Only `src/archive.rs` and `src/game_params.rs` read files from disk, and no library code reads the environment or
   starts a process; `clippy.toml` and `#![deny(clippy::disallowed_methods)]` enforce it.
 - A field whose meaning is not established keeps its stored value under a name that says where it sits

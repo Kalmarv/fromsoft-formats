@@ -1,11 +1,3 @@
-#![cfg_attr(
-    not(test),
-    deny(
-        clippy::indexing_slicing,
-        clippy::arithmetic_side_effects,
-        clippy::cast_possible_truncation
-    )
-)]
 use super::Member;
 use crate::{Result, bytes::View, invalid};
 use half::f16;

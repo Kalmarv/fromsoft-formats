@@ -1,14 +1,6 @@
 //! Collision as FromSoftware stores it in Havok tagfiles: map compressed meshes with the fsnp material table that maps
 //! their shape keys to HitMtrlParam IDs ([`read_map`]), and object bodies as meshes and convex shapes
 //! ([`read_bodies`]). The tagfile, compressed mesh and convex shape readers are `havok-formats`'.
-#![cfg_attr(
-    not(test),
-    deny(
-        clippy::indexing_slicing,
-        clippy::arithmetic_side_effects,
-        clippy::cast_possible_truncation
-    )
-)]
 use crate::affine::{compose, pose, pose_columns};
 use crate::{Result, invalid};
 use havok_formats::convex::ConvexShape;

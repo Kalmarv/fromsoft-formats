@@ -1,14 +1,6 @@
 //! Archive key material in the forms a caller supplies it: an archive pair's RSA public key as a PKCS#1 PEM block
 //! ([`pem_public_key`]), and a 32-byte key as hexadecimal digits, held to a digest when the caller states one
 //! ([`checked_key`]).
-#![cfg_attr(
-    not(test),
-    deny(
-        clippy::indexing_slicing,
-        clippy::arithmetic_side_effects,
-        clippy::cast_possible_truncation
-    )
-)]
 use crate::invalid;
 
 /// The modulus and exponent (big-endian, without leading zeros) of a PKCS#1 `RSA PUBLIC KEY` PEM block.

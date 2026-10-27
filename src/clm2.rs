@@ -3,14 +3,6 @@
 //! word means is not established (SoulsFormatsNEXT names them `Unk00` and `Unk02`), so they are kept as stored.
 //! Sekiro's part binders hold them for the cloth of a body (`bd_m_9500_m.clm2`) and a weapon (`wp_a_0427_c.clm2`), and
 //! some object binders.
-#![cfg_attr(
-    not(test),
-    deny(
-        clippy::indexing_slicing,
-        clippy::arithmetic_side_effects,
-        clippy::cast_possible_truncation
-    )
-)]
 
 use crate::bytes::{Budget, View};
 use crate::{Result, invalid};

@@ -1,12 +1,4 @@
 //! BND4 file tables, names, hash buckets and file payloads.
-#![cfg_attr(
-    not(test),
-    deny(
-        clippy::indexing_slicing,
-        clippy::arithmetic_side_effects,
-        clippy::cast_possible_truncation
-    )
-)]
 use crate::{
     Result,
     bytes::{Budget, View, coverage},

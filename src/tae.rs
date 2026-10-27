@@ -12,14 +12,6 @@
 //! The parameter bytes of an event run to the start of the next event's record; the last event's to the animation's
 //! event groups, else to the next animation's header block, else to the end of the file, so they include the zero padding
 //! that aligns the records to 16 bytes.
-#![cfg_attr(
-    not(test),
-    deny(
-        clippy::indexing_slicing,
-        clippy::arithmetic_side_effects,
-        clippy::cast_possible_truncation
-    )
-)]
 
 use crate::bytes::{Budget, View};
 use crate::{Result, invalid};

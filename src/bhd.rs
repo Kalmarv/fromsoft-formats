@@ -1,13 +1,5 @@
 //! BHD5 archive indexes. The games share the header, buckets and the hash and AES tables; each lays out its 40-byte
 //! file record its own way ([`RecordLayout`]). All integer fields are checked before use.
-#![cfg_attr(
-    not(test),
-    deny(
-        clippy::indexing_slicing,
-        clippy::arithmetic_side_effects,
-        clippy::cast_possible_truncation
-    )
-)]
 use crate::{
     Result,
     bytes::{Budget, View, coverage},

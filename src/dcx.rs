@@ -1,13 +1,5 @@
 //! DCX envelopes with DFLT (zlib), KRAK (Oodle Kraken) and ZSTD payloads. Only the header variants listed at
 //! [`Envelope::parse`] are accepted; any other is an error naming the field.
-#![cfg_attr(
-    not(test),
-    deny(
-        clippy::indexing_slicing,
-        clippy::arithmetic_side_effects,
-        clippy::cast_possible_truncation
-    )
-)]
 use crate::{Result, bytes::View, invalid};
 use primase_foundations::compress::{Decompressor, Zlib, Zstd, oodle::Oodle};
 /// The four-character compression tag a DCX envelope names at offset 40 (`KRAK`, `DFLT`, `ZSTD`), or `None` for bytes

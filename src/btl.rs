@@ -1,13 +1,5 @@
 //! BTL light-bank values: versions 16 (Sekiro) and 18 (Elden Ring) share the 232-byte light record. The file stores
 //! RGB bytes; their transfer function and the mapping of intensity into target watts are the caller's to choose.
-#![cfg_attr(
-    not(test),
-    deny(
-        clippy::indexing_slicing,
-        clippy::arithmetic_side_effects,
-        clippy::cast_possible_truncation
-    )
-)]
 use crate::{
     Result,
     bytes::{Budget, View},

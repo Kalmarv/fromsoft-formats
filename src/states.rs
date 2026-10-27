@@ -12,14 +12,6 @@
 //! statically (another argument count, or arguments filled by parameter substitution), other common functions that
 //! touch parts, and state instructions with literal entities in story events are not interpreted: the parts they name
 //! keep their default presence and are counted in the report.
-#![cfg_attr(
-    not(test),
-    deny(
-        clippy::indexing_slicing,
-        clippy::arithmetic_side_effects,
-        clippy::cast_possible_truncation
-    )
-)]
 
 use std::collections::{BTreeMap, BTreeSet};
 

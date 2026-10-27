@@ -16,14 +16,6 @@
 //!
 //! A group holds the ids `first..=last`, its strings the offsets from `index` on. The layout is SoulsFormats' `FMG`
 //! (as SoulsFormatsNEXT states it); a file that departs from it is refused, naming the byte.
-#![cfg_attr(
-    not(test),
-    deny(
-        clippy::indexing_slicing,
-        clippy::arithmetic_side_effects,
-        clippy::cast_possible_truncation
-    )
-)]
 use std::collections::BTreeMap;
 
 use crate::{Result, invalid};

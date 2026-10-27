@@ -1,12 +1,4 @@
 //! Elden Ring's own rules: what differs from the other FromSoftware games and is not stated by the files themselves.
-#![cfg_attr(
-    not(test),
-    deny(
-        clippy::indexing_slicing,
-        clippy::arithmetic_side_effects,
-        clippy::cast_possible_truncation
-    )
-)]
 use crate::bhd::{PathHash, RecordLayout};
 use crate::game::{ArchivePair, ArchiveSet, CollisionSource, ObjectModel, Resolution};
 use crate::{Result, invalid};

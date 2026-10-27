@@ -23,14 +23,6 @@
 //! What this reads is everything but the three blocks it does not interpret, which [`Gparam::unread`] counts: the comment
 //! tables, the opaque `data30` block and the extras (SoulsFormats: `UnkParamExtra`, which tie value IDs of groups
 //! together).
-#![cfg_attr(
-    not(test),
-    deny(
-        clippy::indexing_slicing,
-        clippy::arithmetic_side_effects,
-        clippy::cast_possible_truncation
-    )
-)]
 use crate::{
     Result,
     bytes::{Budget, View},

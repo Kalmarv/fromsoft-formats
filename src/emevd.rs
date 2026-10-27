@@ -6,14 +6,6 @@
 //! instructions, an unused table, layers, parameters and linked files, length and offset of arguments and strings),
 //! then the tables. Every byte is accounted for: the tables, each instruction's arguments and the strings, with at most
 //! 15 zero bytes of alignment between them.
-#![cfg_attr(
-    not(test),
-    deny(
-        clippy::indexing_slicing,
-        clippy::arithmetic_side_effects,
-        clippy::cast_possible_truncation
-    )
-)]
 
 use crate::bytes::{Budget, View, coverage};
 use crate::{Result, invalid};

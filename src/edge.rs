@@ -1,12 +1,4 @@
 //! EDGE files (hang edges) as Sekiro stores them: grapple points, hang segments and wall-hug segments.
-#![cfg_attr(
-    not(test),
-    deny(
-        clippy::indexing_slicing,
-        clippy::arithmetic_side_effects,
-        clippy::cast_possible_truncation
-    )
-)]
 use crate::{Result, bytes::View, invalid};
 /// What an edge record marks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

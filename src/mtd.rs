@@ -1,13 +1,5 @@
 //! MTD material definitions (`.mtd`, Sekiro): a shader, a description, typed parameters and texture slots, in nested
 //! blocks whose counts and markers are all checked against the file, with Shift-JIS strings decoded strictly.
-#![cfg_attr(
-    not(test),
-    deny(
-        clippy::indexing_slicing,
-        clippy::arithmetic_side_effects,
-        clippy::cast_possible_truncation
-    )
-)]
 use primase_foundations::bytes::Endian;
 
 use crate::{Result, invalid};

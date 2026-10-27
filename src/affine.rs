@@ -1,13 +1,5 @@
 //! Affine arithmetic on the places files store: column matrices in f64 ([`Matrix`]) and in f32 as a pose's columns
 //! ([`pose_columns`]: a Havok body's position and unit quaternion).
-#![cfg_attr(
-    not(test),
-    deny(
-        clippy::indexing_slicing,
-        clippy::arithmetic_side_effects,
-        clippy::cast_possible_truncation
-    )
-)]
 
 /// An affine map in f64: the images of the x, y and z axes, then the translation.
 pub type Matrix = [[f64; 3]; 4];

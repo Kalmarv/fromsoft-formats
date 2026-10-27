@@ -4,14 +4,6 @@
 //! (offsets in the constant buffer, defaults, name hashes). Every length, offset and zero field is checked; a file
 //! that breaks one is refused with its offset. Names follow the third-party SoulsFormatsNEXT reader of the format;
 //! a field it calls unknown is kept under its offset.
-#![cfg_attr(
-    not(test),
-    deny(
-        clippy::indexing_slicing,
-        clippy::arithmetic_side_effects,
-        clippy::cast_possible_truncation
-    )
-)]
 use crate::{
     Result,
     bytes::{Budget, View},

@@ -5,14 +5,6 @@
 //! second time to parts. Euler angles are degrees, applied X, then Z, then Y.
 //! The generations share the section chain and the record envelopes; the [`Generation`] the file's section chain
 //! names supplies what differs.
-#![cfg_attr(
-    not(test),
-    deny(
-        clippy::indexing_slicing,
-        clippy::arithmetic_side_effects,
-        clippy::cast_possible_truncation
-    )
-)]
 use crate::affine::narrow;
 use crate::{Result, bytes::View, invalid};
 

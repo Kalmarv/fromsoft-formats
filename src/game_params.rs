@@ -6,14 +6,6 @@
     clippy::disallowed_methods,
     reason = "reader I/O: reads the game's regulation file beside its executable"
 )]
-#![cfg_attr(
-    not(test),
-    deny(
-        clippy::indexing_slicing,
-        clippy::arithmetic_side_effects,
-        clippy::cast_possible_truncation
-    )
-)]
 use aes::{
     Aes256,
     cipher::{Array, BlockCipherDecrypt, KeyInit},

@@ -1,14 +1,6 @@
 //! FLVER2 models (versions `0x20013`, `0x20014`, `0x20016` and `0x2001a`: Sekiro's and Elden Ring's): bones, dummy
 //! polygons, materials with their texture bindings, vertex layouts and the meshes' decoded vertices and face sets,
 //! kept in the file's coordinates. Edge-compressed indices and the legacy text encoding are refused.
-#![cfg_attr(
-    not(test),
-    deny(
-        clippy::indexing_slicing,
-        clippy::arithmetic_side_effects,
-        clippy::cast_possible_truncation
-    )
-)]
 mod vertex;
 use crate::{
     Result,

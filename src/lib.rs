@@ -58,6 +58,16 @@
 //!
 //! `examples/list_binder.rs` is this example as a program.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
+// Every reader takes the bytes of a stored file: no index or slice that can panic, no arithmetic on offsets or sizes that
+// can wrap, no cast that can truncate (the tests, which build their inputs by hand, are outside the rule).
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation
+    )
+)]
 
 pub mod affine;
 pub mod archive;

@@ -5,14 +5,6 @@
 //! from its type: float3 colours are stored with three floats or five, and a few vectors are stored shorter than
 //! their type (kept as [`Value::Truncated`]). A value no item follows is bounded by its type: what follows it is the
 //! unreferenced tail.
-#![cfg_attr(
-    not(test),
-    deny(
-        clippy::indexing_slicing,
-        clippy::arithmetic_side_effects,
-        clippy::cast_possible_truncation
-    )
-)]
 use crate::{
     Result,
     bytes::{View, coverage},

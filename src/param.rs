@@ -8,14 +8,6 @@
 //! carry. The only layout this module reads is [`NpcParam`]'s, for the one group of fields it reads (the 32
 //! `modelDispMask` bits), at the offsets each game states ([`NpcLayout`], [`crate::Game::npc_param`]); the other fields
 //! of a row are not read.
-#![cfg_attr(
-    not(test),
-    deny(
-        clippy::indexing_slicing,
-        clippy::arithmetic_side_effects,
-        clippy::cast_possible_truncation
-    )
-)]
 use crate::{Result, bytes::View, bytes::coverage, invalid};
 
 const FORMAT: &str = "PARAM";

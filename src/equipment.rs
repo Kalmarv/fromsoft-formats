@@ -3,14 +3,6 @@
 //! `NpcParam` has display masks, not this equipment link. Offsets below are the Sekiro (SDT) Paramdex v4 definitions:
 //! initializer armor IDs +32..48 and npcPlayerSex +228; protector equipModelId +160 and gender +209.
 //! Only the stated fields are read; no face-generation, body-shape or runtime equipment replacement is invented.
-#![cfg_attr(
-    not(test),
-    deny(
-        clippy::indexing_slicing,
-        clippy::arithmetic_side_effects,
-        clippy::cast_possible_truncation
-    )
-)]
 use crate::game_params::{NpcPlacement, npc_placements, read_param};
 use crate::param::{Param, Row};
 use crate::{Archive, Binder, Game, Install, NameDictionary, Result, dcx::Decoder, flver::Model, invalid};

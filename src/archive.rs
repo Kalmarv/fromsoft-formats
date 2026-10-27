@@ -7,14 +7,6 @@
     clippy::disallowed_types,
     reason = "reader I/O: reads the install's archives"
 )]
-#![cfg_attr(
-    not(test),
-    deny(
-        clippy::indexing_slicing,
-        clippy::arithmetic_side_effects,
-        clippy::cast_possible_truncation
-    )
-)]
 pub use crate::bhd::{PathHash, path_hash, path_hash64};
 use crate::{
     Game, Result,
