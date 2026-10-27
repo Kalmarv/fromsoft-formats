@@ -138,7 +138,8 @@ pub struct Header {
     pub salt: Vec<u8>,
     /// Every entry of every bucket, in bucket order. A path hash occurs once.
     pub entries: Vec<Entry>,
-    /// The number of hash buckets the index has.
+    /// The number of hash buckets the index has. An entry's bucket is its path hash modulo this count; the reader refuses
+    /// an entry anywhere else (it holds for every entry of Sekiro's and Elden Ring's indexes).
     pub bucket_count: usize,
     /// The number of zero bytes that padded the unwrapped index after its stated size.
     pub rsa_padding: usize,
@@ -464,6 +465,16 @@ impl Header {
                 let p = v.element(ptr, i, 40)?;
                 let field = |at: usize| v.at(p, at);
                 let hash = sized(&v, (field(record.hash.0)?, record.hash.1))?;
+                let home = hash.checked_rem(count as u64).unwrap_or_default();
+                if home != bucket as u64 {
+                    return Err(invalid(
+                        "BHD5",
+                        p,
+                        format!(
+                            "path hash {hash:#x} is in bucket {bucket} of {count}; it belongs in bucket {home}"
+                        ),
+                    ));
+                }
                 let padded_size = v.u32(field(record.padded_size)?)? as usize;
                 let offset = v.u64(field(record.offset)?)?;
                 let sh = v.size(field(record.sha)?)?;
@@ -775,6 +786,51 @@ mod index_tests {
         assert_eq!(
             e,
             "BHD5 at 0x4c: path hash 0x7 is listed twice; each hash names one entry"
+        );
+    }
+
+    /// A Sekiro-layout index of `buckets.len()` buckets, each holding the path hashes it lists (one 40-byte record each).
+    fn bucketed(buckets: &[&[u32]]) -> Vec<u8> {
+        let table = 28;
+        let first = table + 8 * buckets.len();
+        let end = first + 40 * buckets.iter().map(|b| b.len()).sum::<usize>();
+        let mut b = vec![0u8; end];
+        b[0..4].copy_from_slice(b"BHD5");
+        b[4] = 255;
+        b[8..12].copy_from_slice(&1u32.to_le_bytes());
+        b[12..16].copy_from_slice(&(end as u32).to_le_bytes());
+        b[16..20].copy_from_slice(&(buckets.len() as u32).to_le_bytes());
+        b[20..24].copy_from_slice(&(table as u32).to_le_bytes());
+        let mut at = first;
+        for (i, hashes) in buckets.iter().enumerate() {
+            b[table + 8 * i..][..4].copy_from_slice(&(hashes.len() as u32).to_le_bytes());
+            b[table + 8 * i + 4..][..4].copy_from_slice(&(at as u32).to_le_bytes());
+            for hash in *hashes {
+                b[at..at + 4].copy_from_slice(&hash.to_le_bytes());
+                at += 40;
+            }
+        }
+        b
+    }
+
+    #[test]
+    fn an_entry_belongs_in_the_bucket_its_hash_modulo_the_bucket_count_names() {
+        // 3 buckets: 6 and 9 are 0 mod 3, 4 is 1, 5 is 2; an empty bucket is fine
+        let header = Header::read(&bucketed(&[&[6, 9], &[4], &[5]]), &RecordLayout::SEKIRO).unwrap();
+        assert_eq!(
+            (
+                header.bucket_count,
+                header.entries.iter().map(|e| e.hash).collect::<Vec<_>>()
+            ),
+            (3, vec![6, 9, 4, 5])
+        );
+        Header::read(&bucketed(&[&[3], &[], &[2]]), &RecordLayout::SEKIRO).unwrap();
+        let e = Header::read(&bucketed(&[&[6], &[5], &[4]]), &RecordLayout::SEKIRO)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            e,
+            "BHD5 at 0x5c: path hash 0x5 is in bucket 1 of 3; it belongs in bucket 2"
         );
     }
 

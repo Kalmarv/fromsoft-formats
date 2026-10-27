@@ -34,7 +34,8 @@ pub struct Texture {
     pub kind: TextureKind,
     /// The stored mipmap count.
     pub mipmaps: u8,
-    /// The texture's flags as stored (0 or 1).
+    /// The texture's flags byte as stored: 0 or 1, or 0x80 on Elden Ring's environment-probe packages (every one of the
+    /// 221,796 textures of the `*_envmap_*_middle_*.tpfbnd.dcx` binders). The reader keeps the byte and assigns it no meaning.
     pub flags: u8,
     /// Its optional extra data.
     pub extra: Option<Extra>,
@@ -91,7 +92,7 @@ impl Package {
             };
             let mipmaps = v.u8(v.at(p, 10)?)?;
             let texture_flags = v.u8(v.at(p, 11)?)?;
-            if texture_flags > 1 {
+            if !matches!(texture_flags, 0 | 1 | 0x80) {
                 return Err(invalid(
                     "TPF",
                     v.at(p, 11)?,
@@ -179,5 +180,45 @@ impl Package {
             encoding,
             textures,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Package;
+
+    /// A package of one ASCII-named texture whose descriptor carries `texture_flags`; its "DDS" is a stub, since only the
+    /// magic is checked.
+    fn package(texture_flags: u8) -> Vec<u8> {
+        let mut b = vec![0u8; 16];
+        b[..4].copy_from_slice(b"TPF\0");
+        b[4..8].copy_from_slice(&8u32.to_le_bytes());
+        b[8..12].copy_from_slice(&1u32.to_le_bytes());
+        b[13] = 3;
+        let mut descriptor = [0u8; 20];
+        descriptor[..4].copy_from_slice(&38u32.to_le_bytes());
+        descriptor[4..8].copy_from_slice(&8u32.to_le_bytes());
+        descriptor[8] = 105;
+        descriptor[11] = texture_flags;
+        descriptor[12..16].copy_from_slice(&36u32.to_le_bytes());
+        b.extend(descriptor);
+        b.extend(b"a\0");
+        b.extend(b"DDS \0\0\0\0");
+        b
+    }
+
+    #[test]
+    fn the_texture_flags_byte_is_0_1_or_0x80_and_kept() {
+        for flags in [0, 1, 0x80] {
+            let read = Package::read(&package(flags)).expect("known flags byte");
+            assert_eq!((read.textures.len(), read.textures[0].flags), (1, flags));
+        }
+        for flags in [2, 0x40, 0x81, 0xff] {
+            let e = Package::read(&package(flags)).unwrap_err().to_string();
+            assert_eq!(
+                e, "TPF at 0x1b: compressed/unknown PC texture flags",
+                "{flags:#x}"
+            );
+        }
     }
 }

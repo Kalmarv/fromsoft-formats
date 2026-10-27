@@ -38,7 +38,8 @@ pub struct Texture {
     pub kind: String,
     /// Its UV scale.
     pub scale: [f32; 2],
-    /// How the texture repeats along u and v (`TilingTypeU`, `TilingTypeV`).
+    /// How the texture repeats along u and v (`TilingTypeU`, `TilingTypeV`). The two bytes are equal and 0 or 1 on every
+    /// binding of Sekiro's and Elden Ring's models (241,231 and 570,781 bindings); the reader accepts 0 to 5.
     pub tiling: [Tiling; 2],
     /// The three floats after the tiling types, whose meaning is not known.
     pub unknown: [f32; 3],
@@ -103,6 +104,14 @@ pub struct Material {
     pub mtd: String,
     /// Its texture bindings, in order.
     pub textures: Vec<Texture>,
+    /// The stored byte count of the material's strings (record offset 16): twice the UTF-16 units of the name, the
+    /// definition, and each binding's slot and path, terminators included. Checked against that count in every version but
+    /// `0x20014` (all 130,079 materials of Sekiro's and Elden Ring's other versions agree); `0x20014` (Elden Ring's
+    /// SpeedTree models) stores a larger value in 684 of 685 materials and is kept as stored.
+    pub string_bytes: u32,
+    /// The word at record offset 24, as a signed integer: the material's position in the file's material list on 111,147 of
+    /// 130,764 materials of Sekiro and Elden Ring, otherwise smaller (0 on 6,866 of those).
+    pub index: i32,
     /// Raw, uninterpreted GX records in source order, excluding the terminator.
     pub gx: Vec<GxItem>,
 }
@@ -204,8 +213,9 @@ pub struct Dummy {
     pub parent_bone: i16,
     /// "Index of the bone that the dummy point follows physically"; -1 for none.
     pub attach_bone: i16,
-    /// The four colour bytes in the file's order (alpha, red, green, blue; SoulsFormatsNEXT: "not certain about the
-    /// ordering").
+    /// The four colour bytes in the file's order: alpha, red, green, blue. The first byte is 255 on every one of the
+    /// 108,608 dummies of Sekiro's and Elden Ring's models, the other three 255 on all but 3,273 (grey 128, or 0, 0, 208).
+    /// (SoulsFormatsNEXT: "not certain about the ordering".)
     pub color: [u8; 4],
     /// A stored flag whose meaning SoulsFormatsNEXT does not state.
     pub flag1: bool,
@@ -549,10 +559,29 @@ impl Model {
                     gx = meta.at(gx, len)?;
                 }
             }
+            let name = string(&meta, count(&v, o)?, &budget)?;
+            let mtd = string(&meta, count_at(&v, o, 4)?, &budget)?;
+            let string_bytes = v.u32_at(o, 16)?;
+            if version != 0x20014 {
+                let bytes = [&name, &mtd]
+                    .into_iter()
+                    .chain(bound.iter().flat_map(|t| [&t.kind, &t.path]))
+                    .map(|s| s.encode_utf16().count().saturating_add(1))
+                    .sum::<usize>()
+                    .saturating_mul(2);
+                if usize::try_from(string_bytes) != Ok(bytes) {
+                    return Err(v.err(
+                        v.at(o, 16)?,
+                        format!("material string size {string_bytes}, its strings take {bytes} bytes"),
+                    ));
+                }
+            }
             materials.push(Material {
-                name: string(&meta, count(&v, o)?, &budget)?,
-                mtd: string(&meta, count_at(&v, o, 4)?, &budget)?,
+                name,
+                mtd,
                 textures: bound,
+                string_bytes,
+                index: v.u32_at(o, 24)? as i32,
                 gx: gx_items,
             });
         }

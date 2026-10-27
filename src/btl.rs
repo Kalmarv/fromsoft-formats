@@ -1,5 +1,6 @@
-//! BTL light-bank values: versions 16 (Sekiro) and 18 (Elden Ring) share the 232-byte light record. The file stores
-//! RGB bytes; their transfer function and the mapping of intensity into target watts are the caller's to choose.
+//! BTL light-bank values: versions 16 (Sekiro) and 18 (Elden Ring) share the 232-byte light record; version 15 (two
+//! Elden Ring banks) has a 240-byte record that reads as version 18 up to byte 232. The file stores RGB bytes; their
+//! transfer function and the mapping of intensity into target watts are the caller's to choose.
 use crate::{
     Result,
     bytes::{Budget, View},
@@ -16,7 +17,7 @@ pub enum Kind {
     /// Stored type 2.
     Directional,
 }
-/// One 232-byte light record, as stored.
+/// One light record (232 bytes in versions 16 and 18, 240 in version 15), as stored.
 #[derive(Debug, Clone)]
 pub struct Light {
     /// The light's name: UTF-16 text in the name table, found through the record's length at record offset 16.
@@ -41,7 +42,8 @@ pub struct Light {
     pub rotation: [f32; 3],
     /// Its radius: the `f32` at record offset 88, as stored.
     pub radius: f32,
-    /// The record's remaining 4-byte words, as stored, by byte offset in the record; no meaning is assigned to them.
+    /// The record's remaining 4-byte words, as stored, by byte offset in the record (version 15 has two more, at 232 and 236,
+    /// zero in every shipped light); no meaning is assigned to them.
     pub auxiliary: std::collections::BTreeMap<usize, u32>,
 }
 /// A read light bank (`.btl`).
@@ -53,7 +55,11 @@ pub struct LightBank {
     pub lights: Vec<Light>,
 }
 /// The versions whose light record this reader knows.
-pub const VERSIONS: [u32; 2] = [16, 18];
+pub const VERSIONS: [u32; 3] = [15, 16, 18];
+/// The light record size a version stores in the header at offset 20: 240 for version 15, 232 for the others.
+const fn record_size(version: u32) -> u32 {
+    if version == 15 { 240 } else { 232 }
+}
 impl LightBank {
     /// Read a light bank. The version, the header, the record count against the file size, each name's offset and
     /// every field the reader holds to a fixed value are checked; a non-finite float is refused.
@@ -72,13 +78,15 @@ impl LightBank {
         let count = v.u32(8)? as usize;
         let names_length = v.u32(12)? as usize;
         v.expect(16, &[0; 4])?;
-        v.expect(20, &232u32.to_le_bytes())?;
+        let stored_size = record_size(version);
+        v.expect(20, &stored_size.to_le_bytes())?;
+        let size = stored_size as usize;
         v.expect(24, &[0; 36])?;
         let start = 60usize
             .checked_add(names_length)
             .ok_or_else(|| invalid("BTL", 12, "name size overflow"))?;
         let end = count
-            .checked_mul(232)
+            .checked_mul(size)
             .and_then(|n| start.checked_add(n))
             .ok_or_else(|| invalid("BTL", 8, "record size overflow"))?;
         if end != bytes.len() {
@@ -88,8 +96,8 @@ impl LightBank {
         let budget = Budget::new("BTL", bytes.len());
         let mut lights = Vec::with_capacity(count);
         for i in 0..count {
-            let record_at = v.element(start, i, 232)?;
-            let r = v.sub(record_at, 232, "BTL light")?;
+            let record_at = v.element(start, i, size)?;
+            let r = v.sub(record_at, size, "BTL light")?;
             let n = r.size(16)?;
             if !n.is_multiple_of(2) {
                 return Err(r.err(16, "unaligned UTF-16 name"));
@@ -108,7 +116,7 @@ impl LightBank {
             let diffuse = r.slice(29, 3)?.try_into().expect("three bytes");
             let specular = r.slice(36, 3)?.try_into().expect("three bytes");
             let mut auxiliary = std::collections::BTreeMap::new();
-            for offset in (0..232).step_by(4) {
+            for offset in (0..size).step_by(4) {
                 if !matches!(
                     offset,
                     16 | 20 | 24 | 28 | 32 | 36 | 40 | 44 | 56 | 60 | 64 | 68 | 72 | 76 | 88
@@ -139,23 +147,56 @@ impl LightBank {
 mod tests {
     use super::LightBank;
 
-    /// A hand-made bank with no lights: the 60-byte header, version 16 or 18 read, any other refused.
+    /// A hand-made bank with no lights: the 60-byte header, version 15, 16 or 18 read with the record size each stores,
+    /// any other version, or a version with the other family's record size, refused.
     #[test]
     fn versions() {
-        let bank = |version: u32| {
+        let bank = |version: u32, size: u32| {
             let mut b = vec![0u8; 60];
             b[0..4].copy_from_slice(&2u32.to_le_bytes());
             b[4..8].copy_from_slice(&version.to_le_bytes());
-            b[20..24].copy_from_slice(&232u32.to_le_bytes());
+            b[20..24].copy_from_slice(&size.to_le_bytes());
             b
         };
-        for version in [16, 18] {
-            let read = LightBank::read(&bank(version)).expect("known version");
+        for (version, size) in [(15, 240), (16, 232), (18, 232)] {
+            let read = LightBank::read(&bank(version, size)).expect("known version");
             assert_eq!((read.version, read.lights.len()), (version, 0));
         }
-        for version in [15, 17] {
-            assert!(LightBank::read(&bank(version)).is_err());
+        for (version, size) in [(15, 232), (16, 240), (18, 240), (17, 232), (17, 240)] {
+            assert!(
+                LightBank::read(&bank(version, size)).is_err(),
+                "{version} with {size}"
+            );
         }
+    }
+
+    /// A version 15 bank holds 240-byte records: the record count is measured with 240, a 232-byte stride does not
+    /// cover the file, and the two words past byte 232 are read as auxiliary words.
+    #[test]
+    fn version_15_records_are_240_bytes() {
+        let bank = |count: usize, record: usize| {
+            let mut b = vec![0u8; 60];
+            b[0..4].copy_from_slice(&2u32.to_le_bytes());
+            b[4..8].copy_from_slice(&15u32.to_le_bytes());
+            b[8..12].copy_from_slice(&(count as u32).to_le_bytes());
+            b[12..16].copy_from_slice(&4u32.to_le_bytes());
+            b[20..24].copy_from_slice(&240u32.to_le_bytes());
+            b.extend([0u8; 4]);
+            for i in 0..count {
+                let mut light = vec![0u8; 240];
+                light[16..20].copy_from_slice(&2u32.to_le_bytes());
+                light[232..240].copy_from_slice(&[i as u8 + 1, 0, 0, 0, 7, 0, 0, 0]);
+                light.truncate(record);
+                b.extend(light);
+            }
+            b
+        };
+        let read = LightBank::read(&bank(2, 240)).expect("two 240-byte lights");
+        assert_eq!((read.version, read.lights.len()), (15, 2));
+        let aux = |i: usize| (read.lights[i].auxiliary[&232], read.lights[i].auxiliary[&236]);
+        assert_eq!((aux(0), aux(1)), ((1, 7), (2, 7)));
+        assert!(read.lights[0].auxiliary.keys().all(|&k| k < 240));
+        assert!(LightBank::read(&bank(2, 232)).is_err());
     }
 
     /// A bank of `count` lights, each valid, with the light `bad` carrying `value` in its type word.

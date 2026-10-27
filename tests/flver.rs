@@ -20,6 +20,8 @@ fn fixture() -> Vec<u8> {
     b[73] = 1;
     put(&mut b, 128, 408);
     put(&mut b, 132, 410);
+    // the material's string byte count: two empty UTF-16 strings, terminators only
+    put(&mut b, 144, 4);
     put(&mut b, 192, 1);
     put(&mut b, 196, 400);
     put(&mut b, 200, 1);
@@ -121,6 +123,32 @@ fn packed_attributes_keep_layer_bytes() {
     assert_eq!(v.uvs, [[0., 8. / 255., 0., 248. / 255.]]);
     assert_eq!(v.layer_bytes, [(0, [0, 8, 0, 248])]);
     assert_eq!(v.colors, [[1., 128. / 255., 0., 1.]]);
+}
+
+#[test]
+fn a_material_keeps_its_string_byte_count_and_index_and_the_count_is_checked() {
+    let mut bytes = fixture();
+    put(&mut bytes, 152, 7);
+    let m = &Model::read(&bytes).unwrap().materials[0];
+    assert_eq!((m.string_bytes, m.index), (4, 7));
+    // a negative index is kept as stored
+    put(&mut bytes, 152, u32::MAX);
+    assert_eq!(Model::read(&bytes).unwrap().materials[0].index, -1);
+    // a count that is not twice the strings' UTF-16 units with terminators is refused, but not in version 0x20014
+    for version in [0x20013, 0x20016, 0x2001a] {
+        let mut wrong = fixture();
+        put(&mut wrong, 8, version);
+        put(&mut wrong, 144, 6);
+        let e = Model::read(&wrong).unwrap_err().to_string();
+        assert_eq!(
+            e, "FLVER at 0x90: material string size 6, its strings take 4 bytes",
+            "{version:#x}"
+        );
+    }
+    let mut speedtree = fixture();
+    put(&mut speedtree, 8, 0x20014);
+    put(&mut speedtree, 144, 6);
+    assert_eq!(Model::read(&speedtree).unwrap().materials[0].string_bytes, 6);
 }
 
 #[test]
