@@ -1,39 +1,27 @@
 [package]
-name = "primase-gta"
-description = "GTA V read from an install into the world"
+name = "rage-engine-formats"
+description = "RAGE engine formats as GTA V Enhanced stores them: RPF7 archives, resources, META, drawables, textures, collision bounds, clips, shader containers, RBF and XML"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
+
 [dependencies]
-iridia-interface.workspace = true
 primase-foundations = { workspace = true, features = ["compress"] }
-primase-core.workspace = true
-iridia-dxil.workspace = true
-primase-image.workspace = true
-primase-meshops.workspace = true
-iridia.workspace = true
-primase-texcodec.workspace = true
-indexmap.workspace = true
-naga.workspace = true
-thiserror.workspace = true
 aes.workspace = true
-sha1.workspace = true
+indexmap.workspace = true
 quick-xml.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+sha1.workspace = true
+thiserror.workspace = true
+
 [dev-dependencies]
-dxcontainer.workspace = true
 primase-testdata.workspace = true
-iridia-dxbc.workspace = true
-iridia-exec.workspace = true
+serde_json.workspace = true
+sha1.workspace = true
 sha2.workspace = true
-toml.workspace = true
+
 [lints]
 workspace = true
-
-[package.metadata.primase]
-kind = "game"
-names = ["gta", "rage"]
