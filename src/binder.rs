@@ -55,6 +55,17 @@ impl Binder {
     ) -> Result<Self> {
         Self::read_inner(header, Some(payload), decoder, false, Some(keep))
     }
+    /// The first member whose file name (what follows its last `/` or `\`) is `leaf`, ASCII case folded; `None` where no
+    /// member has it. A member without a name is never found.
+    pub fn member(&self, leaf: &str) -> Option<&BinderFile> {
+        let want = crate::names::fold(leaf);
+        self.files.iter().find(|f| {
+            f.name
+                .as_deref()
+                .and_then(|n| n.rsplit(['/', '\\']).next())
+                .is_some_and(|n| crate::names::fold(n) == want)
+        })
+    }
     /// Validate a split index and list names without touching its payload. Full
     /// payload bounds and decompression are checked by `read_split` when loaded.
     pub fn split_names(header: &[u8]) -> Result<Vec<String>> {

@@ -77,14 +77,7 @@ pub fn param_binder(install: &Install, archive: &Archive, decoder: &Decoder<'_>)
 pub fn read_param(install: &Install, archive: &Archive, decoder: &Decoder<'_>, leaf: &str) -> Result<Param> {
     let binder = param_binder(install, archive, decoder)?;
     let file = binder
-        .files
-        .iter()
-        .find(|f| {
-            f.name
-                .as_deref()
-                .and_then(|n| n.rsplit(['/', '\\']).next())
-                .is_some_and(|n| crate::names::fold(n) == crate::names::fold(leaf))
-        })
+        .member(leaf)
         .ok_or_else(|| invalid(FORMAT, 0, format!("the param binder holds no {leaf}")))?;
     Param::read(&file.bytes)
 }

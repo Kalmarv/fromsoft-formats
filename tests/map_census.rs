@@ -258,3 +258,49 @@ fn the_entity_blocks_draw_controls_and_the_collisions_draw_param_selectors() -> 
     }
     Ok(())
 }
+
+/// Elden Ring's maps other than the open world (`m60`, `m61`) and the draw-param files they use: the files of the map's
+/// own two-block stem where it has any, else those of its family's `mAA_00`, else none.
+#[test]
+fn a_dungeon_without_draw_param_files_of_its_own_uses_its_familys() -> Result<()> {
+    let Some((archive, layouts)) = layouts(Game::EldenRing)? else {
+        return Ok(());
+    };
+    let (mut own, mut family, mut none) = (
+        BTreeMap::<&str, usize>::new(),
+        BTreeMap::<&str, usize>::new(),
+        BTreeMap::<&str, usize>::new(),
+    );
+    for map in layouts
+        .keys()
+        .filter(|m| !m.starts_with("m60") && !m.starts_with("m61"))
+    {
+        let stems = fromsoft_formats::area::draw_params(&archive, Game::EldenRing, map);
+        let area = &map[..3];
+        let has = |stem: &str| archive.contains(&fromsoft_formats::area::draw_param_path(stem));
+        let own_stem = &map[..6];
+        let has_own = (0..10_000).any(|id| has(&format!("{own_stem}_{id:04}")));
+        let (bucket, stem_prefix) = if has_own {
+            (&mut own, own_stem.to_owned())
+        } else if (0..10_000).any(|id| has(&format!("{area}_00_{id:04}"))) {
+            (&mut family, format!("{area}_00"))
+        } else {
+            (&mut none, String::new())
+        };
+        if stem_prefix.is_empty() {
+            assert!(stems.is_empty(), "{map}");
+        } else {
+            assert!(
+                !stems.is_empty() && stems.iter().all(|s| s.starts_with(&stem_prefix)),
+                "{map}: {stems:?}"
+            );
+        }
+        *bucket.entry(area).or_default() += 1;
+    }
+    // 58 maps have files of their own, 21 use the family's (20 of m30, one of m11) and the 27 of m31 and m32 have none
+    let total = |m: &BTreeMap<&str, usize>| m.values().sum::<usize>();
+    assert_eq!((total(&own), total(&family), total(&none)), (58, 21, 27));
+    assert_eq!(family, BTreeMap::from([("m11", 1), ("m30", 20)]));
+    assert_eq!(none, BTreeMap::from([("m31", 19), ("m32", 8)]));
+    Ok(())
+}

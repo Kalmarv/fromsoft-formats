@@ -9,8 +9,8 @@
 //! live save with 8301, 8302 and 8306 off shows the intact walls.
 //!
 //! These are Sekiro's functions and Sekiro's layout of the call: in Elden Ring's scripts `2000:6` takes a slot number
-//! (below 100) before the function, and the numbers 20004110, 20004112 and 20004114 are no part-state functions, so
-//! no call of an Elden Ring script is decided here and the calls are counted by the function they name.
+//! (below 100) before the function, and none of the 10,480 calls in the base game's scripts names 20004110, 20004112
+//! or 20004114, so no call of an Elden Ring script is decided here and its calls are counted by the function they name.
 //!
 //! Calls that cannot be decided
 //! statically (another argument count, or arguments filled by parameter substitution), other common functions that

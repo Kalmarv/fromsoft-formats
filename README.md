@@ -8,8 +8,8 @@ It was written and checked against the Steam builds of Sekiro 1.06 (`sekiro.exe`
 - **Archives and containers.** BHD5/BDT archive indexes and their entries (RSA-wrapped index, AES-128 ranges), the path hashes of both games, DCX envelopes (DFLT, KRAK and ZSTD) and BND4 binders, including split BHF4/BDF4 binders.
 - **Models and textures.** FLVER2 models (versions `0x20013`, `0x20014`, `0x20016`, `0x2001a`, including Elden Ring's SpeedTree layouts), TPF texture packages (PC, DDS payloads kept whole), CLM2 cloth companions.
 - **Materials and shaders.** Sekiro's MTD material definitions, Elden Ring's MATBIN materials, shader METAPARAM files (version 6).
-- **Maps.** MSB map layouts (Sekiro's MSBS and Elden Ring's MSBE: models, parts, regions, events), BTL light banks (versions 16 and 18), EDGE hang edges (Sekiro), GPARAM draw parameters (versions 3, 5 and 6), EMEVD event scripts (Sekiro's 64-bit layout) and the part-state rules they set.
-- **Game data.** PARAM files (the NPC and grass params, and Sekiro's part-built NPC outfits through the equipment params; Elden Ring is refused there), FMG text and the NPC names built from it, TAE animation events (version `0x1000D`), and map and object collision in Havok tagfiles (through [`havok-formats`](https://github.com/Kalmarv/havok-formats)).
+- **Maps.** MSB map layouts (Sekiro's MSBS and Elden Ring's MSBE: models, parts, regions, events), BTL light banks (versions 16 and 18), EDGE hang edges (Sekiro), GPARAM draw parameters (versions 3, 5 and 6), EMEVD event scripts (the 64-bit layout of both games) and the part-state rules they set in Sekiro.
+- **Game data.** PARAM files (the NPC and grass params, and both games' part-built NPC outfits through the equipment params), FMG text and the NPC names built from it, TAE animation events (version `0x1000D`), and map and object collision in Havok tagfiles (through [`havok-formats`](https://github.com/Kalmarv/havok-formats)).
 
 It needs a few things from you, because it ships none of them: the archive keys of your own install (one RSA public key per archive, and for Elden Ring the key of `regulation.bin`), which you keep as files in a folder and load with `Keys::from_folder`; the crate keeps them only in the `Keys` value you pass, the game's Oodle library (or, off Windows, a portable decoder) for Kraken-compressed files, and, to turn path hashes back into paths, a path list of your choosing. The crate holds no key material, no digests of it, no dictionary, no native library and no game file, and this repository does not contain or link to any.
 
@@ -50,7 +50,7 @@ assert!(matches!(&err, Error::Invalid { format: "FLVER", offset: 0, .. }));
 println!("{err}");
 ```
 
-Add it with `cargo add fromsoft-formats` (or `fromsoft-formats = "0.2"` under `[dependencies]`). The API reference is on [docs.rs](https://docs.rs/fromsoft-formats).
+Add it with `cargo add fromsoft-formats` (or `fromsoft-formats = "0.3"` under `[dependencies]`). The API reference is on [docs.rs](https://docs.rs/fromsoft-formats).
 
 ## What it guarantees
 

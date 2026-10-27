@@ -21,7 +21,10 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 #[test]
 fn the_event_scripts_name_their_common_functions_where_the_game_puts_them() -> Result<()> {
-    for (game, data, scripts) in [(Game::Sekiro, Data::Sekiro, 30), (Game::EldenRing, Data::Elden, 589)] {
+    for (game, data, scripts) in [
+        (Game::Sekiro, Data::Sekiro, 30),
+        (Game::EldenRing, Data::Elden, 589),
+    ] {
         let (Some(root), Some(folder), Some(dll), Some(dictionary)) = (
             install(data),
             keys(data),
@@ -61,7 +64,10 @@ fn the_event_scripts_name_their_common_functions_where_the_game_puts_them() -> R
         let calls = |m: &BTreeMap<i32, usize>| m.values().sum::<usize>();
         match game {
             Game::Sekiro => {
-                assert_eq!(decided, BTreeMap::from([(20004110, 50), (20004112, 57), (20004114, 35)]));
+                assert_eq!(
+                    decided,
+                    BTreeMap::from([(20004110, 50), (20004112, 57), (20004114, 35)])
+                );
                 assert_eq!(undecidable, 0);
                 // the other calls of the 2,138: the function numbers are 7 or 8 digits
                 assert_eq!(calls(&decided) + undecidable + calls(&other), 2_138);
@@ -70,9 +76,18 @@ fn the_event_scripts_name_their_common_functions_where_the_game_puts_them() -> R
             Game::EldenRing => {
                 assert!(decided.is_empty());
                 assert_eq!(calls(&other), 10_480);
+                // none names one of Sekiro's part-state numbers
+                assert!(
+                    [20004110, 20004112, 20004114]
+                        .iter()
+                        .all(|f| !other.contains_key(f))
+                );
                 // read with the slot as the function, 2000:6's first word would be below 100 in every call
                 let slots = other.range(..100).map(|(_, n)| n).sum::<usize>();
-                assert!(slots * 10 < calls(&other), "{slots} calls name a function below 100");
+                assert!(
+                    slots * 10 < calls(&other),
+                    "{slots} calls name a function below 100"
+                );
             }
         }
     }

@@ -1,6 +1,7 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 (2026-10-27)
+
 
 - Breaking: depends on havok-formats 0.3.0, whose compressed meshes apply each section's page to shared vertices (the
   Sekiro and Elden Ring `l` collision sets had wrong vertices before) and whose cloth particle indices are `u16`.
@@ -8,6 +9,39 @@
   shape's `numShapeKeyBits` (the two agree in every compressed mesh of the Sekiro and Elden Ring collision).
 - `Body::motion_type` is documented as 0 static, 1 keyframed, 2 dynamic (only 2 stores a positive mass), where it
   said that 2 is keyframed.
+- Breaking: `Rules::read` takes the game. Elden Ring's `2000:6` names a slot before the function and none of its 10,480
+  calls in the base game's scripts names Sekiro's part-state functions, so none is decided and they are counted by the
+  function they name.
+- Breaking: `GrassType::lod_range` is `i16` (five Sekiro rows hold -1), and `GrassParam` reads Sekiro's
+  `GRASS_TYPE_PARAM_ST` (version 6, 244-byte rows, no second model name: `model1` is empty) beside Elden Ring's.
+- Breaking: `msb::Model`, `msb::Part`, `msb::Region`, `msb::Event` and `msb::PartGparam` gain fields (`instances`;
+  `draw` and `tile_load`; `extra_map`; `gparam_override` and `scene_sub_id`), `msb::Generation` gains the record header
+  sizes and extra-block offsets, and `equipment::FACE_OR_HEAD_BY_PRESENCE` is gone (the protector's category now says
+  whether a head slot is the face).
+- Params: `Param::read` reads the files that end with up to eight zero bytes after their last part (161 Elden Ring and
+  5 Sekiro params of the installs were refused for it): every param of Elden Ring's `regulation.bin` (194 of 194) and
+  135 of Sekiro's 138 read, the three refused being the 32-bit-form banks, by their format flags. No gap is allowed
+  between the parts.
+- Equipment: `equipment::OutfitLayout::of(game)` and `resolve_outfit` read both games' `CHARACTER_INIT_PARAM` and
+  `EQUIP_PARAM_PROTECTOR_ST` (Elden Ring: version 2 / 320 bytes and version 6 / 416, the protector's model, category and
+  gender at +164, +212 and +213). The part prefix comes from the protector's category, a protector in a slot of another
+  category is refused, and a slot naming a protector row that does not exist leaves only that slot unresolved.
+  `npc_outfits` and `npc_outfit_catalog` read Elden Ring. On the install 789 of the 793 protector rows with a model and
+  a category of head, body, arms or legs find their part binder.
+- Maps: `elden::parent_tiles` (through `Game::parent_maps`) gives the alternate overworld tiles `_10` their alternate
+  parents `_11` and `_12`, which place 3,578 of their far assets. Regions and events have each generation's header size
+  (96 and 40 in Sekiro, 104 and 48 in Elden Ring); Elden Ring's end with a 32-byte extra block, which ends the type
+  data and names a map (`Region::extra_map`, `Event::extra_map`). The new `mapid::MapId` reads the four-byte map
+  identifiers in both orders they occur in. `MapLayout::read` checks every model's instance count against the parts
+  that name it. The entity block's draw controls (`Part::draw`), a part's tile-load map (`Part::tile_load`) and a
+  collision's draw-param selectors (`PartGparam::gparam_override`, `scene_sub_id`) are read.
+- FMG: `Fmg::read` refuses repeated or overlapping ids, a group whose strings do not follow the previous group's, a
+  string count the groups do not fill and, in version 2, a wrong size field or string-offset table.
+- Draw params: `area::draw_params` gives an Elden Ring map with no draw-param file of its own two-block stem the files of
+  its family's `mAA_00` (20 maps of m30 and one of m11 of the 106 outside the open world); the 27 of m31 and m32, which
+  have none under either stem, get none.
+- `Binder::member` finds a member by its file name, ASCII case folded.
+- `game_params::param_binder` is public.
 
 ## 0.2.0 (2026-10-27)
 
