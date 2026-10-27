@@ -50,7 +50,7 @@ assert!(matches!(&err, Error::Invalid { format: "FLVER", offset: 0, .. }));
 println!("{err}");
 ```
 
-The crate is not on crates.io yet; depend on it from git (`fromsoft-formats = { git = "https://github.com/Kalmarv/fromsoft-formats" }`). The API reference is `cargo doc --open`.
+Add it with `cargo add fromsoft-formats` (or `fromsoft-formats = "0.1"` under `[dependencies]`). The API reference is on [docs.rs](https://docs.rs/fromsoft-formats).
 
 ## What it guarantees
 
