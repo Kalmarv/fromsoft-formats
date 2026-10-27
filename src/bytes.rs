@@ -39,6 +39,18 @@ impl<'a> View<'a> {
             .and_then(|delta| base.checked_add(delta))
             .ok_or_else(|| invalid(self.format, base, "offset overflow"))
     }
+    /// [`View::u16`] at `delta` bytes after `base`.
+    pub fn u16_at(&self, base: usize, delta: usize) -> Result<u16> {
+        self.u16(self.at(base, delta)?)
+    }
+    /// [`View::boolean`] at `delta` bytes after `base`.
+    pub fn boolean_at(&self, base: usize, delta: usize) -> Result<bool> {
+        self.boolean(self.at(base, delta)?)
+    }
+    /// [`View::expect`] at `delta` bytes after `base`.
+    pub fn expect_at(&self, base: usize, delta: usize, b: &[u8]) -> Result<()> {
+        self.expect(self.at(base, delta)?, b)
+    }
     /// [`View::u8`] at `delta` bytes after `base`.
     pub fn u8_at(&self, base: usize, delta: usize) -> Result<u8> {
         self.u8(self.at(base, delta)?)

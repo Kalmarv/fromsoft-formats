@@ -1,6 +1,14 @@
 //! FLVER2 models (versions `0x20013`, `0x20014`, `0x20016` and `0x2001a`: Sekiro's and Elden Ring's): bones, dummy
 //! polygons, materials with their texture bindings, vertex layouts and the meshes' decoded vertices and face sets,
 //! kept in the file's coordinates. Edge-compressed indices and the legacy text encoding are refused.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation
+    )
+)]
 mod vertex;
 use crate::{
     Result,
@@ -128,15 +136,18 @@ impl FaceSet {
         let mut out = Vec::new();
         let mut flip = false;
         for t in self.indices.windows(3) {
+            let &[a, b, c] = t else {
+                continue;
+            };
             if t.contains(&0xffff) {
                 flip = false;
                 continue;
             }
-            if t[0] != t[1] && t[0] != t[2] && t[1] != t[2] {
+            if a != b && a != c && b != c {
                 if flip {
-                    out.extend([t[2], t[1], t[0]]);
+                    out.extend([c, b, a]);
                 } else {
-                    out.extend_from_slice(t);
+                    out.extend([a, b, c]);
                 }
             }
             flip = !flip;
@@ -246,11 +257,17 @@ fn table(v: &View<'_>, pos: &mut usize, n: usize, stride: usize) -> Result<usize
         .ok_or_else(|| invalid(v.format, *pos, "table overflow"))?;
     v.slice(*pos, len)?;
     let start = *pos;
-    *pos += len;
+    *pos = v.at(start, len)?;
     Ok(start)
 }
 fn string(v: &View<'_>, o: usize, budget: &Budget) -> Result<String> {
     Ok(v.utf16z(o, budget)?.0)
+}
+fn count_at(v: &View<'_>, o: usize, delta: usize) -> Result<usize> {
+    count(v, v.at(o, delta)?)
+}
+fn float_at(v: &View<'_>, o: usize, delta: usize) -> Result<f32> {
+    float(v, v.at(o, delta)?)
 }
 fn float(v: &View<'_>, o: usize) -> Result<f32> {
     let n = f32::from_bits(v.u32(o)?);
@@ -267,9 +284,10 @@ fn refs(v: &View<'_>, o: usize, n: usize, limit: usize, budget: &Budget) -> Resu
     budget.charge(o, bytes)?;
     (0..n)
         .map(|i| {
-            let r = count(v, o + i * 4)?;
+            let at = v.element(o, i, 4)?;
+            let r = count(v, at)?;
             if r >= limit {
-                Err(invalid(v.format, o + i * 4, "index out of range"))
+                Err(invalid(v.format, at, "index out of range"))
             } else {
                 Ok(r)
             }
@@ -289,18 +307,27 @@ impl Model {
                     .vertices
                     .iter()
                     .map(|v| {
-                        std::mem::size_of::<Vertex>()
-                            + (v.uvs.len() + v.tangents.len() + v.colors.len() + v.speedtree.len()) * channel
-                            + v.tangent_indices.len()
-                            + v.layer_bytes.len() * std::mem::size_of::<(usize, [u8; 4])>()
+                        [
+                            std::mem::size_of::<Vertex>(),
+                            [v.uvs.len(), v.tangents.len(), v.colors.len(), v.speedtree.len()]
+                                .into_iter()
+                                .fold(0usize, usize::saturating_add)
+                                .saturating_mul(channel),
+                            v.tangent_indices.len(),
+                            v.layer_bytes
+                                .len()
+                                .saturating_mul(std::mem::size_of::<(usize, [u8; 4])>()),
+                        ]
+                        .into_iter()
+                        .fold(0usize, usize::saturating_add)
                     })
                     .sum();
                 let indices: usize = mesh
                     .faces
                     .iter()
-                    .map(|f| f.indices.len() * std::mem::size_of::<u32>())
+                    .map(|f| f.indices.len().saturating_mul(std::mem::size_of::<u32>()))
                     .sum();
-                (vertices + indices) as u64
+                u64::try_from(vertices.saturating_add(indices)).unwrap_or(u64::MAX)
             })
             .sum()
     }
@@ -324,9 +351,12 @@ impl Model {
         let data_len = count(&v, 16)?;
         v.slice(data_start, data_len)?;
         // Elden Ring's files may be zero-padded after the data block to the next 2048-byte boundary.
-        let end = data_start + data_len;
+        let end = v.at(data_start, data_len)?;
         if !(end == data.len()
-            || (data.len() == end.next_multiple_of(0x800) && data[end..].iter().all(|&b| b == 0)))
+            || (data.len() == end.next_multiple_of(0x800)
+                && v.slice(end, data.len().saturating_sub(end))?
+                    .iter()
+                    .all(|&b| b == 0)))
         {
             return Err(invalid(v.format, 16, "data length mismatch"));
         }
@@ -339,7 +369,7 @@ impl Model {
         // name: records that name one range over and over are refused before it is copied
         let budget = Budget::new(v.format, data.len());
         for i in 0..6 {
-            float(&v, 40 + i * 4)?;
+            float(&v, v.element(40, i, 4)?)?;
         }
         if !v.boolean(73)? {
             return Err(invalid(v.format, 73, "legacy text encoding unsupported"));
@@ -367,13 +397,13 @@ impl Model {
         let texture = table(&v, &mut pos, texture_count, 32)?;
         if version == 0x2001a {
             let s = table(&v, &mut pos, 1, 32)?;
-            v.expect(s + 12, &[0; 20])?;
+            v.expect_at(s, 12, &[0; 20])?;
             for i in 0..2 {
-                let n = v.u16(s + i * 2)? as usize;
-                let mut p = count(&v, s + 4 + i * 4)?;
+                let n = v.u16(v.element(s, i, 2)?)? as usize;
+                let mut p = count(&v, v.element(v.at(s, 4)?, i, 4)?)?;
                 let a = table(&meta, &mut p, n, 16)?;
                 for j in 0..n {
-                    meta.expect(a + j * 16 + 12, &[0; 4])?;
+                    meta.expect(v.at(v.element(a, j, 16)?, 12)?, &[0; 4])?;
                 }
             }
         }
@@ -382,104 +412,106 @@ impl Model {
         }
         let mut dummies = Vec::new();
         for i in 0..dummy_count {
-            let o = dummy + i * 64;
-            let flag1 = v.boolean(o + 46)?;
-            let use_upward_vector = v.boolean(o + 47)?;
-            v.expect(o + 56, &[0; 8])?;
-            let bytes = v.slice(o + 12, 4)?;
+            let o = v.element(dummy, i, 64)?;
+            let flag1 = v.boolean_at(o, 46)?;
+            let use_upward_vector = v.boolean_at(o, 47)?;
+            v.expect_at(o, 56, &[0; 8])?;
+            let bytes = v.slice(v.at(o, 12)?, 4)?;
             // as stored: a dummy is data the model's meshes do not depend on, so a value that is not finite does not
             // refuse the model (whoever places the dummy checks it)
-            let raw = |at: usize| -> Result<f32> { Ok(f32::from_bits(v.u32(at)?)) };
+            let raw = |delta: usize| -> Result<f32> { Ok(f32::from_bits(v.u32_at(o, delta)?)) };
             dummies.push(Dummy {
-                position: [raw(o)?, raw(o + 4)?, raw(o + 8)?],
-                color: [bytes[0], bytes[1], bytes[2], bytes[3]],
-                forward: [raw(o + 16)?, raw(o + 20)?, raw(o + 24)?],
-                reference_id: v.u16(o + 28)? as i16,
-                parent_bone: v.u16(o + 30)? as i16,
-                upward: [raw(o + 32)?, raw(o + 36)?, raw(o + 40)?],
-                attach_bone: v.u16(o + 44)? as i16,
+                position: [raw(0)?, raw(4)?, raw(8)?],
+                color: bytes
+                    .try_into()
+                    .map_err(|_| invalid(v.format, o, "dummy colour bytes"))?,
+                forward: [raw(16)?, raw(20)?, raw(24)?],
+                reference_id: v.u16_at(o, 28)? as i16,
+                parent_bone: v.u16_at(o, 30)? as i16,
+                upward: [raw(32)?, raw(36)?, raw(40)?],
+                attach_bone: v.u16_at(o, 44)? as i16,
                 flag1,
                 use_upward_vector,
-                unk30: v.u32(o + 48)? as i32,
-                unk34: v.u32(o + 52)? as i32,
+                unk30: v.u32_at(o, 48)? as i32,
+                unk34: v.u32_at(o, 52)? as i32,
             });
         }
         let mut bones = Vec::new();
         for i in 0..bone_count {
-            let o = bone + i * 128;
-            let name = string(&meta, count(&v, o + 12)?, &budget)?;
-            v.expect(o + 76, &[0; 52])?;
+            let o = v.element(bone, i, 128)?;
+            let name = string(&meta, count_at(&v, o, 12)?, &budget)?;
+            v.expect_at(o, 76, &[0; 52])?;
             bones.push(Bone {
                 name,
-                translation: [float(&v, o)?, float(&v, o + 4)?, float(&v, o + 8)?],
-                rotation: [float(&v, o + 16)?, float(&v, o + 20)?, float(&v, o + 24)?],
-                scale: [float(&v, o + 32)?, float(&v, o + 36)?, float(&v, o + 40)?],
-                parent: v.u16(o + 28)? as i16,
+                translation: [float(&v, o)?, float_at(&v, o, 4)?, float_at(&v, o, 8)?],
+                rotation: [float_at(&v, o, 16)?, float_at(&v, o, 20)?, float_at(&v, o, 24)?],
+                scale: [float_at(&v, o, 32)?, float_at(&v, o, 36)?, float_at(&v, o, 40)?],
+                parent: v.u16_at(o, 28)? as i16,
             });
         }
         let speedtree = is_speedtree(data);
         let mut layouts = Vec::new();
         for i in 0..layout_count {
-            let o = layout + i * 16;
-            v.expect(o + 4, &[0; 8])?;
+            let o = v.element(layout, i, 16)?;
+            v.expect_at(o, 4, &[0; 8])?;
             let n = count(&v, o)?;
-            let mut p = count(&v, o + 12)?;
+            let mut p = count_at(&v, o, 12)?;
             let a = table(&meta, &mut p, n, 20)?;
             let mut members = Vec::new();
             // each stream's members are contiguous in it: an ordinary layout's one stream, a SpeedTree layout's stored
             // stream and each stream it declares but does not store
             let mut offsets = std::collections::BTreeMap::<(bool, u16), usize>::new();
             for j in 0..n {
-                let r = a + j * 20;
+                let r = v.element(a, j, 20)?;
                 let word = v.u32(r)?;
                 let (stored, stream) = if speedtree {
                     match word >> 16 {
-                        0 => (true, word as u16),
-                        0x8000 => (false, word as u16),
+                        0 => (true, (word & 0xffff) as u16),
+                        0x8000 => (false, (word & 0xffff) as u16),
                         _ => return Err(invalid(v.format, r, "SpeedTree member modifier")),
                     }
                 } else {
                     (true, 0)
                 };
-                let kind = v.u32(r + 8)?;
+                let kind = v.u32_at(r, 8)?;
                 let offset = offsets.entry((stored, stream)).or_default();
-                if count(&v, r + 4)? != *offset {
-                    return Err(invalid(v.format, r + 4, "noncontiguous vertex layout"));
+                if count_at(&v, r, 4)? != *offset {
+                    return Err(invalid(v.format, v.at(r, 4)?, "noncontiguous vertex layout"));
                 }
                 members.push(Member {
                     unknown: word,
                     stored,
                     offset: *offset,
                     kind,
-                    semantic: v.u32(r + 12)?,
-                    index: v.u32(r + 16)?,
+                    semantic: v.u32_at(r, 12)?,
+                    index: v.u32_at(r, 16)?,
                 });
-                *offset += vertex::size(kind)?;
+                *offset = offset.saturating_add(vertex::size(kind)?);
             }
             layouts.push(members);
         }
         let mut textures = Vec::new();
         for i in 0..texture_count {
-            let o = texture + i * 32;
-            v.expect(o + 18, &[0; 2])?;
+            let o = v.element(texture, i, 32)?;
+            v.expect_at(o, 18, &[0; 2])?;
             let tiling = |at: usize| -> Result<Tiling> {
                 Tiling::read(v.u8(at)?).ok_or_else(|| invalid(v.format, at, "texture tiling type"))
             };
             textures.push(Some(Texture {
                 path: string(&meta, count(&v, o)?, &budget)?,
-                kind: string(&meta, count(&v, o + 4)?, &budget)?,
-                scale: [float(&v, o + 8)?, float(&v, o + 12)?],
-                tiling: [tiling(o + 16)?, tiling(o + 17)?],
-                unknown: [float(&v, o + 20)?, float(&v, o + 24)?, float(&v, o + 28)?],
+                kind: string(&meta, count_at(&v, o, 4)?, &budget)?,
+                scale: [float_at(&v, o, 8)?, float_at(&v, o, 12)?],
+                tiling: [tiling(v.at(o, 16)?)?, tiling(v.at(o, 17)?)?],
+                unknown: [float_at(&v, o, 20)?, float_at(&v, o, 24)?, float_at(&v, o, 28)?],
             }));
         }
         let gx_padding_only = v.u16(0x68)? == 5;
         let mut materials = Vec::new();
         for i in 0..mat_count {
-            let o = mat + i * 32;
-            v.expect(o + 28, &[0; 4])?;
-            let n = count(&v, o + 8)?;
-            let first = count(&v, o + 12)?;
+            let o = v.element(mat, i, 32)?;
+            v.expect_at(o, 28, &[0; 4])?;
+            let n = count_at(&v, o, 8)?;
+            let first = count_at(&v, o, 12)?;
             let mut bound = Vec::new();
             for j in first
                 ..first
@@ -493,12 +525,12 @@ impl Model {
                         .ok_or_else(|| invalid(v.format, o, "missing or shared texture"))?,
                 );
             }
-            let mut gx = count(&v, o + 20)?;
+            let mut gx = count_at(&v, o, 20)?;
             let mut gx_items = Vec::new();
             if gx != 0 {
                 loop {
                     let id = meta.u32(gx)?;
-                    let len = count(&meta, gx + 8)?;
+                    let len = count_at(&meta, gx, 8)?;
                     if matches!(id, 0x7fff_ffff | 0xffff_ffff) {
                         // the terminator's length counts its zero padding and its 12-byte header, except in a file
                         // whose header word at 0x68 has 5 in its low half (Elden Ring's SpeedTree models), where it
@@ -509,7 +541,8 @@ impl Model {
                             len.checked_sub(12)
                                 .ok_or_else(|| invalid(v.format, gx, "short GX record"))?
                         };
-                        if v.u32(gx + 4)? != 100 || v.slice(gx + 12, padding)?.iter().any(|&b| b != 0) {
+                        if v.u32_at(gx, 4)? != 100 || v.slice(v.at(gx, 12)?, padding)?.iter().any(|&b| b != 0)
+                        {
                             return Err(invalid(v.format, gx, "GX terminator"));
                         }
                         break;
@@ -521,15 +554,15 @@ impl Model {
                     budget.charge(gx, len)?;
                     gx_items.push(GxItem {
                         id: meta.slice(gx, 4)?.try_into().expect("four-byte checked slice"),
-                        version: meta.u32(gx + 4)?,
-                        data: meta.slice(gx + 12, len - 12)?.to_vec(),
+                        version: meta.u32_at(gx, 4)?,
+                        data: meta.slice(meta.at(gx, 12)?, len.saturating_sub(12))?.to_vec(),
                     });
-                    gx += len;
+                    gx = meta.at(gx, len)?;
                 }
             }
             materials.push(Material {
                 name: string(&meta, count(&v, o)?, &budget)?,
-                mtd: string(&meta, count(&v, o + 4)?, &budget)?,
+                mtd: string(&meta, count_at(&v, o, 4)?, &budget)?,
                 textures: bound,
                 gx: gx_items,
             });
@@ -539,12 +572,12 @@ impl Model {
         }
         let mut faces = Vec::new();
         for i in 0..face_count {
-            let o = face + i * 32;
-            v.expect(o + 20, &[0; 4])?;
-            v.expect(o + 28, &[0; 4])?;
+            let o = v.element(face, i, 32)?;
+            v.expect_at(o, 20, &[0; 4])?;
+            v.expect_at(o, 28, &[0; 4])?;
             let flags = v.u32(o)?;
-            let n = count(&v, o + 8)?;
-            let width = match v.u32(o + 24)? {
+            let n = count_at(&v, o, 8)?;
+            let width = match v.u32_at(o, 24)? {
                 0 => v.u8(72)? as u32,
                 w => w,
             };
@@ -552,67 +585,79 @@ impl Model {
                 return Err(invalid(v.format, o, "unsupported compressed indices"));
             }
             let start = data_start
-                .checked_add(count(&v, o + 12)?)
+                .checked_add(count_at(&v, o, 12)?)
                 .ok_or_else(|| invalid(v.format, o, "index offset overflow"))?;
-            if count(&v, o + 16)?
+            if count_at(&v, o, 16)?
                 != n.checked_mul(width as usize / 8)
                     .ok_or_else(|| invalid(v.format, o, "index length overflow"))?
             {
-                return Err(invalid(v.format, o + 16, "index length mismatch"));
+                return Err(invalid(v.format, v.at(o, 16)?, "index length mismatch"));
             }
             v.slice(
                 start,
                 n.checked_mul(width as usize / 8)
                     .ok_or_else(|| invalid(v.format, o, "index size overflow"))?,
             )?;
-            budget.charge(start, n * (width as usize / 8))?;
+            budget.charge(start, n.saturating_mul(width as usize / 8))?;
             let indices = (0..n)
                 .map(|j| {
                     if width == 16 {
-                        v.u16(start + j * 2).map(u32::from)
+                        v.element(start, j, 2).and_then(|at| v.u16(at)).map(u32::from)
                     } else {
-                        v.u32(start + j * 4)
+                        v.element(start, j, 4).and_then(|at| v.u32(at))
                     }
                 })
                 .collect::<Result<_>>()?;
             faces.push(Some(FaceSet {
                 flags,
-                strip: v.boolean(o + 4)?,
-                cull: v.boolean(o + 5)?,
+                strip: v.boolean_at(o, 4)?,
+                cull: v.boolean_at(o, 5)?,
                 indices,
             }));
         }
         let mut used_vb = vec![false; vb_count];
         let mut meshes = Vec::new();
         for i in 0..mesh_count {
-            let o = mesh + i * 48;
+            let o = v.element(mesh, i, 48)?;
             let dynamic = v.boolean(o)?;
-            v.expect(o + 1, &[0; 3])?;
-            v.expect(o + 8, &[0; 8])?;
-            let material = count(&v, o + 4)?;
+            v.expect_at(o, 1, &[0; 3])?;
+            v.expect_at(o, 8, &[0; 8])?;
+            let material = count_at(&v, o, 4)?;
             if material >= materials.len() {
-                return Err(invalid(v.format, o + 4, "material index"));
+                return Err(invalid(v.format, v.at(o, 4)?, "material index"));
             }
-            let node = v.u32(o + 16)? as i32;
-            let palette_len = count(&v, o + 20)?;
-            let mut at = count(&v, o + 28)?;
+            let node = v.u32_at(o, 16)? as i32;
+            let palette_len = count_at(&v, o, 20)?;
+            let mut at = count_at(&v, o, 28)?;
             let start = table(&meta, &mut at, palette_len, 4)?;
-            budget.charge(start, palette_len * 4)?;
+            budget.charge(start, palette_len.saturating_mul(4))?;
             let palette = (0..palette_len)
-                .map(|i| meta.u32(start + i * 4))
+                .map(|i| meta.element(start, i, 4).and_then(|at| meta.u32(at)))
                 .collect::<Result<Vec<u32>>>()?;
-            let face_refs = refs(&meta, count(&v, o + 36)?, count(&v, o + 32)?, face_count, &budget)?;
-            let buffers = refs(&meta, count(&v, o + 44)?, count(&v, o + 40)?, vb_count, &budget)?;
+            let face_refs = refs(
+                &meta,
+                count_at(&v, o, 36)?,
+                count_at(&v, o, 32)?,
+                face_count,
+                &budget,
+            )?;
+            let buffers = refs(
+                &meta,
+                count_at(&v, o, 44)?,
+                count_at(&v, o, 40)?,
+                vb_count,
+                &budget,
+            )?;
             // A mesh with neither face sets nor vertex buffers is empty: its bounds are the exporter's sentinel
             // (minimum -inf, maximum NaN in Elden Ring's files) and are read but not required to be finite.
             let empty = face_refs.is_empty() && buffers.is_empty();
-            let bounds = count(&v, o + 24)?;
+            let bounds = count_at(&v, o, 24)?;
             if bounds != 0 {
                 for j in 0..if version == 0x2001a { 9 } else { 6 } {
                     if empty {
-                        meta.u32(bounds + j * 4)?;
+                        meta.u32(meta.element(bounds, j, 4)?)?;
                     } else {
-                        float(&meta, bounds + j * 4)?;
+                        float(&meta, meta.element(bounds, j, 4)?)?;
                     }
                 }
             }
@@ -629,58 +674,63 @@ impl Model {
                 continue;
             }
             if buffers.is_empty() || buffers.len() > 3 {
-                return Err(invalid(v.format, o + 40, "vertex buffer count"));
+                return Err(invalid(v.format, v.at(o, 40)?, "vertex buffer count"));
             }
-            let n = count(&v, vb + buffers[0] * 32 + 12)?;
+            let &[first_buffer, ..] = buffers.as_slice() else {
+                return Err(invalid(v.format, v.at(o, 40)?, "vertex buffer count"));
+            };
+            let n = count_at(&v, v.element(vb, first_buffer, 32)?, 12)?;
             // Validate every buffer extent before allocating decoded vertices.
             let mut streams = Vec::new();
             for (ordinal, &b) in buffers.iter().enumerate() {
-                if used_vb[b] {
-                    return Err(invalid(v.format, o, "shared vertex buffer"));
+                match used_vb.get_mut(b) {
+                    Some(used) if !*used => *used = true,
+                    _ => return Err(invalid(v.format, o, "shared vertex buffer")),
                 }
-                used_vb[b] = true;
-                let r = vb + b * 32;
-                v.expect(r + 16, &[0; 8])?;
-                if v.u32(r)? != ordinal as u32 || count(&v, r + 12)? != n {
+                let r = v.element(vb, b, 32)?;
+                v.expect_at(r, 16, &[0; 8])?;
+                if v.u32(r)? != u32::try_from(ordinal).unwrap_or(u32::MAX) || count_at(&v, r, 12)? != n {
                     return Err(invalid(v.format, r, "vertex buffer identity/count"));
                 }
-                let l = count(&v, r + 4)?;
+                let layout_slot = v.at(r, 4)?;
+                let l = count(&v, layout_slot)?;
                 let members = layouts
                     .get(l)
-                    .ok_or_else(|| invalid(v.format, r + 4, "layout index"))?;
-                let stride = count(&v, r + 8)?;
+                    .ok_or_else(|| invalid(v.format, layout_slot, "layout index"))?;
+                let stride = count_at(&v, r, 8)?;
                 let expected = members
                     .iter()
                     .filter(|m| m.stored)
-                    .try_fold(0usize, |a, m| vertex::size(m.kind).map(|s| a + s))?;
+                    .try_fold(0usize, |a, m| vertex::size(m.kind).map(|s| a.saturating_add(s)))?;
                 if stride != expected || stride == 0 {
-                    return Err(invalid(v.format, r + 8, "vertex stride"));
+                    return Err(invalid(v.format, v.at(r, 8)?, "vertex stride"));
                 }
-                if count(&v, r + 24)?
+                if count_at(&v, r, 24)?
                     != n.checked_mul(stride)
                         .ok_or_else(|| invalid(v.format, r, "vertex length overflow"))?
                 {
-                    return Err(invalid(v.format, r + 24, "vertex length mismatch"));
+                    return Err(invalid(v.format, v.at(r, 24)?, "vertex length mismatch"));
                 }
                 let start = data_start
-                    .checked_add(count(&v, r + 28)?)
+                    .checked_add(count_at(&v, r, 28)?)
                     .ok_or_else(|| invalid(v.format, r, "buffer offset overflow"))?;
                 v.slice(
                     start,
                     n.checked_mul(stride)
                         .ok_or_else(|| invalid(v.format, r, "buffer size overflow"))?,
                 )?;
-                budget.charge(start, n * stride)?;
+                budget.charge(start, n.saturating_mul(stride))?;
                 streams.push((l, stride, start));
             }
             let mut vertices = vec![Vertex::default(); n];
             for &(l, stride, start) in &streams {
+                let members = layouts.get(l).map(Vec::as_slice).unwrap_or_default();
                 for (j, vert) in vertices.iter_mut().enumerate() {
-                    let data = v.slice(start + j * stride, stride)?;
+                    let data = v.slice(v.element(start, j, stride)?, stride)?;
                     if speedtree {
-                        vert.read_speedtree(data, &layouts[l])?;
+                        vert.read_speedtree(data, members)?;
                     } else {
-                        vert.read(data, &layouts[l], 2048.)?;
+                        vert.read(data, members, 2048.)?;
                     }
                 }
             }
@@ -698,22 +748,23 @@ impl Model {
                     uv,
                     normal,
                     tangent,
-                } = speedtree_layout(&layouts[l])?
+                } = speedtree_layout(layouts.get(l).map(Vec::as_slice).unwrap_or_default())?
                 {
                     for vert in &mut vertices {
-                        vert.speedtree_attributes(position, uv, normal, tangent);
+                        vert.speedtree_attributes(position, uv, normal, tangent)?;
                     }
                 }
             }
             let mut mesh_faces = Vec::new();
             for f in face_refs {
-                let fs = faces[f]
-                    .take()
+                let fs = faces
+                    .get_mut(f)
+                    .and_then(Option::take)
                     .ok_or_else(|| invalid(v.format, o, "shared face set"))?;
                 if fs
                     .indices
                     .iter()
-                    .any(|&r| r as usize >= n && !(fs.strip && r == 0xffff))
+                    .any(|&r| usize::try_from(r).is_ok_and(|r| r >= n) && !(fs.strip && r == 0xffff))
                 {
                     return Err(invalid(v.format, o, "vertex index out of range"));
                 }
@@ -798,7 +849,12 @@ pub fn speedtree_layout(members: &[Member]) -> Result<SpeedTreeLayout> {
     let (Some(position), Some(texture)) = (uv(2, 0x2e), uv(3, 0x2e)) else {
         return Err(refused());
     };
-    let bytes: Vec<usize> = (0..stored.len()).filter(|&k| stored[k].kind == 0x13).collect();
+    let bytes: Vec<usize> = stored
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.kind == 0x13)
+        .map(|(k, _)| k)
+        .collect();
     let &[normal, tangent] = &bytes[..] else {
         return Err(refused());
     };
@@ -841,7 +897,10 @@ impl Model {
         let Some(&l) = m.layouts.first() else {
             return Ok(None);
         };
-        let members = &self.layouts[l];
+        let members = self
+            .layouts
+            .get(l)
+            .ok_or_else(|| invalid("FLVER SpeedTree mesh", mesh, format!("layout index {l}")))?;
         Ok(Some((
             members.iter().filter(|m| m.stored).collect(),
             speedtree_layout(members)?,
@@ -854,7 +913,13 @@ impl Model {
     pub fn speedtree_frame(&self, mesh: usize) -> Result<Option<[u32; 2]>> {
         Ok(match self.speedtree_mesh(mesh)? {
             Some((stored, SpeedTreeLayout::Geometry { normal, tangent, .. })) => {
-                Some([stored[normal].index, stored[tangent].index])
+                let index = |k: usize| {
+                    stored
+                        .get(k)
+                        .map(|m| m.index)
+                        .ok_or_else(|| invalid("FLVER SpeedTree mesh", mesh, format!("stored member {k}")))
+                };
+                Some([index(normal)?, index(tangent)?])
             }
             _ => None,
         })
@@ -878,8 +943,13 @@ impl Model {
             }
             _ => return Err(refused("not a SpeedTree geometry mesh".into())),
         };
-        for v in &mut self.meshes[mesh].vertices {
-            v.speedtree_frame(normal, tangent);
+        let vertices = self
+            .meshes
+            .get_mut(mesh)
+            .map(|m| m.vertices.as_mut_slice())
+            .ok_or_else(|| refused("mesh index".into()))?;
+        for v in vertices {
+            v.speedtree_frame(normal, tangent)?;
         }
         Ok(())
     }
