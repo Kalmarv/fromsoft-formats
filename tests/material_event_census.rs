@@ -132,6 +132,7 @@ fn every_elden_character_material_event198_payload() -> Result<()> {
         let binder = Binder::read(&archive.read(&path, &decoder)?, &decoder)?;
         let mut local_files = 0usize;
         let mut local_events = 0usize;
+        let mut event_files = Vec::new();
         for file in &binder.files {
             let member = file.name.as_deref().unwrap_or("");
             let leaf = member
@@ -150,27 +151,33 @@ fn every_elden_character_material_event198_payload() -> Result<()> {
             if !leaf.ends_with(".tae") {
                 continue;
             }
-            let tae = Tae::read(&decoder.decode_if_dcx(&file.bytes)?)?;
+            event_files.push((member.to_owned(), Tae::read_member(&binder, file)?));
+        }
+        // an import may name an animation of another event file of the binder
+        let taes: Vec<&Tae> = event_files.iter().map(|(_, t)| t).collect();
+        for (member, tae) in &event_files {
+            let member = member.as_str();
             tae_files += 1;
             local_files += 1;
             for animation in &tae.animations {
-                match tae.resolved_animation(animation.id) {
-                    Ok(Some(resolved))
-                        if resolved.id != animation.id
+                let number = tae.number(animation);
+                match fromsoft_formats::tae::resolve(&taes, number) {
+                    Ok(Some((file, resolved)))
+                        if taes[file].number(resolved) != number
                             && resolved.events.iter().any(|event| event.kind == 198) =>
                     {
                         imports_with_events += 1;
                         println!(
                             "TAE198_IMPORT={}",
-                            json!({"binder":path,"file":member,"animation":animation.id,
-                            "resolved_animation":resolved.id,"scope":"alias only; excluded from authored-instance histograms"})
+                            json!({"binder":path,"file":member,"animation":number,
+                            "resolved_animation":taes[file].number(resolved),"scope":"alias only; excluded from authored-instance histograms"})
                         );
                     }
                     Err(error) => {
                         import_refusals += 1;
                         println!(
                             "TAE198_IMPORT_REFUSAL={}",
-                            json!({"binder":path,"file":member,"animation":animation.id,
+                            json!({"binder":path,"file":member,"animation":number,
                             "error":error.to_string(),"scope":"raw authored events below remain counted; unresolved aliases are not inferred"})
                         );
                     }
@@ -213,7 +220,7 @@ fn every_elden_character_material_event198_payload() -> Result<()> {
                     }
                     println!(
                         "TAE198_INSTANCE={}",
-                        json!({"binder":path,"file":member,"animation":animation.id,"event":index,
+                        json!({"binder":path,"file":member,"animation":number,"event":index,
                         "start":event.start,"end":event.end,"byte_length":event.parameters.len(),"raw":event.parameters,
                         "header_at_0":words.first().copied().map(units),
                         "payload_15_at_4":words.iter().skip(1).copied().map(units).collect::<Vec<_>>(),

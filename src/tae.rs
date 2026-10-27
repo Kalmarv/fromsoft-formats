@@ -12,14 +12,30 @@
 //! The parameter bytes of an event run to the start of the next event's record; the last event's to the animation's
 //! event groups, else to the next animation's header block, else to the end of the file, so they include the zero padding
 //! that aligns the records to 16 bytes.
+//!
+//! Numbering: an animation binder may hold several event files, one per animation group, in consecutive member slots
+//! from the binder's first event slot (DSAnimStudio): the player's `c0000.anibnd` holds `a50.tae` in slot 5,000,050 with
+//! the animations of group 50 (`a050_…`). A file stores its animations' numbers within its group; an animation's number
+//! is the group times a million plus that ([`Tae::number`]), the numbering of clip names ([`clip_animation_id`]) and of
+//! [`Header::ImportOther`], which may name an animation of another event file of the binder ([`resolve`]). A file read
+//! on its own ([`Tae::read`]) is group 0, where the stored numbers are the animations' own: every character binder but
+//! the player's holds a single event file, in its first event slot.
 
 use crate::bytes::{Budget, View};
-use crate::{Result, invalid};
+use crate::{Binder, BinderFile, Result, invalid};
 
 const FORMAT: &str = "TAE";
 
 /// The only version read: Sekiro's and Elden Ring's.
 pub const VERSION: u32 = 0x1000D;
+
+/// The span of numbers one animation group holds: an animation's number is its group times this plus its number within
+/// the group.
+pub const GROUP_SPAN: i64 = 1_000_000;
+
+/// The binder member ID whose presence puts an animation binder's event slots at 5,000,000 to 5,099,999 (3,000,000 to
+/// 3,099,999 without it; DSAnimStudio).
+const VERSIONED_BINDER_MARK: i32 = 9_999_999;
 
 /// Seconds from which SoulsFormatsNEXT treats an event's end as "until the animation ends" (it reads a stored `f32::MAX`
 /// as this placeholder, and Elden Ring stores it as such).
@@ -43,7 +59,8 @@ pub enum Header {
     },
     /// The animation takes both its motion data and its events from the animation numbered `from`.
     ImportOther {
-        /// The animation number it takes both from.
+        /// The number of the animation it takes both from, group and all ([`Tae::number`]): it may be an animation of
+        /// another event file of the binder.
         from: i32,
         /// A stored word whose meaning is not established.
         unknown: i32,
@@ -76,7 +93,7 @@ impl Event {
 /// One animation's record.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Animation {
-    /// The animation's number as stored (`3000`).
+    /// The animation's number within its file's group, as stored (`3000`); [`Tae::number`] is its number.
     pub id: i64,
     /// Where the animation gets its motion data and events.
     pub header: Header,
@@ -97,8 +114,17 @@ pub struct Tae {
     pub skeleton_name: Option<String>,
     /// The SIB file name the file states, if any.
     pub sib_name: Option<String>,
+    /// The animation group the file holds, from its slot in its animation binder ([`Tae::read_member`]); 0 for a file
+    /// read on its own.
+    pub group: i64,
     /// The animations, in file order.
     pub animations: Vec<Animation>,
+}
+
+impl AsRef<Tae> for Tae {
+    fn as_ref(&self) -> &Tae {
+        self
+    }
 }
 
 fn size(v: &View<'_>, o: usize) -> Result<usize> {
@@ -204,32 +230,92 @@ impl Tae {
             event_bank,
             skeleton_name,
             sib_name,
+            group: 0,
             animations,
         })
     }
 
-    /// The animation numbered `id`.
-    pub fn animation(&self, id: i64) -> Option<&Animation> {
-        self.animations.iter().find(|a| a.id == id)
+    /// Read the event file `member` of the animation binder `binder` (the member's bytes as the binder decoded them),
+    /// its group the member's slot past the binder's first event slot. A member outside the binder's event slots is
+    /// refused.
+    pub fn read_member(binder: &Binder, member: &BinderFile) -> Result<Tae> {
+        let (first, last) = if binder.files.iter().any(|f| f.id == Some(VERSIONED_BINDER_MARK)) {
+            (5_000_000, 5_099_999)
+        } else {
+            (3_000_000, 3_099_999)
+        };
+        let group = member
+            .id
+            .filter(|slot| (first..=last).contains(slot))
+            .and_then(|slot| slot.checked_sub(first))
+            .ok_or_else(|| {
+                invalid(
+                    FORMAT,
+                    0,
+                    format!(
+                        "event file {} in binder slot {:?}, outside the binder's event slots {first} to {last}",
+                        member.name.as_deref().unwrap_or("?"),
+                        member.id,
+                    ),
+                )
+            })?;
+        let mut tae = Tae::read(&member.bytes)?;
+        tae.group = i64::from(group);
+        Ok(tae)
     }
 
-    /// Follow a TAE import's event record, detecting missing targets and cycles. Motion-only imports
-    /// keep their own events; only ImportOther inherits events as well as motion.
-    pub fn resolved_animation(&self, id: i64) -> Result<Option<&Animation>> {
-        let Some(mut record) = self.animation(id) else {
-            return Ok(None);
-        };
-        let mut seen = std::collections::BTreeSet::new();
-        while let Header::ImportOther { from, .. } = &record.header {
-            if !seen.insert(record.id) {
-                return Err(invalid(FORMAT, 0, format!("animation {id}: cyclic event import")));
-            }
-            record = self
-                .animation(i64::from(*from))
-                .ok_or_else(|| invalid(FORMAT, 0, format!("animation {id}: event import {from} absent")))?;
-        }
-        Ok(Some(record))
+    /// The number of `animation`, one of this file's: the file's group times [`GROUP_SPAN`] plus its stored number.
+    pub fn number(&self, animation: &Animation) -> i64 {
+        self.group.saturating_mul(GROUP_SPAN).saturating_add(animation.id)
     }
+
+    /// The animation numbered `number` ([`Tae::number`]).
+    pub fn animation(&self, number: i64) -> Option<&Animation> {
+        self.animations.iter().find(|a| self.number(a) == number)
+    }
+
+    /// [`resolve`] within this file alone.
+    pub fn resolved_animation(&self, number: i64) -> Result<Option<&Animation>> {
+        Ok(resolve(std::slice::from_ref(self), number)?.map(|(_, a)| a))
+    }
+}
+
+/// The record whose events the animation numbered `number` plays, among the event files `files` of a binder, with the
+/// index of the file it is in: the first file with an animation of that number, then each import
+/// ([`Header::ImportOther`]) followed to the animation it names in any of the files; a negative number names none, and
+/// the animation plays its own record (DSAnimStudio). `None` where no file has the animation; an import naming an
+/// animation no file has, or a cycle of imports, is an error. Motion-only imports keep their own events; only
+/// ImportOther inherits events as well as motion.
+pub fn resolve<T: AsRef<Tae>>(files: &[T], number: i64) -> Result<Option<(usize, &Animation)>> {
+    let find = |n: i64| {
+        files
+            .iter()
+            .enumerate()
+            .find_map(|(i, f)| f.as_ref().animation(n).map(|a| (i, a)))
+    };
+    let Some(mut found) = find(number) else {
+        return Ok(None);
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    while let Header::ImportOther { from, .. } = &found.1.header
+        && *from >= 0
+    {
+        if !seen.insert((found.0, found.1.id)) {
+            return Err(invalid(
+                FORMAT,
+                0,
+                format!("animation {number}: cyclic event import"),
+            ));
+        }
+        found = find(i64::from(*from)).ok_or_else(|| {
+            invalid(
+                FORMAT,
+                0,
+                format!("animation {number}: event import {from} absent"),
+            )
+        })?;
+    }
+    Ok(Some(found))
 }
 
 fn read_animation(
@@ -469,6 +555,91 @@ mod tests {
         u64le(&mut b, 0x170 + 24 + 16, 0x190);
         put(&mut b, 0x190 + 8, &(0x190u64 + 16).to_le_bytes());
         assert!(Tae::read(&b).is_err());
+    }
+
+    fn member(id: i32, bytes: Vec<u8>) -> BinderFile {
+        BinderFile {
+            id: Some(id),
+            name: Some(format!("{id}.tae")),
+            flags: 0,
+            bytes,
+        }
+    }
+
+    #[test]
+    fn a_member_is_the_group_its_slot_makes_and_its_animations_are_numbered_in_it() {
+        // a binder holding member 9,999,999 has its event slots from 5,000,000
+        let binder = Binder {
+            version: [0; 8],
+            format: 0,
+            files: vec![member(5_000_050, file()), member(9_999_999, Vec::new())],
+        };
+        let tae = Tae::read_member(&binder, &binder.files[0]).unwrap();
+        assert_eq!(tae.group, 50);
+        assert_eq!(tae.number(&tae.animations[0]), 50_003_000);
+        assert!(tae.animation(3000).is_none());
+        assert_eq!(tae.animation(50_003_000).unwrap().id, 3000);
+        // without it, from 3,000,000; a member outside the slots is refused, naming its slot
+        let binder = Binder {
+            version: [0; 8],
+            format: 0,
+            files: vec![member(3_000_000, file()), member(5_000_050, file())],
+        };
+        assert_eq!(Tae::read_member(&binder, &binder.files[0]).unwrap().group, 0);
+        let e = Tae::read_member(&binder, &binder.files[1])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("slot Some(5000050)") && e.contains("3000000 to 3099999"),
+            "{e}"
+        );
+        // a file read on its own is group 0
+        assert_eq!(Tae::read(&file()).unwrap().group, 0);
+    }
+
+    #[test]
+    fn an_import_names_an_animation_of_any_event_file_of_the_binder() {
+        let animation = |id, header| Animation {
+            id,
+            header,
+            file_name: None,
+            events: Vec::new(),
+        };
+        let tae = |group, animations| Tae {
+            id: 0,
+            event_bank: 0,
+            skeleton_name: None,
+            sib_name: None,
+            group,
+            animations,
+        };
+        let import = |from| Header::ImportOther { from, unknown: 0 };
+        // group 50's 122301 imports 50_122_302 (its own file's 122302), which imports group 0's 3000
+        let files = [
+            tae(0, vec![animation(3000, Header::None)]),
+            tae(
+                50,
+                vec![
+                    animation(122_301, import(50_122_302)),
+                    animation(122_302, import(3000)),
+                ],
+            ),
+        ];
+        let (file, found) = resolve(&files, 50_122_301).unwrap().unwrap();
+        assert_eq!((file, found.id), (0, 3000));
+        assert!(resolve(&files, 122_301).unwrap().is_none());
+        // within the group-50 file alone the second import's target is absent
+        let e = files[1].resolved_animation(50_122_301).unwrap_err().to_string();
+        assert!(e.contains("event import 3000 absent"), "{e}");
+        // a cycle across files is refused
+        let cycle = [
+            tae(0, vec![animation(3000, import(50_000_001))]),
+            tae(50, vec![animation(1, import(3000))]),
+        ];
+        assert!(resolve(&cycle, 3000).unwrap_err().to_string().contains("cyclic"));
+        // a negative import names none: the animation's own record
+        let own = [tae(0, vec![animation(5010, import(-1))])];
+        assert_eq!(resolve(&own, 5010).unwrap().unwrap().1.id, 5010);
     }
 
     #[test]
