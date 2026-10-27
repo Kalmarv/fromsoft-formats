@@ -2,7 +2,8 @@
 
 A Rust library that reads the data files of FromSoftware's Sekiro: Shadows Die Twice and Elden Ring: the installed archives, the containers around files, and the models, maps, materials, textures, params, text, events and collision inside them.
 
-It reads, by name and for the game versions it was written against:
+It was written and checked against the Steam builds of Sekiro 1.06 (`sekiro.exe` 1.6.0.0) and Elden Ring
+(`eldenring.exe` 2.7.2.0). It reads, by name:
 
 - **Archives and containers.** BHD5/BDT archive indexes and their entries (RSA-wrapped index, AES-128 ranges), the path hashes of both games, DCX envelopes (DFLT, KRAK and ZSTD) and BND4 binders, including split BHF4/BDF4 binders.
 - **Models and textures.** FLVER2 models (versions `0x20013`, `0x20014`, `0x20016`, `0x2001a`, including Elden Ring's SpeedTree layouts), TPF texture packages (PC, DDS payloads kept whole), CLM2 cloth companions.
