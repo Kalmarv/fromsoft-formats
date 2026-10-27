@@ -13,6 +13,8 @@ fn part() -> Part {
         entity_id: -1,
         entity_group_ids: [-1; 8],
         shadows: Default::default(),
+        draw: Default::default(),
+        tile_load: None,
     }
 }
 fn close(a: [[f32; 3]; 4], b: [[f32; 3]; 4]) {
@@ -67,6 +69,10 @@ fn empty_map() -> Vec<u8> {
 }
 /// A map whose parts section holds these part records (every other section empty).
 fn map_with_parts(parts: &[Vec<u8>]) -> Vec<u8> {
+    map_with(&[], parts)
+}
+/// A map whose model section holds these model records and its parts section these part records.
+fn map_with(models: &[Vec<u8>], parts: &[Vec<u8>]) -> Vec<u8> {
     let mut data = b"MSB \x01\0\0\0\x10\0\0\0\0\0\x01\xff".to_vec();
     let names = [
         "MODEL_PARAM_ST",
@@ -79,7 +85,11 @@ fn map_with_parts(parts: &[Vec<u8>]) -> Vec<u8> {
         "MAPSTUDIO_BONE_NAME_STRING",
     ];
     for (i, name) in names.into_iter().enumerate() {
-        let records: &[Vec<u8>] = if i == 5 { parts } else { &[] };
+        let records: &[Vec<u8>] = match i {
+            0 => models,
+            5 => parts,
+            _ => &[],
+        };
         let start = data.len();
         let table = 16 + 8 * (records.len() + 1);
         data.resize(start + table, 0);
@@ -204,6 +214,8 @@ fn part_graphics_config_and_scene_ids_as_stored() {
             light_scattering: 12,
             env_map: 3,
             scene: Some([2, -1, 4, 0]),
+            gparam_override: None,
+            scene_sub_id: None,
         }],
         "a part without the slot stores none; the other as stored, -1 kept"
     );
@@ -265,4 +277,61 @@ fn rejects_cycles_and_names_pointing_into_headers() {
     let mut data = empty_map();
     put64(&mut data, 24, 16);
     assert!(fromsoft_formats::msb::MapLayout::read(&data).is_err());
+}
+
+/// A model record of the map-piece kind that states `instances` parts name it.
+fn model_record(name: &str, instances: u32) -> Vec<u8> {
+    let mut r = vec![0u8; 40];
+    for (field, text) in [(0, name), (16, "sib")] {
+        let at = r.len();
+        put64(&mut r, field, at);
+        r.extend(text.encode_utf16().chain([0]).flat_map(u16::to_le_bytes));
+        r.resize(r.len().next_multiple_of(8), 0);
+    }
+    r[24..28].copy_from_slice(&instances.to_le_bytes());
+    r
+}
+/// A part record that names model `model`.
+fn part_naming(model: u32) -> Vec<u8> {
+    let mut r = part_record(-1, [-1; 8], [0; 16]);
+    r[16..20].copy_from_slice(&model.to_le_bytes());
+    r
+}
+#[test]
+fn a_model_states_how_many_parts_name_it() {
+    use fromsoft_formats::msb::MapLayout;
+    let models = [model_record("m000000", 2), model_record("m000001", 0)];
+    let map = MapLayout::read(&map_with(
+        &models,
+        &[part_naming(0), part_naming(0), part_record(-1, [-1; 8], [0; 16])],
+    ))
+    .unwrap();
+    assert_eq!(map.models.iter().map(|m| m.instances).collect::<Vec<_>>(), [2, 0]);
+    // too few, too many and a model nothing names are each refused at the count, naming the model
+    for (stated, parts) in [
+        (2, vec![part_naming(0)]),
+        (1, vec![part_naming(0), part_naming(0)]),
+        (1, vec![]),
+    ] {
+        let models = [model_record("m000000", stated)];
+        let e = MapLayout::read(&map_with(&models, &parts))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("MSB model") && e.contains("m000000") && e.contains("instances"),
+            "{e}"
+        );
+    }
+}
+#[test]
+fn sekiros_entity_block_names_the_lod_param_row_and_255_is_none() {
+    use fromsoft_formats::msb::MapLayout;
+    for (byte, want) in [(41u8, Some(41u8)), (255, None), (0, Some(0))] {
+        let mut record = part_record(5, [-1; 8], [0; 16]);
+        let entity = u64::from_le_bytes(record[96..104].try_into().unwrap()) as usize;
+        record[entity + 8] = byte;
+        let map = MapLayout::read(&map_with_parts(&[record])).unwrap();
+        assert_eq!(map.parts[0].draw.lod_param_id, want);
+        assert!(!map.parts[0].draw.use_parts_draw_param && map.parts[0].tile_load.is_none());
+    }
 }

@@ -91,6 +91,7 @@ pub mod game;
 pub mod game_params;
 pub mod gparam;
 mod keys;
+pub mod mapid;
 pub mod matbin;
 pub mod messages;
 pub mod metaparam;

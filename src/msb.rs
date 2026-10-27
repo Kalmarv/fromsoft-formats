@@ -6,6 +6,7 @@
 //! The generations share the section chain and the record envelopes; the [`Generation`] the file's section chain
 //! names supplies what differs.
 use crate::affine::narrow;
+use crate::mapid::MapId;
 use crate::{Result, bytes::View, invalid};
 
 /// How a part's point-light shadow byte is stored.
@@ -53,7 +54,23 @@ pub struct Generation {
     pub map_offset_event: Option<u32>,
     /// Region type code of checkpoint/warp spawn points, where known.
     pub spawn_region: Option<u32>,
+    /// Region record header size in bytes: the name, the shape data, the entity block and the type data lie after it.
+    pub region_header: usize,
+    /// Event record header size in bytes.
+    pub event_header: usize,
+    /// Offset in a region record of the pointer (u64) to its extra block, where the generation has one (see
+    /// [`EXTRA_BLOCK`]).
+    pub region_extra: Option<usize>,
+    /// Offset in an event record of the pointer (u64) to its extra block.
+    pub event_extra: Option<usize>,
+    /// Offset in a part record of the pointer to its tile-load config, whose first word is a map ([`Part::tile_load`]).
+    pub tile_load: Option<usize>,
 }
+
+/// The size of the extra block a region or event record of Elden Ring ends with (after its type data): a map word at
+/// +0 (-1: none), three more words, and 16 bytes that are zero.
+pub const EXTRA_BLOCK: usize = 32;
+
 impl Generation {
     /// Sekiro (MSBS): eight sections, ending with part poses and bone names.
     pub const SEKIRO: Self = Self {
@@ -90,6 +107,11 @@ impl Generation {
         point_light_shadow: FlagByte::Bool,
         map_offset_event: Some(9),
         spawn_region: Some(8),
+        region_header: 96,
+        event_header: 40,
+        region_extra: None,
+        event_extra: None,
+        tile_load: None,
     };
     /// Elden Ring (MSBE): six sections ending with parts; assets take the place of objects. It has no MapOffset
     /// events; its spawn points are region type 8, as Sekiro's (the region header is laid out alike: name offset,
@@ -126,6 +148,11 @@ impl Generation {
         point_light_shadow: FlagByte::ZeroOrMinusOne,
         map_offset_event: None,
         spawn_region: Some(8),
+        region_header: 104,
+        event_header: 48,
+        region_extra: Some(96),
+        event_extra: Some(40),
+        tile_load: Some(152),
     };
     /// Both generations.
     pub const ALL: [&'static Self; 2] = [&Self::SEKIRO, &Self::ELDEN_RING];
@@ -209,6 +236,9 @@ pub struct Model {
     pub name: String,
     /// The model kind code as stored.
     pub kind: u32,
+    /// The instance count the model record states: the number of parts that name the model (checked when the layout is
+    /// read).
+    pub instances: u32,
 }
 /// What a part places.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -264,6 +294,31 @@ pub struct Part {
     pub entity_group_ids: [i32; 8],
     /// Source shadow controls, independent of material and placement state.
     pub shadows: ShadowFlags,
+    /// The entity block's draw controls.
+    pub draw: DrawControls,
+    /// The map the part's tile-load config names (Elden Ring; `None` where the stored word is -1 and in Sekiro). The
+    /// maps are those of the overworld's tiles: a part of `m60_08_10_02` names `m60_33_41_00`.
+    pub tile_load: Option<MapId>,
+}
+/// The entity block's fields that choose how a part is drawn, as stored. Sekiro keeps only `lod_param_id`; Elden Ring
+/// the others.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct DrawControls {
+    /// Sekiro, byte at +8: the `LodParam` row the part draws with (255: none).
+    pub lod_param_id: Option<u8>,
+    /// Elden Ring, byte at +4: whether the part uses a `PartsDrawParam` row.
+    pub use_parts_draw_param: bool,
+    /// Elden Ring, u16 at +8: the `PartsDrawParam` row (0 where the part uses none; the row exists in the regulation for
+    /// every part that sets `use_parts_draw_param`).
+    pub parts_draw_param_id: u16,
+    /// Elden Ring, byte at +0x14.
+    pub draw_only_in_reflection: bool,
+    /// Elden Ring, byte at +0x15.
+    pub enable_on_above_shadow: bool,
+    /// Elden Ring, byte at +0x16.
+    pub disable_point_light_effect: bool,
+    /// Elden Ring, byte at +0x3f.
+    pub disable_rtao: bool,
 }
 /// Raw entity-block shadow controls. Renderer-specific bytes are retained
 /// uninterpreted. `only && !cast` is contradictory: retain and count it rather
@@ -470,7 +525,11 @@ impl MapLayout {
             if !generation.model_kinds.contains(&kind) {
                 return Err(r.err(8, "model kind"));
             }
-            models.push(Model { name, kind });
+            models.push(Model {
+                name,
+                kind,
+                instances: r.u32(24)?,
+            });
         }
         let mut parts = Vec::new();
         let header = generation.part_header;
@@ -522,6 +581,31 @@ impl MapLayout {
                 r.expect(r.at(entity, offset)?, &vec![0; len])?;
             }
             let i32_at = |o: usize| r.u32(o).map(|v| v as i32);
+            let draw = if generation.name == Generation::SEKIRO.name {
+                DrawControls {
+                    lod_param_id: Some(r.u8_at(entity, 8)?).filter(|&id| id != 255),
+                    ..DrawControls::default()
+                }
+            } else {
+                DrawControls {
+                    lod_param_id: None,
+                    use_parts_draw_param: r.boolean(r.at(entity, 4)?)?,
+                    parts_draw_param_id: r.u16(r.at(entity, 8)?)?,
+                    draw_only_in_reflection: r.boolean(r.at(entity, 0x14)?)?,
+                    enable_on_above_shadow: r.boolean(r.at(entity, 0x15)?)?,
+                    disable_point_light_effect: r.boolean(r.at(entity, 0x16)?)?,
+                    disable_rtao: r.boolean(r.at(entity, 0x3f)?)?,
+                }
+            };
+            let tile_load = match generation.tile_load {
+                Some(slot) => match r.size(slot)? {
+                    0 => None,
+                    at => Some(r.u32(at)?)
+                        .filter(|&word| word != u32::MAX)
+                        .map(MapId::from_msb_word),
+                },
+                None => None,
+            };
             let entity_id = i32_at(entity)?;
             let mut entity_group_ids = [0i32; 8];
             for (k, g) in entity_group_ids.iter_mut().enumerate() {
@@ -551,6 +635,8 @@ impl MapLayout {
                     static_cast: r.u8_at(entity, 0x0d)?,
                     cascade3_cast: r.u8_at(entity, 0x0e)?,
                 },
+                draw,
+                tile_load,
                 hit_filter: if kind == PartKind::Collision {
                     Some(r.u8(r.size(104)?)?)
                 } else {
@@ -568,8 +654,28 @@ impl MapLayout {
                 scale: vector(&r, 56)?,
             });
         }
+        // a model states how many parts name it
+        let mut named = vec![0u32; models.len()];
+        for m in parts.iter().filter_map(|p| p.model) {
+            if let Some(count) = named.get_mut(m) {
+                *count = count.saturating_add(1);
+            }
+        }
+        for (i, (model, &count)) in models.iter().zip(&named).enumerate() {
+            if model.instances != count {
+                return Err(invalid(
+                    "MSB model",
+                    model_section.base(i).saturating_add(24),
+                    format!(
+                        "model {} states {} instances, {count} parts name it",
+                        model.name, model.instances
+                    ),
+                ));
+            }
+        }
         let mut map_offsets = Vec::new();
         let event_section = section_at(&sections, 1)?;
+        let event_header = generation.event_header;
         for (index, data) in event_section.records.iter().enumerate() {
             let r = View {
                 data,
@@ -577,12 +683,12 @@ impl MapLayout {
                 be: false,
                 base: event_section.base(index),
             };
-            r.slice(0, 40)?;
+            r.slice(0, event_header)?;
             if Some(r.u32(12)?) == generation.map_offset_event {
-                let name = text(&r, pointer(&r, 0, 40)?)?;
-                let base = pointer(&r, 24, 40)?;
+                let name = text(&r, pointer(&r, 0, event_header)?)?;
+                let base = pointer(&r, 24, event_header)?;
                 r.slice(base, 16)?;
-                let p = pointer(&r, 32, 40)?;
+                let p = pointer(&r, 32, event_header)?;
                 map_offsets.push(MapOffset {
                     name,
                     position: vector(&r, p)?,
@@ -714,6 +820,13 @@ pub struct PartGparam {
     pub env_map: i32,
     /// A collision part's four scene bytes, as stored (-1: none).
     pub scene: Option<[i8; 4]>,
+    /// Elden Ring: a collision part's `GparamOverride`, the byte at +0x35 of its type data (`None` for 255): the two-digit
+    /// id of the overworld draw-param file (`m60_00_00_00`-family, ids `10`, `20`, `21`, `30`, `31`, `40`, `41`, `42`
+    /// and the like) it selects.
+    pub gparam_override: Option<u8>,
+    /// Elden Ring: the byte at +32 of a collision part's scene config (`None` for 255): the same id, which restates the
+    /// override (1, 2 and 3 as 10, 20 and 30) on all but one of the collisions that have one.
+    pub scene_sub_id: Option<u8>,
 }
 
 impl Generation {
@@ -748,6 +861,17 @@ impl MapLayout {
             }
             let word = |o: usize| r.u32(o).map(|v| v as i32);
             let scene = r.size(120)?;
+            let elden = self.generation.name == Generation::ELDEN_RING.name;
+            let gparam_override = if elden && part.kind == PartKind::Collision {
+                Some(r.u8_at(r.size(104)?, 0x35)?).filter(|&id| id != 255)
+            } else {
+                None
+            };
+            let scene_sub_id = if elden && scene != 0 {
+                Some(r.u8_at(scene, 32)?).filter(|&id| id != 255)
+            } else {
+                None
+            };
             out.push(PartGparam {
                 part: part.index,
                 light_set: word(config)?,
@@ -763,6 +887,8 @@ impl MapLayout {
                     };
                     Some([a as i8, b as i8, c as i8, d as i8])
                 },
+                gparam_override,
+                scene_sub_id,
             });
         }
         Ok(out)
@@ -861,7 +987,7 @@ impl MapLayout {
                     be: false,
                     base: regions.base(i),
                 };
-                text(&v, pointer(&v, 0, 96)?)
+                text(&v, pointer(&v, 0, self.generation.region_header)?)
             })
             .collect()
     }
@@ -887,9 +1013,9 @@ impl MapLayout {
             if v.u32(8)? != code {
                 continue;
             }
-            v.slice(0, 96)?;
+            v.slice(0, self.generation.region_header)?;
             points.push(SpawnPoint {
-                name: text(&v, pointer(&v, 0, 96)?)?,
+                name: text(&v, pointer(&v, 0, self.generation.region_header)?)?,
                 region,
                 position: vector(&v, 20)?,
                 rotation_degrees: vector(&v, 32)?,
@@ -958,8 +1084,8 @@ pub enum RegionShape {
 /// +0, type at +8, the index at +12, the shape at +16, position at +20, rotation (degrees) at +32, the shape data
 /// offset at +72, the entity block offset at +80 (an activation part index, then the entity ID) and the type data
 /// offset at +88. What a type's data holds (a sound's id, an effect, a message) is per type and is not read: the
-/// bytes are kept, from the type data offset to the record's end (a record that stores more after it, which Elden
-/// Ring's does, keeps those bytes here too).
+/// bytes are kept, from the type data offset to the end of the type data: the record's end in Sekiro, the extra block
+/// ([`EXTRA_BLOCK`], pointer at +96) in Elden Ring.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Region {
     /// Its index in the layout's regions, in file order.
@@ -982,12 +1108,15 @@ pub struct Region {
     /// The type's own data, unread, as hexadecimal digits when serialised.
     #[serde(serialize_with = "hex")]
     pub type_data: Vec<u8>,
+    /// Elden Ring: the map the extra block's first word names (`None` for -1 and in Sekiro). Only overworld tiles of
+    /// levels 1 and 2 store one.
+    pub extra_map: Option<MapId>,
 }
 
 /// One event of the layout as stored (`EVENT_PARAM_ST`): what every type
-/// shares, and the type's own data as bytes. SoulsFormats' `MSBS`/`MSBE` `Event` read the header alike: the event ID at
-/// +8, the type at +12, the index at +16, the base data offset at +24 (a part index, a region index, the entity ID) and
-/// the type data offset at +32. The part and region an event names are resolved to their names where the index is in
+/// shares, and the type's own data as bytes. SoulsFormats' `MSBS`/`MSBE` `Event` read the header alike: a number at
+/// +8, the type at +12, the index in the type at +16, the base data offset at +24 (a part index, a region index, the
+/// entity ID) and the type data offset at +32; Elden Ring's also holds the extra block's offset at +40 ([`EXTRA_BLOCK`]). The part and region an event names are resolved to their names where the index is in
 /// range (-1: none).
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Event {
@@ -995,7 +1124,7 @@ pub struct Event {
     pub index: usize,
     /// The event's name.
     pub name: String,
-    /// The event ID as stored (`EventID`).
+    /// The number stored at +8 (SoulsFormats' `EventID`): unique within a file, not the record's index.
     pub event_id: i32,
     /// The type code as stored.
     pub type_code: u32,
@@ -1007,9 +1136,11 @@ pub struct Event {
     pub region: Option<String>,
     /// The entity ID it stores.
     pub entity_id: i32,
-    /// The type's own data, unread, as hexadecimal digits when serialised.
+    /// The type's own data, unread, as hexadecimal digits when serialised (to the extra block in Elden Ring).
     #[serde(serialize_with = "hex")]
     pub type_data: Vec<u8>,
+    /// Elden Ring: the map the extra block's first word names (`None` for -1 and in Sekiro).
+    pub extra_map: Option<MapId>,
 }
 
 impl PartKind {
@@ -1216,6 +1347,39 @@ impl Generation {
     }
 }
 
+/// The extra block of a region or event record `r` whose generation keeps its pointer at `pointer_at` (`None`: it has
+/// none, and the type data runs to the record's end): where the type data ends, and the map the block's first word
+/// names. The block lies after the type data, is [`EXTRA_BLOCK`] bytes of which the last 16 are zero, and is the last
+/// thing in the record bar fewer than eight zero bytes of padding.
+fn extra_block(
+    r: &View<'_>,
+    pointer_at: Option<usize>,
+    header: usize,
+    type_at: usize,
+) -> Result<(usize, Option<MapId>)> {
+    let Some(pointer_at) = pointer_at else {
+        return Ok((r.data.len(), None));
+    };
+    let extra = r.size(pointer_at)?;
+    if extra < header {
+        return Err(r.err(pointer_at, "extra block missing or inside the header"));
+    }
+    let block = r.slice(extra, EXTRA_BLOCK)?;
+    if extra < type_at {
+        return Err(r.err(pointer_at, "extra block before the type data"));
+    }
+    if block.get(16..).is_none_or(|rest| rest.iter().any(|&b| b != 0)) {
+        return Err(r.err(r.at(extra, 16)?, "extra block's last 16 bytes are not zero"));
+    }
+    let after = r.at(extra, EXTRA_BLOCK)?;
+    let tail = r.slice(after, r.data.len().saturating_sub(after))?;
+    if tail.len() >= 8 || tail.iter().any(|&b| b != 0) {
+        return Err(r.err(after, "bytes after the extra block"));
+    }
+    let word = r.u32(extra)?;
+    Ok((extra, (word != u32::MAX).then(|| MapId::from_msb_word(word))))
+}
+
 impl MapLayout {
     /// Every region of the layout, of every type, in file order, with its shape and the bytes of its type data. A
     /// record that does not fit the layout above is an error naming it.
@@ -1229,13 +1393,14 @@ impl MapLayout {
                 be: false,
                 base: regions.base(index),
             };
-            r.slice(0, 96)?;
-            let name = text(&r, pointer(&r, 0, 96)?)?;
+            let header = self.generation.region_header;
+            r.slice(0, header)?;
+            let name = text(&r, pointer(&r, 0, header)?)?;
             let type_code = r.u32(8)?;
             let shape_code = r.u32(16)?;
             let shape_data = r.size(72)?;
             let shape_data_at = |delta: usize| -> Result<usize> {
-                if shape_data < 96 {
+                if shape_data < header {
                     return Err(r.err(72, "a shape without data"));
                 }
                 if shape_data >= r.data.len() {
@@ -1283,13 +1448,17 @@ impl MapLayout {
                 code => RegionShape::Unknown { code },
             };
             let entity = r.size(80)?;
-            if entity < 96 {
+            if entity < header {
                 return Err(r.err(80, "no entity block"));
             }
-            let type_data = match r.size(88)? {
+            let type_at = r.size(88)?;
+            if type_at != 0 && type_at < header {
+                return Err(r.err(88, "type data inside the header"));
+            }
+            let (type_end, extra_map) = extra_block(&r, self.generation.region_extra, header, type_at)?;
+            let type_data = match type_at {
                 0 => Vec::new(),
-                at if at >= 96 => r.slice(at, r.data.len().saturating_sub(at))?.to_vec(),
-                _ => return Err(r.err(88, "type data inside the header")),
+                at => r.slice(at, type_end.saturating_sub(at))?.to_vec(),
             };
             out.push(Region {
                 index,
@@ -1301,6 +1470,7 @@ impl MapLayout {
                 rotation_degrees: vector(&r, 32)?,
                 entity_id: r.u32_at(entity, 4)? as i32,
                 type_data,
+                extra_map,
             });
         }
         Ok(out)
@@ -1319,14 +1489,19 @@ impl MapLayout {
                 be: false,
                 base: events.base(index),
             };
-            r.slice(0, 40)?;
-            let name = text(&r, pointer(&r, 0, 40)?)?;
+            let header = self.generation.event_header;
+            r.slice(0, header)?;
+            let name = text(&r, pointer(&r, 0, header)?)?;
             let type_code = r.u32(12)?;
-            let base = pointer(&r, 24, 40)?;
-            let type_data = match r.size(32)? {
+            let base = pointer(&r, 24, header)?;
+            let type_at = r.size(32)?;
+            if type_at != 0 && type_at < header {
+                return Err(r.err(32, "type data inside the header"));
+            }
+            let (type_end, extra_map) = extra_block(&r, self.generation.event_extra, header, type_at)?;
+            let type_data = match type_at {
                 0 => Vec::new(),
-                at if at >= 40 => r.slice(at, r.data.len().saturating_sub(at))?.to_vec(),
-                _ => return Err(r.err(32, "type data inside the header")),
+                at => r.slice(at, type_end.saturating_sub(at))?.to_vec(),
             };
             let named =
                 |i: i32, names: &dyn Fn(usize) -> Option<String>| usize::try_from(i).ok().and_then(names);
@@ -1342,6 +1517,7 @@ impl MapLayout {
                 region: named(r.u32_at(base, 4)? as i32, &|i| regions.get(i).cloned()),
                 entity_id: r.u32_at(base, 8)? as i32,
                 type_data,
+                extra_map,
             });
         }
         Ok(out)
@@ -1356,7 +1532,7 @@ mod region_tests {
         s.encode_utf16().chain([0]).flat_map(u16::to_le_bytes).collect()
     }
 
-    /// A region record: a 96-byte header, then the name, the entity block, the shape data and the type data.
+    /// An Elden Ring region record ([`region_in`]).
     fn region(
         name: &str,
         type_code: u32,
@@ -1365,16 +1541,51 @@ mod region_tests {
         entity: u32,
         type_data: &[u8],
     ) -> Vec<u8> {
+        region_in(
+            &Generation::ELDEN_RING,
+            name,
+            type_code,
+            shape,
+            floats,
+            entity,
+            type_data,
+        )
+    }
+
+    /// The extra block of a record with no map: -1, two zero words, -1 and 16 zero bytes.
+    fn empty_extra() -> Vec<u8> {
+        let mut block = vec![0u8; 32];
+        block[0..4].copy_from_slice(&u32::MAX.to_le_bytes());
+        block[12..16].copy_from_slice(&u32::MAX.to_le_bytes());
+        block
+    }
+
+    /// A region record of `generation`: its header, then the name, the entity block, the shape data, the type data and,
+    /// in Elden Ring, the extra block.
+    fn region_in(
+        generation: &Generation,
+        name: &str,
+        type_code: u32,
+        shape: u32,
+        floats: &[f32],
+        entity: u32,
+        type_data: &[u8],
+    ) -> Vec<u8> {
+        let header = generation.region_header;
         let mut tail = utf16(name);
-        let entity_at = 96 + tail.len();
+        let entity_at = header + tail.len();
         tail.extend([0u8; 4]);
         tail.extend(entity.to_le_bytes());
-        let shape_at = 96 + tail.len();
+        let shape_at = header + tail.len();
         tail.extend(floats.iter().flat_map(|f| f.to_le_bytes()));
-        let type_at = 96 + tail.len();
+        let type_at = header + tail.len();
         tail.extend(type_data);
-        let mut r = vec![0u8; 96];
-        r[0..8].copy_from_slice(&96u64.to_le_bytes());
+        let extra_at = header + tail.len();
+        if generation.region_extra.is_some() {
+            tail.extend(empty_extra());
+        }
+        let mut r = vec![0u8; header];
+        r[0..8].copy_from_slice(&(header as u64).to_le_bytes());
         r[8..12].copy_from_slice(&type_code.to_le_bytes());
         r[16..20].copy_from_slice(&shape.to_le_bytes());
         for (i, v) in [1.0f32, 2.0, 3.0, 10.0, 20.0, 30.0].iter().enumerate() {
@@ -1385,6 +1596,9 @@ mod region_tests {
         slot(&mut r, 72, if floats.is_empty() { 0 } else { shape_at });
         slot(&mut r, 80, entity_at);
         slot(&mut r, 88, if type_data.is_empty() { 0 } else { type_at });
+        if let Some(at) = generation.region_extra {
+            slot(&mut r, at, extra_at);
+        }
         r.extend(tail);
         r
     }
@@ -1426,6 +1640,8 @@ mod region_tests {
             entity_id: 0,
             entity_group_ids: [0; 8],
             shadows: ShadowFlags::default(),
+            draw: DrawControls::default(),
+            tile_load: None,
         };
         layout.parts = vec![
             part(0, PartKind::MapPiece),
@@ -1511,6 +1727,8 @@ mod region_tests {
                 entity_id: -1,
                 entity_group_ids: [-1; 8],
                 shadows: Default::default(),
+                draw: Default::default(),
+                tile_load: None,
             });
             assert_eq!(layout.character_init(0).unwrap(), Some(9000));
             layout.sections[5].records[0][152..156].copy_from_slice(&(-1i32).to_le_bytes());
@@ -1642,12 +1860,108 @@ mod region_tests {
     fn type_data_serialises_as_hex() {
         let layout = layout(
             &Generation::SEKIRO,
-            vec![region("Snd", 4, 2, &[3.0], 9, &[0xab, 0x01])],
+            vec![region_in(
+                &Generation::SEKIRO,
+                "Snd",
+                4,
+                2,
+                &[3.0],
+                9,
+                &[0xab, 0x01],
+            )],
         );
         let json = serde_json::to_value(&layout.map_regions().unwrap()[0]).unwrap();
         assert_eq!(json["type_data"], "ab01");
         assert_eq!(json["shape"], "sphere");
         assert_eq!(json["radius"], 3.0);
         assert_eq!(json["type_name"], "sound");
+    }
+
+    /// Elden Ring's region ends with a 32-byte extra block after the type data: the type data stops where the block starts,
+    /// and its first word is a map (-1: none, area in the top byte).
+    #[test]
+    fn an_extra_block_ends_the_type_data_and_names_a_map() {
+        let mut with_map = region("Tile", 21, 5, &[4.0, 5.0, 6.0], 7, &[1, 2, 3, 4]);
+        let at = with_map.len() - 32;
+        with_map[at..at + 4].copy_from_slice(&0x3c2c_2410u32.to_le_bytes());
+        // four bytes of padding after the block
+        let mut padded = region("Pad", 21, 5, &[4.0, 5.0, 6.0], 7, &[]);
+        padded.extend([0u8; 4]);
+        let layout = layout(
+            &Generation::ELDEN_RING,
+            vec![with_map, region("Plain", 21, 0, &[], 0, &[9]), padded],
+        );
+        let regions = layout.map_regions().unwrap();
+        assert_eq!(regions[0].type_data, [1, 2, 3, 4]);
+        assert_eq!(
+            regions[0].extra_map.map(|m| m.to_string()).as_deref(),
+            Some("m60_44_36_10")
+        );
+        assert_eq!(
+            (regions[1].type_data.clone(), regions[1].extra_map),
+            (vec![9], None)
+        );
+        assert_eq!((regions[2].type_data.len(), regions[2].extra_map), (0, None));
+        assert_eq!(layout.region_names().unwrap(), ["Tile", "Plain", "Pad"]);
+        // Sekiro has no such block: the type data runs to the record's end
+        let sekiro = self::layout(
+            &Generation::SEKIRO,
+            vec![region_in(
+                &Generation::SEKIRO,
+                "Snd",
+                4,
+                2,
+                &[3.0],
+                9,
+                &[0xab, 0x01],
+            )],
+        );
+        let regions = sekiro.map_regions().unwrap();
+        assert_eq!(
+            (regions[0].type_data.clone(), regions[0].extra_map),
+            (vec![0xab, 0x01], None)
+        );
+    }
+
+    /// An extra block that is missing, inside the header, before the type data, short, with data in its zero bytes or
+    /// followed by more than padding is refused at its field.
+    #[test]
+    fn a_damaged_extra_block_is_refused() {
+        let good = region("Tile", 21, 5, &[4.0, 5.0, 6.0], 7, &[1, 2, 3, 4]);
+        let len = good.len();
+        let pointer =
+            |record: &mut Vec<u8>, value: u64| record[96..104].copy_from_slice(&value.to_le_bytes());
+        for (what, edit) in [
+            (
+                "missing",
+                Box::new(|r: &mut Vec<u8>| pointer(r, 0)) as Box<dyn Fn(&mut Vec<u8>)>,
+            ),
+            ("inside the header", Box::new(|r: &mut Vec<u8>| pointer(r, 50))),
+            ("short", Box::new(|r: &mut Vec<u8>| pointer(r, (len - 8) as u64))),
+            (
+                "before the type data",
+                Box::new(|r: &mut Vec<u8>| pointer(r, 106)),
+            ),
+            (
+                "data in the zero bytes",
+                Box::new(|r: &mut Vec<u8>| r[len - 3] = 1),
+            ),
+            (
+                "more than padding",
+                Box::new(|r: &mut Vec<u8>| r.extend([0u8; 8])),
+            ),
+            (
+                "data after the block",
+                Box::new(|r: &mut Vec<u8>| r.extend([0, 0, 1, 0])),
+            ),
+        ] {
+            let mut bad = good.clone();
+            edit(&mut bad);
+            assert!(
+                layout(&Generation::ELDEN_RING, vec![bad]).map_regions().is_err(),
+                "{what}"
+            );
+        }
+        layout(&Generation::ELDEN_RING, vec![good]).map_regions().unwrap();
     }
 }

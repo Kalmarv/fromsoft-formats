@@ -74,19 +74,27 @@ pub(crate) fn asset_model(model: &str) -> Result<ObjectModel> {
 
 /// Areas laid out as a grid of tiles: the small tiles' edge in metres and the levels of larger tiles above them. A tile
 /// `mAA_XX_ZZ_00` sits in the level-`L` tile `mAA_{XX>>L}_{ZZ>>L}_0L`, whose map layout also places the small tile's
-/// larger assets (named `<small tile>-<part>`, in the larger tile's frame) so they stay drawn from farther away.
+/// larger assets (named `<small tile>-<part>`, in the larger tile's frame) so they stay drawn from farther away. An
+/// alternate tile `mAA_XX_ZZ_10` (the tile as a variant beside the base one at the same grid cell) sits in the
+/// alternate larger tiles `mAA_{XX>>L}_{ZZ>>L}_1L` the same way.
 const TILED_AREAS: &[(&str, f64, &[u32])] = &[("m60", 256., &[1, 2]), ("m61", 256., &[1, 2])];
 
 /// The larger tiles above `tile` and where `tile`'s centre lies in each one's frame (source x, z): offset
 /// `(i - (p << L)) * 256 + 128 - (256 << L) / 2` metres for grid index `i`, parent index `p` and level `L`. None for a
-/// map outside the tile grids or a tile above level 0.
+/// map outside the tile grids or a tile above level 0 (`_01`, `_02`, `_11`, `_12`, `_99` have none).
 pub(crate) fn parent_tiles(tile: &str) -> Vec<(String, [f64; 2])> {
     let Some(&(_, edge, levels)) = TILED_AREAS.iter().find(|(area, _, _)| tile.starts_with(area)) else {
         return Vec::new();
     };
-    if tile.len() != 12 || !tile.is_ascii() || !tile.ends_with("_00") {
+    if tile.len() != 12 || !tile.is_ascii() {
         return Vec::new();
     }
+    // `_00` (the base tile, parents `_0L`) or `_10` (its alternate, parents `_1L`)
+    let variant = match tile.get(9..) {
+        Some("_00") => '0',
+        Some("_10") => '1',
+        _ => return Vec::new(),
+    };
     let (Some(Ok(x)), Some(Ok(z)), Some(area)) = (
         tile.get(4..6).map(str::parse::<u32>),
         tile.get(7..9).map(str::parse::<u32>),
@@ -101,7 +109,7 @@ pub(crate) fn parent_tiles(tile: &str) -> Vec<(String, [f64; 2])> {
             let half = edge * f64::from(1u32 << level) / 2.;
             let offset = |i: u32, p: u32| f64::from(i.saturating_sub(p << level)) * edge + edge / 2. - half;
             (
-                format!("{area}_{px:02}_{pz:02}_{level:02}"),
+                format!("{area}_{px:02}_{pz:02}_{variant}{level}"),
                 [offset(x, px), offset(z, pz)],
             )
         })
@@ -171,8 +179,36 @@ mod tests {
         );
         assert!(parent_tiles("m14_00_00_00").is_empty());
         assert!(parent_tiles("m60_19_27_01").is_empty());
+        assert!(parent_tiles("m60_19_27_11").is_empty());
+        assert!(parent_tiles("m60_19_27_99").is_empty());
         // twelve bytes, not ASCII: no tile, and no slice through a character
         assert!(parent_tiles("m60_3é_4_00").is_empty());
+    }
+
+    /// An alternate tile `_10` sits in the alternate parents `_11` and `_12` at the offsets its base tile has in `_01` and
+    /// `_02`: tile 44_36 is cell (0, 0) of the 512 m tile 22_18 and cell (0, 0) of the 1024 m tile 11_09.
+    #[test]
+    fn an_alternate_tile_has_alternate_parents_at_its_base_tiles_offsets() {
+        assert_eq!(
+            parent_tiles("m60_44_36_10"),
+            vec![
+                ("m60_22_18_11".to_owned(), [-128., -128.]),
+                ("m60_11_09_12".to_owned(), [-384., -384.]),
+            ]
+        );
+        for tile in ["m60_46_37_10", "m60_47_53_10", "m61_20_20_10"] {
+            let base = parent_tiles(&tile.replace("_10", "_00"));
+            let alternate = parent_tiles(tile);
+            assert_eq!(base.len(), 2);
+            for (b, a) in base.iter().zip(&alternate) {
+                assert_eq!(b.1, a.1, "{tile}");
+                assert_eq!((&b.0[..10], &b.0[11..]), (&a.0[..10], &a.0[11..]), "{tile}");
+                assert_eq!((&b.0[10..11], &a.0[10..11]), ("0", "1"), "{tile}");
+            }
+        }
+        // a variant other than 0 and 1, or a level in the unit digit, is no tile of the grid
+        assert!(parent_tiles("m60_44_36_20").is_empty());
+        assert!(parent_tiles("m60_44_36_11").is_empty());
     }
 
     #[test]
