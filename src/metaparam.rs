@@ -237,6 +237,7 @@ impl Metaparam {
                 data,
                 format: FORMAT,
                 be: false,
+                base: 0,
             },
             budget: Budget::new(FORMAT, data.len()),
         };

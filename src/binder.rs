@@ -85,6 +85,7 @@ impl Binder {
             data,
             format: if split { "BHF4" } else { "BND4" },
             be: false,
+            base: 0,
         };
         v.expect(0, if split { b"BHF4" } else { b"BND4" })?;
         v.boolean(4)?;
@@ -112,6 +113,7 @@ impl Binder {
             data: payload.unwrap_or(data),
             format: if split { "BDF4" } else { "BND4" },
             be: v.be,
+            base: 0,
         };
         // what the records copy out of the file, and what they decode: each record is charged for the bytes it names, so
         // records that name one range over and over are refused before they are copied

@@ -138,6 +138,7 @@ impl Tae {
             data,
             format: FORMAT,
             be: false,
+            base: 0,
         };
         v.expect(0, b"TAE ")?;
         if v.u8(4)? != 0 {

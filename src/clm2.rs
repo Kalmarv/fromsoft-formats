@@ -29,6 +29,7 @@ impl Clm2 {
             data,
             format: FORMAT,
             be: false,
+            base: 0,
         };
         v.expect(0, b"CLM2")?;
         v.expect(4, &[0; 4])?;

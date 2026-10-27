@@ -62,6 +62,7 @@ impl LightBank {
             data: bytes,
             format: "BTL",
             be: false,
+            base: 0,
         };
         v.expect(0, &2u32.to_le_bytes())?;
         let version = v.u32(4)?;
@@ -83,30 +84,22 @@ impl LightBank {
         if end != bytes.len() {
             return Err(invalid("BTL", 8, "record count does not cover file"));
         }
-        let names = View {
-            data: v.slice(60, names_length)?,
-            format: "BTL names",
-            be: false,
-        };
+        let names = v.sub(60, names_length, "BTL names")?;
         let budget = Budget::new("BTL", bytes.len());
         let mut lights = Vec::with_capacity(count);
         for i in 0..count {
             let record_at = v.element(start, i, 232)?;
-            let r = View {
-                data: v.slice(record_at, 232)?,
-                format: "BTL light",
-                be: false,
-            };
+            let r = v.sub(record_at, 232, "BTL light")?;
             let n = r.size(16)?;
             if !n.is_multiple_of(2) {
-                return Err(invalid("BTL", v.at(record_at, 16)?, "unaligned UTF-16 name"));
+                return Err(r.err(16, "unaligned UTF-16 name"));
             }
             let (name, _) = names.utf16z(n, &budget)?;
             let kind = match r.u32(24)? {
                 0 => Kind::Point,
                 1 => Kind::Spot,
                 2 => Kind::Directional,
-                _ => return Err(invalid("BTL", v.at(record_at, 24)?, "unknown light type")),
+                _ => return Err(r.err(24, "unknown light type")),
             };
             r.boolean(28)?;
             for offset in [96, 140, 148, 168, 176, 180] {
@@ -163,5 +156,38 @@ mod tests {
         for version in [15, 17] {
             assert!(LightBank::read(&bank(version)).is_err());
         }
+    }
+
+    /// A bank of `count` lights, each valid, with the light `bad` carrying `value` in its type word.
+    fn bank_with_bad_type(count: usize, bad: usize, value: u32) -> Vec<u8> {
+        let mut b = vec![0u8; 60];
+        b[0..4].copy_from_slice(&2u32.to_le_bytes());
+        b[4..8].copy_from_slice(&16u32.to_le_bytes());
+        b[8..12].copy_from_slice(&(count as u32).to_le_bytes());
+        b[12..16].copy_from_slice(&4u32.to_le_bytes());
+        b[20..24].copy_from_slice(&232u32.to_le_bytes());
+        b.extend([0u8; 4]);
+        for i in 0..count {
+            let mut light = vec![0u8; 232];
+            let kind = if i == bad { value } else { 1 };
+            light[24..28].copy_from_slice(&kind.to_le_bytes());
+            b.extend(light);
+        }
+        b
+    }
+
+    /// A refusal inside a light names the field's position in the file, not in the 232-byte record.
+    #[test]
+    fn a_hostile_light_deep_in_the_file_is_refused_at_its_file_offset() {
+        let ok = bank_with_bad_type(5, 9, 0);
+        assert_eq!(LightBank::read(&ok).unwrap().lights.len(), 5);
+        let bad = bank_with_bad_type(5, 3, 9);
+        let e = LightBank::read(&bad).unwrap_err();
+        let record = 64 + 3 * 232;
+        assert_eq!(
+            e.to_string(),
+            format!("BTL light at {:#x}: unknown light type", record + 24)
+        );
+        assert_eq!(bad.get(record + 24), Some(&9));
     }
 }

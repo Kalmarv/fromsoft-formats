@@ -237,6 +237,7 @@ impl Gparam {
             data,
             format: FORMAT,
             be: false,
+            base: 0,
         };
         if data.starts_with(b"filt") {
             return Err(invalid(FORMAT, 0, "version 2 (narrow strings) is not read"));

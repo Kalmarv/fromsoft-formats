@@ -59,6 +59,7 @@ impl Package {
             data,
             format: "TPF",
             be: false,
+            base: 0,
         };
         v.expect(0, b"TPF\0")?;
         v.expect(12, &[0])?;

@@ -73,6 +73,7 @@ impl Param {
             data,
             format: FORMAT,
             be: false,
+            base: 0,
         };
         // The strings offset at 0 is not trusted (the format's other readers do not use it either): the param type
         // and the names are found by their own offsets.

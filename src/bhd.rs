@@ -418,6 +418,7 @@ impl Header {
             data,
             format: "BHD5",
             be: false,
+            base: 0,
         };
         v.expect(0, b"BHD5")?;
         v.be = match v.u8(4)? {

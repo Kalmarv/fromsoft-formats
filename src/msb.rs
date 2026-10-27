@@ -143,7 +143,7 @@ fn section_chain(v: &View<'_>) -> Result<Vec<String>> {
     let mut start = 16;
     loop {
         if names.len() == 16 {
-            return Err(invalid(v.format, start, "section chain too long"));
+            return Err(v.err(start, "section chain too long"));
         }
         let table = SectionTable::at(v, start)?;
         names.push(text(v, v.size(v.at(start, 8)?)?)?);
@@ -151,11 +151,10 @@ fn section_chain(v: &View<'_>) -> Result<Vec<String>> {
             return Ok(names);
         }
         if table.next <= start {
-            return Err(invalid(v.format, table.next_at, "section chain goes backwards"));
+            return Err(v.err(table.next_at, "section chain goes backwards"));
         }
         if table.next >= v.data.len() {
-            return Err(invalid(
-                v.format,
+            return Err(v.err(
                 table.next_at,
                 format!(
                     "next section at {:#x} is beyond the {} bytes of the file",
@@ -183,14 +182,13 @@ impl SectionTable {
     /// The table of the section at `start`, which must lie within the data.
     fn at(v: &View<'_>, start: usize) -> Result<Self> {
         let count_at = v.at(start, 4)?;
-        let slots =
-            usize::try_from(v.u32(count_at)?).map_err(|_| invalid(v.format, count_at, "size overflow"))?;
+        let slots = usize::try_from(v.u32(count_at)?).map_err(|_| v.err(count_at, "size overflow"))?;
         let Some(last) = slots.checked_sub(1) else {
-            return Err(invalid(v.format, count_at, "section has no next pointer"));
+            return Err(v.err(count_at, "section has no next pointer"));
         };
         let bytes = slots
             .checked_mul(8)
-            .ok_or_else(|| invalid(v.format, count_at, "section size overflow"))?;
+            .ok_or_else(|| v.err(count_at, "section size overflow"))?;
         let table_at = v.at(start, 16)?;
         v.slice(table_at, bytes)?;
         // `last * 8` is below `bytes`, which fits
@@ -305,6 +303,15 @@ pub struct Section {
     pub version: u32,
     /// Its records, each the bytes from its offset to the next record's (or the section's end).
     pub records: Vec<Vec<u8>>,
+    /// The file offset of each record, parallel to `records`; empty for a section that was not read from a file, whose
+    /// records then report offsets counted from their own first byte.
+    pub offsets: Vec<usize>,
+}
+impl Section {
+    /// The file offset of record `i`, or 0 where the section does not know it.
+    fn base(&self, i: usize) -> usize {
+        self.offsets.get(i).copied().unwrap_or(0)
+    }
 }
 /// A read map layout (`.msb.dcx` once decoded): the models and parts decoded, the other records retained.
 #[derive(Clone, Debug)]
@@ -351,12 +358,12 @@ fn text(v: &View<'_>, mut o: usize) -> Result<String> {
         }
         units.push(x);
     }
-    String::from_utf16(&units).map_err(|e| invalid(v.format, start, e))
+    String::from_utf16(&units).map_err(|e| v.err(start, e))
 }
 fn f32_at(v: &View<'_>, o: usize) -> Result<f32> {
     let f = f32::from_bits(v.u32(o)?);
     if !f.is_finite() {
-        return Err(invalid(v.format, o, "non-finite value"));
+        return Err(v.err(o, "non-finite value"));
     }
     Ok(f)
 }
@@ -366,7 +373,7 @@ fn vector(v: &View<'_>, o: usize) -> Result<[f32; 3]> {
 fn pointer(v: &View<'_>, o: usize, min: usize) -> Result<usize> {
     let p = v.size(o)?;
     if p < min {
-        return Err(invalid(v.format, o, "pointer into record header"));
+        return Err(v.err(o, "pointer into record header"));
     }
     v.slice(p, 1)?;
     Ok(p)
@@ -380,11 +387,12 @@ impl MapLayout {
             data,
             format: "MSB",
             be: false,
+            base: 0,
         };
         v.expect(0, b"MSB \x01\0\0\0\x10\0\0\0\0\0\x01\xff")?;
         let names = section_chain(&v)?;
-        let generation = Generation::find(&names)
-            .ok_or_else(|| invalid(v.format, 16, format!("unknown section chain {names:?}")))?;
+        let generation =
+            Generation::find(&names).ok_or_else(|| v.err(16, format!("unknown section chain {names:?}")))?;
         let last = generation.sections.len().saturating_sub(1);
         let mut next = 16;
         let mut sections = Vec::new();
@@ -396,28 +404,29 @@ impl MapLayout {
             next = table.next;
             let end = if next == 0 { data.len() } else { next };
             if (section_index == last) != (next == 0) || end <= start || end > data.len() {
-                return Err(invalid(v.format, table.next_at, "invalid section chain"));
+                return Err(v.err(table.next_at, "invalid section chain"));
             }
             let header_end = v.at(v.at(start, 16)?, bytes)?;
             if header_end > end {
-                return Err(invalid(v.format, start, "section table overlaps next section"));
+                return Err(v.err(start, "section table overlaps next section"));
             }
             let section = View {
                 data: v.slice(0, end)?,
                 format: v.format,
                 be: false,
+                base: 0,
             };
             let name_at = v.at(start, 8)?;
             let name_offset = v.size(name_at)?;
             if name_offset < header_end || text(&section, name_offset)? != name {
-                return Err(invalid(v.format, name_at, "section name mismatch"));
+                return Err(v.err(name_at, "section name mismatch"));
             }
             let mut offsets = Vec::new();
             for i in 0..n.saturating_sub(1) {
                 let slot = v.element(v.at(start, 16)?, i, 8)?;
                 let p = v.size(slot)?;
                 if p < header_end || p >= end || offsets.last().is_some_and(|&last| last >= p) {
-                    return Err(invalid(v.format, slot, "invalid entry offset"));
+                    return Err(v.err(slot, "invalid entry offset"));
                 }
                 offsets.push(p);
             }
@@ -433,6 +442,7 @@ impl MapLayout {
                 name: name.to_owned(),
                 version,
                 records,
+                offsets: offsets.iter().copied().take(n.saturating_sub(1)).collect(),
             });
         }
         for &i in generation.empty {
@@ -441,11 +451,13 @@ impl MapLayout {
             }
         }
         let mut models = Vec::new();
-        for data in section_records(&sections, 0)? {
+        let model_section = section_at(&sections, 0)?;
+        for (i, data) in model_section.records.iter().enumerate() {
             let r = View {
                 data,
                 format: "MSB model",
                 be: false,
+                base: model_section.base(i),
             };
             r.slice(0, 40)?;
             let name = text(&r, pointer(&r, 0, 40)?)?;
@@ -456,17 +468,19 @@ impl MapLayout {
             }
             let kind = r.u32(8)?;
             if !generation.model_kinds.contains(&kind) {
-                return Err(invalid(r.format, 8, "model kind"));
+                return Err(r.err(8, "model kind"));
             }
             models.push(Model { name, kind });
         }
         let mut parts = Vec::new();
         let header = generation.part_header;
-        for (index, data) in section_records(&sections, 5)?.iter().enumerate() {
+        let part_section = section_at(&sections, 5)?;
+        for (index, data) in part_section.records.iter().enumerate() {
             let r = View {
                 data,
                 format: "MSB part",
                 be: false,
+                base: part_section.base(index),
             };
             r.slice(0, header)?;
             let name = text(&r, pointer(&r, 0, header)?)?;
@@ -477,7 +491,7 @@ impl MapLayout {
                 .iter()
                 .find(|(c, _)| *c == code)
                 .map(|(_, k)| *k)
-                .ok_or_else(|| invalid(r.format, generation.part_kind, "unknown part kind"))?;
+                .ok_or_else(|| r.err(generation.part_kind, "unknown part kind"))?;
             for &(offset, bytes) in generation.part_fixed {
                 r.expect(offset, bytes)?;
             }
@@ -487,7 +501,7 @@ impl MapLayout {
             } else if (model as usize) < models.len() {
                 Some(model as usize)
             } else {
-                return Err(invalid(r.format, generation.part_model, "model index"));
+                return Err(r.err(generation.part_model, "model index"));
             };
             let (first, count) = generation.part_payloads;
             for i in 0..count {
@@ -495,7 +509,7 @@ impl MapLayout {
                 let p = r.size(field)?;
                 if p == 0 {
                     if matches!(field, 96 | 104) {
-                        return Err(invalid(r.format, field, "missing part payload"));
+                        return Err(r.err(field, "missing part payload"));
                     }
                 } else {
                     pointer(&r, field, header)?;
@@ -530,11 +544,7 @@ impl MapLayout {
                             0 => false,
                             0xff => true,
                             _ => {
-                                return Err(invalid(
-                                    r.format,
-                                    r.at(entity, 0x0a)?,
-                                    "point-light shadow byte",
-                                ));
+                                return Err(r.err(r.at(entity, 0x0a)?, "point-light shadow byte"));
                             }
                         },
                     },
@@ -559,11 +569,13 @@ impl MapLayout {
             });
         }
         let mut map_offsets = Vec::new();
-        for data in section_records(&sections, 1)? {
+        let event_section = section_at(&sections, 1)?;
+        for (index, data) in event_section.records.iter().enumerate() {
             let r = View {
                 data,
                 format: "MSB event",
                 be: false,
+                base: event_section.base(index),
             };
             r.slice(0, 40)?;
             if Some(r.u32(12)?) == generation.map_offset_event {
@@ -623,6 +635,7 @@ impl MapLayout {
             data,
             format: "MSB character initializer",
             be: false,
+            base: self.sections.get(5).map_or(0, |s| s.base(index)),
         };
         let at = r.size(104)?;
         r.expect(at, &[0; 8])?;
@@ -727,6 +740,7 @@ impl MapLayout {
                 data,
                 format: "MSB part",
                 be: false,
+                base: self.sections.get(5).map_or(0, |s| s.base(part.index)),
             };
             let config = r.size(112)?;
             if config == 0 {
@@ -745,7 +759,7 @@ impl MapLayout {
                 } else {
                     let b = r.slice(r.at(scene, scene_ids)?, 4)?;
                     let &[a, b, c, d] = b else {
-                        return Err(invalid(r.format, 120, "scene config"));
+                        return Err(r.err(120, "scene config"));
                     };
                     Some([a as i8, b as i8, c as i8, d as i8])
                 },
@@ -780,6 +794,7 @@ impl MapLayout {
                 data,
                 format: "MSB part",
                 be: false,
+                base: self.sections.get(5).map_or(0, |s| s.base(part.index)),
             };
             let at = r.size(128)?;
             if at == 0 {
@@ -834,14 +849,17 @@ impl MapLayout {
     /// Every region's name as stored, in file order, of every region type. Names repeat: a reader that keys regions
     /// by name renames the repeats over this whole list (SoulsFormats: `"<name> {n}"`).
     pub fn region_names(&self) -> Result<Vec<String>> {
-        self.regions()?
+        let regions = self.regions()?;
+        regions
             .records
             .iter()
-            .map(|data| {
+            .enumerate()
+            .map(|(i, data)| {
                 let v = View {
                     data,
                     format: "MSB region",
                     be: false,
+                    base: regions.base(i),
                 };
                 text(&v, pointer(&v, 0, 96)?)
             })
@@ -858,11 +876,13 @@ impl MapLayout {
             )
         })?;
         let mut points = Vec::new();
-        for (region, data) in self.regions()?.records.iter().enumerate() {
+        let regions = self.regions()?;
+        for (region, data) in regions.records.iter().enumerate() {
             let v = View {
                 data,
                 format: "MSB region",
                 be: false,
+                base: regions.base(region),
             };
             if v.u32(8)? != code {
                 continue;
@@ -1069,11 +1089,10 @@ impl MapLayout {
     }
 }
 
-/// The records of section `i`.
-fn section_records(sections: &[Section], i: usize) -> Result<&[Vec<u8>]> {
+/// Section `i`.
+fn section_at(sections: &[Section], i: usize) -> Result<&Section> {
     sections
         .get(i)
-        .map(|s| s.records.as_slice())
         .ok_or_else(|| invalid("MSB", 0, format!("the layout has no section {i}")))
 }
 
@@ -1202,11 +1221,13 @@ impl MapLayout {
     /// record that does not fit the layout above is an error naming it.
     pub fn map_regions(&self) -> Result<Vec<Region>> {
         let mut out = Vec::new();
-        for (index, data) in self.regions()?.records.iter().enumerate() {
+        let regions = self.regions()?;
+        for (index, data) in regions.records.iter().enumerate() {
             let r = View {
                 data,
                 format: "MSB region",
                 be: false,
+                base: regions.base(index),
             };
             r.slice(0, 96)?;
             let name = text(&r, pointer(&r, 0, 96)?)?;
@@ -1215,11 +1236,10 @@ impl MapLayout {
             let shape_data = r.size(72)?;
             let shape_data_at = |delta: usize| -> Result<usize> {
                 if shape_data < 96 {
-                    return Err(invalid(r.format, 72, "a shape without data"));
+                    return Err(r.err(72, "a shape without data"));
                 }
                 if shape_data >= r.data.len() {
-                    return Err(invalid(
-                        r.format,
+                    return Err(r.err(
                         72,
                         format!(
                             "shape data at {shape_data:#x} is beyond the {} bytes of the record",
@@ -1264,12 +1284,12 @@ impl MapLayout {
             };
             let entity = r.size(80)?;
             if entity < 96 {
-                return Err(invalid(r.format, 80, "no entity block"));
+                return Err(r.err(80, "no entity block"));
             }
             let type_data = match r.size(88)? {
                 0 => Vec::new(),
                 at if at >= 96 => r.slice(at, r.data.len().saturating_sub(at))?.to_vec(),
-                _ => return Err(invalid(r.format, 88, "type data inside the header")),
+                _ => return Err(r.err(88, "type data inside the header")),
             };
             out.push(Region {
                 index,
@@ -1291,11 +1311,13 @@ impl MapLayout {
     pub fn map_events(&self) -> Result<Vec<Event>> {
         let regions = self.region_names()?;
         let mut out = Vec::new();
-        for (index, data) in section_records(&self.sections, 1)?.iter().enumerate() {
+        let events = section_at(&self.sections, 1)?;
+        for (index, data) in events.records.iter().enumerate() {
             let r = View {
                 data,
                 format: "MSB event",
                 be: false,
+                base: events.base(index),
             };
             r.slice(0, 40)?;
             let name = text(&r, pointer(&r, 0, 40)?)?;
@@ -1304,7 +1326,7 @@ impl MapLayout {
             let type_data = match r.size(32)? {
                 0 => Vec::new(),
                 at if at >= 40 => r.slice(at, r.data.len().saturating_sub(at))?.to_vec(),
-                _ => return Err(invalid(r.format, 32, "type data inside the header")),
+                _ => return Err(r.err(32, "type data inside the header")),
             };
             let named =
                 |i: i32, names: &dyn Fn(usize) -> Option<String>| usize::try_from(i).ok().and_then(names);
@@ -1375,6 +1397,7 @@ mod region_tests {
                 name: (*name).to_owned(),
                 version: 0,
                 records: Vec::new(),
+                offsets: Vec::new(),
             })
             .collect::<Vec<_>>();
         sections[2].records = records;
@@ -1518,6 +1541,58 @@ mod region_tests {
                     );
                 }
             }
+        }
+    }
+
+    /// A file of `generation`'s sections, all empty but the regions', and the file offset of each region record.
+    fn file_of(generation: &Generation, regions: &[Vec<u8>]) -> (Vec<u8>, Vec<usize>) {
+        let mut out = b"MSB \x01\0\0\0\x10\0\0\0\0\0\x01\xff".to_vec();
+        let mut region_at = Vec::new();
+        for (i, name) in generation.sections.iter().enumerate() {
+            let records: &[Vec<u8>] = if *name == "POINT_PARAM_ST" { regions } else { &[] };
+            let start = out.len();
+            let n = records.len() + 1;
+            out.extend(0u32.to_le_bytes());
+            out.extend((n as u32).to_le_bytes());
+            out.extend(((start + 16 + 8 * n) as u64).to_le_bytes());
+            out.resize(start + 16 + 8 * n, 0);
+            out.extend(utf16(name));
+            for (k, record) in records.iter().enumerate() {
+                let at = out.len();
+                out[start + 16 + 8 * k..start + 24 + 8 * k].copy_from_slice(&(at as u64).to_le_bytes());
+                region_at.push(at);
+                out.extend(record);
+            }
+            let next = if i + 1 == generation.sections.len() {
+                0
+            } else {
+                out.len()
+            };
+            let slot = start + 16 + 8 * (n - 1);
+            out[slot..slot + 8].copy_from_slice(&(next as u64).to_le_bytes());
+        }
+        (out, region_at)
+    }
+
+    /// An error in a record deep in the file names the bad field's position in the file, not in the record.
+    #[test]
+    fn a_hostile_region_is_refused_at_its_file_offset() {
+        let good = region("Fine", 6, 5, &[4.0, 5.0, 6.0], 1, &[]);
+        for (field, edit) in [
+            (72usize, 0usize), // shape-data pointer beyond the record
+            (80, 1),           // entity block inside the header
+            (88, 2),           // type data inside the header
+        ] {
+            let mut bad = region("Wind", 6, 5, &[4.0, 5.0, 6.0], 1, &[7]);
+            let value: u64 = [u64::MAX - 2, 40, 40][edit];
+            bad[field..field + 8].copy_from_slice(&value.to_le_bytes());
+            let (file, at) = file_of(&Generation::ELDEN_RING, &[good.clone(), good.clone(), bad]);
+            let layout = MapLayout::read(&file).unwrap();
+            let Err(crate::Error::Invalid { offset, format, .. }) = layout.map_regions() else {
+                panic!("accepted a hostile region");
+            };
+            assert_eq!((format, offset), ("MSB region", at[2] + field));
+            assert!(at[2] > 0x100, "the record is deep in the file");
         }
     }
 

@@ -239,14 +239,14 @@ pub struct Model {
 fn count(v: &View<'_>, o: usize) -> Result<usize> {
     let n = v.u32(o)?;
     if n > i32::MAX as u32 {
-        return Err(invalid(v.format, o, "negative count or offset"));
+        return Err(v.err(o, "negative count or offset"));
     }
     Ok(n as usize)
 }
 fn table(v: &View<'_>, pos: &mut usize, n: usize, stride: usize) -> Result<usize> {
     let len = n
         .checked_mul(stride)
-        .ok_or_else(|| invalid(v.format, *pos, "table overflow"))?;
+        .ok_or_else(|| v.err(*pos, "table overflow"))?;
     v.slice(*pos, len)?;
     let start = *pos;
     *pos = v.at(start, len)?;
@@ -264,14 +264,12 @@ fn float_at(v: &View<'_>, o: usize, delta: usize) -> Result<f32> {
 fn float(v: &View<'_>, o: usize) -> Result<f32> {
     let n = f32::from_bits(v.u32(o)?);
     if !n.is_finite() {
-        return Err(invalid(v.format, o, "non-finite value"));
+        return Err(v.err(o, "non-finite value"));
     }
     Ok(n)
 }
 fn refs(v: &View<'_>, o: usize, n: usize, limit: usize, budget: &Budget) -> Result<Vec<usize>> {
-    let bytes = n
-        .checked_mul(4)
-        .ok_or_else(|| invalid(v.format, o, "array overflow"))?;
+    let bytes = n.checked_mul(4).ok_or_else(|| v.err(o, "array overflow"))?;
     v.slice(o, bytes)?;
     budget.charge(o, bytes)?;
     (0..n)
@@ -279,7 +277,7 @@ fn refs(v: &View<'_>, o: usize, n: usize, limit: usize, budget: &Budget) -> Resu
             let at = v.element(o, i, 4)?;
             let r = count(v, at)?;
             if r >= limit {
-                Err(invalid(v.format, at, "index out of range"))
+                Err(v.err(at, "index out of range"))
             } else {
                 Ok(r)
             }
@@ -333,11 +331,12 @@ impl Model {
             data,
             format: "FLVER",
             be: false,
+            base: 0,
         };
         v.expect(0, b"FLVER\0L\0")?;
         let version = v.u32(8)?;
         if !matches!(version, 0x20013 | 0x20014 | 0x20016 | 0x2001a) {
-            return Err(invalid(v.format, 8, format!("unsupported version {version:#x}")));
+            return Err(v.err(8, format!("unsupported version {version:#x}")));
         }
         let data_start = count(&v, 12)?;
         let data_len = count(&v, 16)?;
@@ -350,12 +349,13 @@ impl Model {
                     .iter()
                     .all(|&b| b == 0)))
         {
-            return Err(invalid(v.format, 16, "data length mismatch"));
+            return Err(v.err(16, "data length mismatch"));
         }
         let meta = View {
             data: v.slice(0, data_start)?,
             format: v.format,
             be: false,
+            base: 0,
         };
         // names, GX records, palettes, index lists and vertex buffers are copied or decoded from the bytes the records
         // name: records that name one range over and over are refused before it is copied
@@ -364,7 +364,7 @@ impl Model {
             float(&v, v.element(40, i, 4)?)?;
         }
         if !v.boolean(73)? {
-            return Err(invalid(v.format, 73, "legacy text encoding unsupported"));
+            return Err(v.err(73, "legacy text encoding unsupported"));
         }
         v.boolean(74)?;
         v.expect(75, &[0])?;
@@ -400,7 +400,7 @@ impl Model {
             }
         }
         if pos > data_start {
-            return Err(invalid(v.format, pos, "tables overlap data"));
+            return Err(v.err(pos, "tables overlap data"));
         }
         let mut dummies = Vec::new();
         for i in 0..dummy_count {
@@ -414,9 +414,7 @@ impl Model {
             let raw = |delta: usize| -> Result<f32> { Ok(f32::from_bits(v.u32_at(o, delta)?)) };
             dummies.push(Dummy {
                 position: [raw(0)?, raw(4)?, raw(8)?],
-                color: bytes
-                    .try_into()
-                    .map_err(|_| invalid(v.format, o, "dummy colour bytes"))?,
+                color: bytes.try_into().map_err(|_| v.err(o, "dummy colour bytes"))?,
                 forward: [raw(16)?, raw(20)?, raw(24)?],
                 reference_id: v.u16_at(o, 28)? as i16,
                 parent_bone: v.u16_at(o, 30)? as i16,
@@ -460,7 +458,7 @@ impl Model {
                     match word >> 16 {
                         0 => (true, (word & 0xffff) as u16),
                         0x8000 => (false, (word & 0xffff) as u16),
-                        _ => return Err(invalid(v.format, r, "SpeedTree member modifier")),
+                        _ => return Err(v.err(r, "SpeedTree member modifier")),
                     }
                 } else {
                     (true, 0)
@@ -468,7 +466,7 @@ impl Model {
                 let kind = v.u32_at(r, 8)?;
                 let offset = offsets.entry((stored, stream)).or_default();
                 if count_at(&v, r, 4)? != *offset {
-                    return Err(invalid(v.format, v.at(r, 4)?, "noncontiguous vertex layout"));
+                    return Err(v.err(v.at(r, 4)?, "noncontiguous vertex layout"));
                 }
                 members.push(Member {
                     unknown: word,
@@ -487,7 +485,7 @@ impl Model {
             let o = v.element(texture, i, 32)?;
             v.expect_at(o, 18, &[0; 2])?;
             let tiling = |at: usize| -> Result<Tiling> {
-                Tiling::read(v.u8(at)?).ok_or_else(|| invalid(v.format, at, "texture tiling type"))
+                Tiling::read(v.u8(at)?).ok_or_else(|| v.err(at, "texture tiling type"))
             };
             textures.push(Some(Texture {
                 path: string(&meta, count(&v, o)?, &budget)?,
@@ -508,13 +506,13 @@ impl Model {
             for j in first
                 ..first
                     .checked_add(n)
-                    .ok_or_else(|| invalid(v.format, o, "texture range overflow"))?
+                    .ok_or_else(|| v.err(o, "texture range overflow"))?
             {
                 bound.push(
                     textures
                         .get_mut(j)
                         .and_then(Option::take)
-                        .ok_or_else(|| invalid(v.format, o, "missing or shared texture"))?,
+                        .ok_or_else(|| v.err(o, "missing or shared texture"))?,
                 );
             }
             let mut gx = count_at(&v, o, 20)?;
@@ -530,17 +528,16 @@ impl Model {
                         let padding = if gx_padding_only {
                             len
                         } else {
-                            len.checked_sub(12)
-                                .ok_or_else(|| invalid(v.format, gx, "short GX record"))?
+                            len.checked_sub(12).ok_or_else(|| v.err(gx, "short GX record"))?
                         };
                         if v.u32_at(gx, 4)? != 100 || v.slice(v.at(gx, 12)?, padding)?.iter().any(|&b| b != 0)
                         {
-                            return Err(invalid(v.format, gx, "GX terminator"));
+                            return Err(v.err(gx, "GX terminator"));
                         }
                         break;
                     }
                     if len < 12 {
-                        return Err(invalid(v.format, gx, "short GX record"));
+                        return Err(v.err(gx, "short GX record"));
                     }
                     meta.slice(gx, len)?;
                     budget.charge(gx, len)?;
@@ -560,7 +557,7 @@ impl Model {
             });
         }
         if textures.iter().any(Option::is_some) {
-            return Err(invalid(v.format, texture, "unclaimed textures"));
+            return Err(v.err(texture, "unclaimed textures"));
         }
         let mut faces = Vec::new();
         for i in 0..face_count {
@@ -574,21 +571,21 @@ impl Model {
                 w => w,
             };
             if !matches!(width, 16 | 32) || flags & 0x4000_0000 != 0 {
-                return Err(invalid(v.format, o, "unsupported compressed indices"));
+                return Err(v.err(o, "unsupported compressed indices"));
             }
             let start = data_start
                 .checked_add(count_at(&v, o, 12)?)
-                .ok_or_else(|| invalid(v.format, o, "index offset overflow"))?;
+                .ok_or_else(|| v.err(o, "index offset overflow"))?;
             if count_at(&v, o, 16)?
                 != n.checked_mul(width as usize / 8)
-                    .ok_or_else(|| invalid(v.format, o, "index length overflow"))?
+                    .ok_or_else(|| v.err(o, "index length overflow"))?
             {
-                return Err(invalid(v.format, v.at(o, 16)?, "index length mismatch"));
+                return Err(v.err(v.at(o, 16)?, "index length mismatch"));
             }
             v.slice(
                 start,
                 n.checked_mul(width as usize / 8)
-                    .ok_or_else(|| invalid(v.format, o, "index size overflow"))?,
+                    .ok_or_else(|| v.err(o, "index size overflow"))?,
             )?;
             budget.charge(start, n.saturating_mul(width as usize / 8))?;
             let indices = (0..n)
@@ -616,7 +613,7 @@ impl Model {
             v.expect_at(o, 8, &[0; 8])?;
             let material = count_at(&v, o, 4)?;
             if material >= materials.len() {
-                return Err(invalid(v.format, v.at(o, 4)?, "material index"));
+                return Err(v.err(v.at(o, 4)?, "material index"));
             }
             let node = v.u32_at(o, 16)? as i32;
             let palette_len = count_at(&v, o, 20)?;
@@ -666,10 +663,10 @@ impl Model {
                 continue;
             }
             if buffers.is_empty() || buffers.len() > 3 {
-                return Err(invalid(v.format, v.at(o, 40)?, "vertex buffer count"));
+                return Err(v.err(v.at(o, 40)?, "vertex buffer count"));
             }
             let &[first_buffer, ..] = buffers.as_slice() else {
-                return Err(invalid(v.format, v.at(o, 40)?, "vertex buffer count"));
+                return Err(v.err(v.at(o, 40)?, "vertex buffer count"));
             };
             let n = count_at(&v, v.element(vb, first_buffer, 32)?, 12)?;
             // Validate every buffer extent before allocating decoded vertices.
@@ -677,39 +674,37 @@ impl Model {
             for (ordinal, &b) in buffers.iter().enumerate() {
                 match used_vb.get_mut(b) {
                     Some(used) if !*used => *used = true,
-                    _ => return Err(invalid(v.format, o, "shared vertex buffer")),
+                    _ => return Err(v.err(o, "shared vertex buffer")),
                 }
                 let r = v.element(vb, b, 32)?;
                 v.expect_at(r, 16, &[0; 8])?;
                 if v.u32(r)? != u32::try_from(ordinal).unwrap_or(u32::MAX) || count_at(&v, r, 12)? != n {
-                    return Err(invalid(v.format, r, "vertex buffer identity/count"));
+                    return Err(v.err(r, "vertex buffer identity/count"));
                 }
                 let layout_slot = v.at(r, 4)?;
                 let l = count(&v, layout_slot)?;
-                let members = layouts
-                    .get(l)
-                    .ok_or_else(|| invalid(v.format, layout_slot, "layout index"))?;
+                let members = layouts.get(l).ok_or_else(|| v.err(layout_slot, "layout index"))?;
                 let stride = count_at(&v, r, 8)?;
                 let expected = members
                     .iter()
                     .filter(|m| m.stored)
                     .try_fold(0usize, |a, m| vertex::size(m.kind).map(|s| a.saturating_add(s)))?;
                 if stride != expected || stride == 0 {
-                    return Err(invalid(v.format, v.at(r, 8)?, "vertex stride"));
+                    return Err(v.err(v.at(r, 8)?, "vertex stride"));
                 }
                 if count_at(&v, r, 24)?
                     != n.checked_mul(stride)
-                        .ok_or_else(|| invalid(v.format, r, "vertex length overflow"))?
+                        .ok_or_else(|| v.err(r, "vertex length overflow"))?
                 {
-                    return Err(invalid(v.format, v.at(r, 24)?, "vertex length mismatch"));
+                    return Err(v.err(v.at(r, 24)?, "vertex length mismatch"));
                 }
                 let start = data_start
                     .checked_add(count_at(&v, r, 28)?)
-                    .ok_or_else(|| invalid(v.format, r, "buffer offset overflow"))?;
+                    .ok_or_else(|| v.err(r, "buffer offset overflow"))?;
                 v.slice(
                     start,
                     n.checked_mul(stride)
-                        .ok_or_else(|| invalid(v.format, r, "buffer size overflow"))?,
+                        .ok_or_else(|| v.err(r, "buffer size overflow"))?,
                 )?;
                 budget.charge(start, n.saturating_mul(stride))?;
                 streams.push((l, stride, start));
@@ -718,22 +713,19 @@ impl Model {
             for &(l, stride, start) in &streams {
                 let members = layouts.get(l).map(Vec::as_slice).unwrap_or_default();
                 for (j, vert) in vertices.iter_mut().enumerate() {
-                    let data = v.slice(v.element(start, j, stride)?, stride)?;
+                    let at = v.element(start, j, stride)?;
+                    let data = v.slice(at, stride)?;
                     if speedtree {
-                        vert.read_speedtree(data, members)?;
+                        vert.read_speedtree(data, at, members)?;
                     } else {
-                        vert.read(data, members, 2048.)?;
+                        vert.read(data, at, members, 2048.)?;
                     }
                 }
             }
             if speedtree {
                 // one stored stream per mesh: the members' indices are its layout's
                 let &[(l, ..)] = &streams[..] else {
-                    return Err(invalid(
-                        v.format,
-                        o,
-                        "a SpeedTree mesh with other than one vertex buffer",
-                    ));
+                    return Err(v.err(o, "a SpeedTree mesh with other than one vertex buffer"));
                 };
                 if let SpeedTreeLayout::Geometry {
                     position,
@@ -752,13 +744,13 @@ impl Model {
                 let fs = faces
                     .get_mut(f)
                     .and_then(Option::take)
-                    .ok_or_else(|| invalid(v.format, o, "shared face set"))?;
+                    .ok_or_else(|| v.err(o, "shared face set"))?;
                 if fs
                     .indices
                     .iter()
                     .any(|&r| usize::try_from(r).is_ok_and(|r| r >= n) && !(fs.strip && r == 0xffff))
                 {
-                    return Err(invalid(v.format, o, "vertex index out of range"));
+                    return Err(v.err(o, "vertex index out of range"));
                 }
                 mesh_faces.push(fs);
             }
@@ -773,7 +765,7 @@ impl Model {
             });
         }
         if faces.iter().any(Option::is_some) || used_vb.contains(&false) {
-            return Err(invalid(v.format, mesh, "unclaimed face set or vertex buffer"));
+            return Err(v.err(mesh, "unclaimed face set or vertex buffer"));
         }
         Ok(Self {
             bones,

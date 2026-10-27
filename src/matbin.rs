@@ -8,7 +8,6 @@
 use crate::{
     Result,
     bytes::{View, coverage},
-    invalid,
 };
 use std::collections::BTreeSet;
 
@@ -97,14 +96,14 @@ fn string(v: &View<'_>, o: usize) -> Result<(String, usize)> {
         units.push(c);
     }
     Ok((
-        String::from_utf16(&units).map_err(|e| invalid(v.format, o, e))?,
+        String::from_utf16(&units).map_err(|e| v.err(o, e))?,
         p.saturating_sub(o),
     ))
 }
 fn float(v: &View<'_>, o: usize) -> Result<f32> {
     let f = f32::from_bits(v.u32(o)?);
     if !f.is_finite() {
-        return Err(invalid(v.format, o, "non-finite value"));
+        return Err(v.err(o, "non-finite value"));
     }
     Ok(f)
 }
@@ -124,7 +123,7 @@ fn declared(v: &View<'_>, at: usize, code: u32) -> Result<usize> {
         10 => 12,
         11 => 16,
         12 => 20,
-        _ => return Err(invalid(v.format, at, format!("parameter type {code}"))),
+        _ => return Err(v.err(at, format!("parameter type {code}"))),
     })
 }
 /// The value of type `code` stored at `o` with `extent` bytes available before the next item, and the bytes it
@@ -160,29 +159,30 @@ impl Material {
             data,
             format: "MATBIN",
             be: false,
+            base: 0,
         };
         v.expect(0, b"MAB\0")?;
         if v.u32(4)? != 2 {
-            return Err(invalid(v.format, 4, "version"));
+            return Err(v.err(4, "version"));
         }
         v.expect(0x24, &[0; 0x14])?;
         let params = v.u32(0x1c)? as usize;
         let samplers = v.u32(0x20)? as usize;
         let params_bytes = params
             .checked_mul(PARAM)
-            .ok_or_else(|| invalid(v.format, 0x1c, "count overflow"))?;
+            .ok_or_else(|| v.err(0x1c, "count overflow"))?;
         let samplers_bytes = samplers
             .checked_mul(SAMPLER)
-            .ok_or_else(|| invalid(v.format, 0x20, "count overflow"))?;
+            .ok_or_else(|| v.err(0x20, "count overflow"))?;
         let record_bytes = params_bytes
             .checked_add(samplers_bytes)
-            .ok_or_else(|| invalid(v.format, 0x20, "count overflow"))?;
+            .ok_or_else(|| v.err(0x20, "count overflow"))?;
         let records_end = v.at(HEADER, record_bytes)?;
         v.slice(HEADER, record_bytes)?;
         let mut spans = vec![(0, records_end)];
         let mut text = |o: usize| -> Result<String> {
             if o < records_end {
-                return Err(invalid(v.format, o, "string inside the record tables"));
+                return Err(v.err(o, "string inside the record tables"));
             }
             let (s, len) = string(&v, o)?;
             spans.push((o, len));
@@ -197,7 +197,7 @@ impl Material {
             let name = text(v.size(r)?)?;
             let o = v.size(v.at(r, 8)?)?;
             if o < records_end || o >= data.len() {
-                return Err(invalid(v.format, v.at(r, 8)?, "value outside the data area"));
+                return Err(v.err(v.at(r, 8)?, "value outside the data area"));
             }
             let code_at = v.at(r, 0x14)?;
             stored.push((name, v.u32(v.at(r, 0x10)?)?, code_at, v.u32(code_at)?, o));

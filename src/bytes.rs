@@ -5,31 +5,52 @@ pub(crate) struct View<'a> {
     pub data: &'a [u8],
     pub format: &'static str,
     pub be: bool,
+    /// The file offset of `data[0]`: 0 for a view of the whole file, the record's offset for a view of one record, so
+    /// that every error offset is a position in the file the caller passed.
+    pub base: usize,
 }
 impl<'a> View<'a> {
+    /// [`crate::Error::Invalid`] at `o` (an offset into `data`) of this view's format, as a file offset.
+    pub fn err(&self, o: usize, detail: impl ToString) -> crate::Error {
+        invalid(self.format, self.base.saturating_add(o), detail)
+    }
+    /// A view of `len` bytes at `o`, of `format`, whose errors are file offsets.
+    pub fn sub(&self, o: usize, len: usize, format: &'static str) -> Result<View<'a>> {
+        Ok(View {
+            data: self.slice(o, len)?,
+            format,
+            be: self.be,
+            base: self.base.saturating_add(o),
+        })
+    }
     /// Its byte order: big-endian where the file says so (`be`), else little.
     fn endian(&self) -> Endian {
         if self.be { Endian::Big } else { Endian::Little }
     }
     /// A read at `o` that runs past the data, as this format's error.
-    fn short(&self, o: usize, e: BoundsError) -> crate::Error {
-        let detail = match e {
-            BoundsError::LengthOverflow { .. } => "size overflow",
-            BoundsError::OutOfBounds { .. } => "short input",
-        };
-        invalid(self.format, o, detail)
+    fn short(&self, o: usize, width: usize, e: BoundsError) -> crate::Error {
+        match e {
+            BoundsError::LengthOverflow { .. } => self.err(o, "size overflow"),
+            BoundsError::OutOfBounds { .. } => self.err(
+                o,
+                format!(
+                    "short input: {width} bytes expected, {} left in the data",
+                    self.data.len().saturating_sub(o)
+                ),
+            ),
+        }
     }
     /// The offset `delta` bytes after `base`, or an error at `base` when the sum does not fit an offset.
     pub fn at(&self, base: usize, delta: usize) -> Result<usize> {
         base.checked_add(delta)
-            .ok_or_else(|| invalid(self.format, base, "offset overflow"))
+            .ok_or_else(|| self.err(base, "offset overflow"))
     }
     /// The offset of element `i` of a table of `size`-byte elements at `base`, or an error at `base` when it does not
     /// fit an offset.
     pub fn element(&self, base: usize, i: usize, size: usize) -> Result<usize> {
         i.checked_mul(size)
             .and_then(|delta| base.checked_add(delta))
-            .ok_or_else(|| invalid(self.format, base, "offset overflow"))
+            .ok_or_else(|| self.err(base, "offset overflow"))
     }
     /// [`View::u16`] at `delta` bytes after `base`.
     pub fn u16_at(&self, base: usize, delta: usize) -> Result<u16> {
@@ -54,34 +75,34 @@ impl<'a> View<'a> {
     pub fn slice(&self, o: usize, n: usize) -> Result<&'a [u8]> {
         primase_foundations::bytes::View::new(self.data)
             .slice(o, n)
-            .map_err(|e| self.short(o, e))
+            .map_err(|e| self.short(o, n, e))
     }
     pub fn u8(&self, o: usize) -> Result<u8> {
         primase_foundations::bytes::View::new(self.data)
             .u8(o)
-            .map_err(|e| self.short(o, e))
+            .map_err(|e| self.short(o, 1, e))
     }
     pub fn u16(&self, o: usize) -> Result<u16> {
         primase_foundations::bytes::View::new(self.data)
             .u16(o, self.endian())
-            .map_err(|e| self.short(o, e))
+            .map_err(|e| self.short(o, 2, e))
     }
     pub fn u32(&self, o: usize) -> Result<u32> {
         primase_foundations::bytes::View::new(self.data)
             .u32(o, self.endian())
-            .map_err(|e| self.short(o, e))
+            .map_err(|e| self.short(o, 4, e))
     }
     pub fn u64(&self, o: usize) -> Result<u64> {
         primase_foundations::bytes::View::new(self.data)
             .u64(o, self.endian())
-            .map_err(|e| self.short(o, e))
+            .map_err(|e| self.short(o, 8, e))
     }
     pub fn size(&self, o: usize) -> Result<usize> {
-        usize::try_from(self.u64(o)?).map_err(|_| invalid(self.format, o, "size overflow"))
+        usize::try_from(self.u64(o)?).map_err(|_| self.err(o, "size overflow"))
     }
     pub fn expect(&self, o: usize, b: &[u8]) -> Result<()> {
         if self.slice(o, b.len())? != b {
-            Err(invalid(self.format, o, "unexpected field"))
+            Err(self.err(o, "unexpected field"))
         } else {
             Ok(())
         }
@@ -90,7 +111,7 @@ impl<'a> View<'a> {
         match self.u8(o)? {
             0 => Ok(false),
             1 => Ok(true),
-            _ => Err(invalid(self.format, o, "invalid boolean")),
+            _ => Err(self.err(o, "invalid boolean")),
         }
     }
 }
@@ -138,17 +159,15 @@ impl View<'_> {
     pub fn utf16z(&self, o: usize, budget: &Budget) -> Result<(String, usize)> {
         let mut end = o;
         while self.u16(end)? != 0 {
-            end = end
-                .checked_add(2)
-                .ok_or_else(|| invalid(self.format, o, "size overflow"))?;
+            end = end.checked_add(2).ok_or_else(|| self.err(o, "size overflow"))?;
         }
         let after = self.at(end, 2)?;
-        budget.charge(o, after.saturating_sub(o))?;
+        budget.charge(self.base.saturating_add(o), after.saturating_sub(o))?;
         let units = (o..end)
             .step_by(2)
             .map(|at| self.u16(at))
             .collect::<Result<Vec<u16>>>()?;
-        let text = String::from_utf16(&units).map_err(|e| invalid(self.format, o, e))?;
+        let text = String::from_utf16(&units).map_err(|e| self.err(o, e))?;
         Ok((text, after))
     }
     /// The NUL-terminated ASCII string at `o` and the offset after its terminator, charged like [`View::utf16z`]; a
@@ -156,17 +175,15 @@ impl View<'_> {
     pub fn asciiz(&self, o: usize, budget: &Budget) -> Result<(String, usize)> {
         let mut end = o;
         while self.u8(end)? != 0 {
-            end = end
-                .checked_add(1)
-                .ok_or_else(|| invalid(self.format, o, "size overflow"))?;
+            end = end.checked_add(1).ok_or_else(|| self.err(o, "size overflow"))?;
         }
         let after = self.at(end, 1)?;
-        budget.charge(o, after.saturating_sub(o))?;
+        budget.charge(self.base.saturating_add(o), after.saturating_sub(o))?;
         let raw = self.slice(o, end.saturating_sub(o))?;
         if !raw.is_ascii() {
-            return Err(invalid(self.format, o, "non-ASCII Shift-JIS name unsupported"));
+            return Err(self.err(o, "non-ASCII Shift-JIS name unsupported"));
         }
-        let text = String::from_utf8(raw.to_vec()).map_err(|_| invalid(self.format, o, "name encoding"))?;
+        let text = String::from_utf8(raw.to_vec()).map_err(|_| self.err(o, "name encoding"))?;
         Ok((text, after))
     }
 }
@@ -182,22 +199,22 @@ pub(crate) fn coverage(
     for (start, len) in spans {
         v.slice(start, len)?;
         if start < pos {
-            return Err(invalid(v.format, start, "overlapping sections"));
+            return Err(v.err(start, "overlapping sections"));
         }
         if start.saturating_sub(pos) > padding
             || v.slice(pos, start.saturating_sub(pos))?.iter().any(|&b| b != 0)
         {
-            return Err(invalid(v.format, pos, "unaccounted bytes"));
+            return Err(v.err(pos, "unaccounted bytes"));
         }
         pos = start
             .checked_add(len)
-            .ok_or_else(|| invalid(v.format, start, "size overflow"))?;
+            .ok_or_else(|| v.err(start, "size overflow"))?;
     }
     if pos > end
         || end.saturating_sub(pos) > padding
         || v.slice(pos, end.saturating_sub(pos))?.iter().any(|&b| b != 0)
     {
-        return Err(invalid(v.format, pos, "unaccounted trailing bytes"));
+        return Err(v.err(pos, "unaccounted trailing bytes"));
     }
     Ok(())
 }
@@ -211,12 +228,13 @@ mod bounds_tests {
             data: &[1, 2, 3, 4],
             format: "bounds fixture",
             be: false,
+            base: 0,
         };
         assert!(view.slice(4, 0).unwrap().is_empty());
         assert_eq!(view.u32(0).unwrap(), 0x04030201);
         for (offset, length, detail) in [
-            (4, 1, "short input"),
-            (5, 0, "short input"),
+            (4, 1, "short input: 1 bytes expected, 0 left in the data"),
+            (5, 0, "short input: 0 bytes expected, 0 left in the data"),
             (usize::MAX, 1, "size overflow"),
         ] {
             assert_eq!(
@@ -224,5 +242,34 @@ mod bounds_tests {
                 invalid(view.format, offset, detail).to_string()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod base_tests {
+    use super::*;
+
+    #[test]
+    fn a_sub_view_reports_file_offsets() {
+        let data = [0u8; 64];
+        let file = View {
+            data: &data,
+            format: "file",
+            be: false,
+            base: 0,
+        };
+        let record = file.sub(40, 8, "record").unwrap();
+        assert_eq!(record.err(3, "x").to_string(), "record at 0x2b: x");
+        assert_eq!(
+            record.u32(6).unwrap_err().to_string(),
+            "record at 0x2e: short input: 4 bytes expected, 2 left in the data"
+        );
+        assert_eq!(
+            record.expect(2, &[1]).unwrap_err().to_string(),
+            "record at 0x2a: unexpected field"
+        );
+        let inner = record.sub(4, 4, "inner").unwrap();
+        assert!(inner.boolean(0).is_ok());
+        assert_eq!(inner.err(1, "y").to_string(), "inner at 0x2d: y");
     }
 }

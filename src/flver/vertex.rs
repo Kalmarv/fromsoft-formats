@@ -69,11 +69,12 @@ fn exact_i32(w: f32) -> Option<i32> {
 impl Vertex {
     /// A SpeedTree vertex's stored members ([`Vertex::speedtree`]): `Float4` (3), `Float2` (1), `Half4` (0x2e),
     /// `Half2` (0x2d) and `UByte4Norm` (0x13), the formats Elden Ring's SpeedTree layouts store; others are refused.
-    pub(super) fn read_speedtree(&mut self, data: &[u8], members: &[Member]) -> Result<()> {
+    pub(super) fn read_speedtree(&mut self, data: &[u8], base: usize, members: &[Member]) -> Result<()> {
         let v = View {
             data,
             format: "FLVER SpeedTree vertex",
             be: false,
+            base,
         };
         let mut at = 0;
         for m in members.iter().filter(|m| m.stored) {
@@ -97,11 +98,11 @@ impl Vertex {
                     }
                 }
                 other => {
-                    return Err(invalid(v.format, at, format!("SpeedTree member type {other:#x}")));
+                    return Err(v.err(at, format!("SpeedTree member type {other:#x}")));
                 }
             }
             if lanes.iter().any(|x| !x.is_finite()) {
-                return Err(invalid(v.format, at, "non-finite SpeedTree member"));
+                return Err(v.err(at, "non-finite SpeedTree member"));
             }
             self.speedtree.push(lanes);
             at = v.at(at, n)?;
@@ -157,40 +158,38 @@ impl Vertex {
         Ok(())
     }
 
-    fn push_tangent(&mut self, index: u32, tangent: [f32; 4]) -> Result<()> {
-        let index = u8::try_from(index).map_err(|_| {
-            invalid(
-                "FLVER vertex",
-                0,
-                format!("tangent semantic index {index} exceeds 255"),
-            )
-        })?;
+    fn push_tangent(&mut self, v: &View<'_>, at: usize, index: u32, tangent: [f32; 4]) -> Result<()> {
+        let index = u8::try_from(index)
+            .map_err(|_| v.err(at, format!("tangent semantic index {index} exceeds 255")))?;
         if self.tangent_indices.contains(&index) {
-            return Err(invalid(
-                "FLVER vertex",
-                0,
-                format!("duplicate tangent semantic index {index}"),
-            ));
+            return Err(v.err(at, format!("duplicate tangent semantic index {index}")));
         }
         self.tangent_indices.push(index);
         self.tangents.push(tangent);
         Ok(())
     }
 
-    pub(super) fn read(&mut self, data: &[u8], members: &[Member], uv_factor: f32) -> Result<()> {
+    pub(super) fn read(
+        &mut self,
+        data: &[u8],
+        base: usize,
+        members: &[Member],
+        uv_factor: f32,
+    ) -> Result<()> {
         let v = View {
             data,
             format: "FLVER vertex",
             be: false,
+            base,
         };
         for m in members {
             let o = m.offset;
             let raw = v.slice(o, size(m.kind)?)?;
-            let decode = |f: Format| f.decode(raw).map_err(|e| invalid(v.format, o, e));
+            let decode = |f: Format| f.decode(raw).map_err(|e| v.err(o, e));
             let f = |i: usize| -> Result<f32> {
                 let x = f32::from_bits(v.u32(v.element(o, i, 4)?)?);
                 if !x.is_finite() {
-                    return Err(invalid(v.format, o, "non-finite attribute"));
+                    return Err(v.err(o, "non-finite attribute"));
                 }
                 Ok(x)
             };
@@ -199,7 +198,7 @@ impl Vertex {
             let quad = || -> Result<[u8; 4]> {
                 raw.first_chunk::<4>()
                     .copied()
-                    .ok_or_else(|| invalid(v.format, o, "element shorter than four bytes"))
+                    .ok_or_else(|| v.err(o, "element shorter than four bytes"))
             };
             let byte_norm = || -> Result<[f32; 4]> {
                 Ok(quad()?.map(|b| (f32::from(b) - 127.) * f32::from_bits(0x3c01_0204)))
@@ -217,7 +216,7 @@ impl Vertex {
                 (0, 2 | 3) => {
                     self.position = [f(0)?, f(1)?, f(2)?];
                     if m.kind == 3 && f(3)? != 0. {
-                        return Err(invalid(v.format, o, "position W is not zero"));
+                        return Err(v.err(o, "position W is not zero"));
                     }
                 }
                 (1, 0x10) => self.bone_weights = quad()?.map(|b| f32::from(b as i8) / 127.),
@@ -235,8 +234,7 @@ impl Vertex {
                 (3, 2 | 3) => {
                     self.normal = [f(0)?, f(1)?, f(2)?];
                     if m.kind == 3 {
-                        self.normal_w =
-                            exact_i32(f(3)?).ok_or_else(|| invalid(v.format, o, "fractional normal W"))?;
+                        self.normal_w = exact_i32(f(3)?).ok_or_else(|| v.err(o, "fractional normal W"))?;
                     }
                 }
                 (3, 0x10 | 0x11 | 0x13 | 0x2f) => {
@@ -283,19 +281,18 @@ impl Vertex {
                 (5, 0x2e) => {
                     let lanes = [half(0)?, half(1)?, half(2)?, half(3)?];
                     if lanes.iter().any(|x: &f32| !x.is_finite()) {
-                        return Err(invalid(v.format, o, "non-finite half-float UV member"));
+                        return Err(v.err(o, "non-finite half-float UV member"));
                     }
                     self.uvs.push(lanes);
                 }
-                (6, 3) => self.push_tangent(m.index, decode(Format::Float4)?)?,
-                (6, 0x10 | 0x11 | 0x13 | 0x2f) => self.push_tangent(m.index, byte_norm()?)?,
-                (6, 0x1a) => self.push_tangent(m.index, short_norm()?)?,
+                (6, 3) => self.push_tangent(&v, o, m.index, decode(Format::Float4)?)?,
+                (6, 0x10 | 0x11 | 0x13 | 0x2f) => self.push_tangent(&v, o, m.index, byte_norm()?)?,
+                (6, 0x1a) => self.push_tangent(&v, o, m.index, short_norm()?)?,
                 (7, 0x10 | 0x11 | 0x13 | 0x2f) => self.bitangent = byte_norm()?,
                 (10, 3) => self.colors.push(decode(Format::Float4)?),
                 (10, 0x10 | 0x13) => self.colors.push(decode(Format::Unorm8x4)?),
                 _ => {
-                    return Err(invalid(
-                        v.format,
+                    return Err(v.err(
                         o,
                         format!("unsupported semantic {} / type {:#x}", m.semantic, m.kind),
                     ));
@@ -331,8 +328,35 @@ mod tangent_tests {
         ];
         let bytes: Vec<_> = tangents.iter().flatten().flat_map(|v| v.to_le_bytes()).collect();
         let mut vertex = Vertex::default();
-        vertex.read(&bytes, &members, 2048.0).unwrap();
+        vertex.read(&bytes, 0, &members, 2048.0).unwrap();
         assert_eq!(vertex.tangents, tangents);
         assert_eq!(vertex.tangent_indices, [0, 1, 4]);
+    }
+
+    /// A refusal inside a vertex names the member's position in the file: the vertex's offset plus the member's.
+    #[test]
+    fn a_refused_member_is_named_at_its_file_offset() {
+        let members = [Member {
+            unknown: 0,
+            stored: true,
+            offset: 4,
+            kind: 3,
+            semantic: 99,
+            index: 0,
+        }];
+        let bytes = [0u8; 20];
+        let e = Vertex::default()
+            .read(&bytes, 1000, &members, 2048.0)
+            .unwrap_err();
+        assert!(e.to_string().starts_with("FLVER vertex at 0x3ec:"), "{e}");
+        let tangents = [Member {
+            semantic: 6,
+            index: 300,
+            ..members[0]
+        }];
+        let e = Vertex::default()
+            .read(&bytes, 1000, &tangents, 2048.0)
+            .unwrap_err();
+        assert!(e.to_string().starts_with("FLVER vertex at 0x3ec:"), "{e}");
     }
 }

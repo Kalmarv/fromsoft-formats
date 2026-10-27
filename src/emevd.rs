@@ -107,6 +107,7 @@ impl Script {
             data,
             format: FORMAT,
             be: false,
+            base: 0,
         };
         v.expect(0, b"EVD\0\x00\xff\x01\xff")?;
         if v.u32(8)? != 0xCD {

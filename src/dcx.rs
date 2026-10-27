@@ -42,6 +42,7 @@ impl<'a> Envelope<'a> {
             data,
             format: "DCX",
             be: true,
+            base: 0,
         };
         v.expect(0, b"DCX\0")?;
         for (p, value) in [

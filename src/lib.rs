@@ -113,7 +113,8 @@ pub enum Error {
     Invalid {
         /// The format that refused the data (`"FLVER"`, `"BND4"`).
         format: &'static str,
-        /// The byte offset of the refused field (for a few table-level refusals, an index; see the format's reader).
+        /// The byte offset of the refused field in the data the caller passed, also for a field inside a record (for a few
+        /// table-level refusals, an index; see the format's reader).
         offset: usize,
         /// What was expected or found.
         detail: String,

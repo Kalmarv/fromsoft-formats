@@ -42,6 +42,7 @@ impl Edges {
             data: bytes,
             format: "EDGE",
             be: false,
+            base: 0,
         };
         v.expect(0, &4u32.to_le_bytes())?;
         let count = v.u32(4)? as usize;
@@ -56,11 +57,7 @@ impl Edges {
         let mut edges = Vec::with_capacity(count);
         for i in 0..count {
             let start = v.element(16, i, 64)?;
-            let r = View {
-                data: v.slice(start, 64)?,
-                format: "EDGE record",
-                be: false,
-            };
+            let r = v.sub(start, 64, "EDGE record")?;
             r.expect(12, &1f32.to_le_bytes())?;
             r.expect(28, &1f32.to_le_bytes())?;
             r.expect(55, &[0; 9])?;
@@ -68,7 +65,7 @@ impl Edges {
                 1 => Kind::Grapple,
                 2 => Kind::Hang,
                 3 => Kind::Hug,
-                _ => return Err(invalid("EDGE", v.at(start, 52)?, "unknown edge type")),
+                _ => return Err(r.err(52, "unknown edge type")),
             };
             edges.push(Edge {
                 points: [vector(&r, 0)?, vector(&r, 16)?, vector(&r, 32)?],
@@ -88,7 +85,7 @@ impl Edges {
 pub(crate) fn float(v: &View<'_>, offset: usize) -> Result<f32> {
     let value = f32::from_bits(v.u32(offset)?);
     if !value.is_finite() {
-        return Err(invalid(v.format, offset, "nonfinite float"));
+        return Err(v.err(offset, "nonfinite float"));
     }
     Ok(value)
 }
@@ -98,4 +95,52 @@ pub(crate) fn vector(v: &View<'_>, offset: usize) -> Result<[f32; 3]> {
         float(v, v.at(offset, 4)?)?,
         float(v, v.at(offset, 8)?)?,
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A file of `count` hang edges, each valid, with `edit` applied to the record `bad`.
+    fn file(count: usize, bad: usize, edit: impl Fn(&mut [u8])) -> Vec<u8> {
+        let mut b = vec![0u8; 16];
+        b[0..4].copy_from_slice(&4u32.to_le_bytes());
+        b[4..8].copy_from_slice(&(count as u32).to_le_bytes());
+        for i in 0..count {
+            let mut r = vec![0u8; 64];
+            r[12..16].copy_from_slice(&1f32.to_le_bytes());
+            r[28..32].copy_from_slice(&1f32.to_le_bytes());
+            r[52] = 2;
+            if i == bad {
+                edit(&mut r);
+            }
+            b.extend(r);
+        }
+        b
+    }
+
+    /// A refusal inside an edge record names the field's position in the file, not in the 64-byte record.
+    #[test]
+    fn a_hostile_record_deep_in_the_file_is_refused_at_its_file_offset() {
+        assert_eq!(Edges::read(&file(6, 9, |_| {})).unwrap().edges.len(), 6);
+        let record = 16 + 4 * 64;
+        let kind = Edges::read(&file(6, 4, |r| r[52] = 9)).unwrap_err().to_string();
+        assert_eq!(
+            kind,
+            format!("EDGE record at {:#x}: unknown edge type", record + 52)
+        );
+        let nan = Edges::read(&file(6, 4, |r| {
+            r[44..48].copy_from_slice(&f32::NAN.to_le_bytes())
+        }))
+        .unwrap_err()
+        .to_string();
+        assert_eq!(nan, format!("EDGE record at {:#x}: nonfinite float", record + 44));
+        let unit = Edges::read(&file(6, 4, |r| r[12..16].copy_from_slice(&2f32.to_le_bytes())))
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            unit,
+            format!("EDGE record at {:#x}: unexpected field", record + 12)
+        );
+    }
 }
