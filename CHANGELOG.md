@@ -14,6 +14,11 @@
   their header. Every file's action counts and every light's parameters agree with the fxr library
   (EvenTorset/fxr 2b6b52f, Unlicense, from which the parameter names and types are taken), and the totals agree with
   an independent walker (`tests/fxr_census.rs`).
+- `collision::Soup::bounds` and `Soup::simd`: the bounding-volume trees and simd trees of the compressed meshes
+  `read_map` and `read_bodies` read, decoded and checked by `havok-formats` (a mesh whose trees do not hold together is
+  refused), with the triangles and quads counted against the boxes of their leaves. `tests/bvtree_census.rs` reads
+  every map `h`/`l` binder and every Sekiro object and Elden Ring asset collision binder and asserts the tree, leaf and
+  box counts of both games against the census. Depends on the `havok-formats` commit that adds `mesh_trees`.
 
 ## 0.6.0 (2026-10-27)
 

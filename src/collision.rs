@@ -4,7 +4,7 @@
 use crate::affine::{compose, pose, pose_columns};
 use crate::{Result, invalid};
 use havok_formats::convex::ConvexShape;
-use havok_formats::{Compendium, CustomKind, Tagfile, Value};
+use havok_formats::{BoundsCheck, Compendium, CustomKind, SimdCheck, Tagfile, Value};
 use std::collections::BTreeMap;
 
 /// A map mesh as a triangle soup: triangles in the file's frame, each with its HitMtrlParam ID, and counts of what the file leaves
@@ -33,6 +33,11 @@ pub struct Soup {
     pub unread_bodies: Vec<String>,
     /// Custom primitives whose data is not an extern shape reference ([`havok_formats::CustomKind::Unread`]): not read.
     pub unread_custom_primitives: usize,
+    /// The bounding-volume trees of the compressed meshes read: decoded and checked for every mesh (a tree that does not
+    /// hold together is refused), with the triangles and quads counted against the boxes of their leaves.
+    pub bounds: BoundsCheck,
+    /// The simd trees of those meshes, decoded and tested against the meshes' primitives the same way.
+    pub simd: SimdCheck,
 }
 
 /// The materials a compressed mesh's fsnp parameter gives its shape keys, with what it leaves unresolved.
@@ -202,6 +207,8 @@ pub fn read_map(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Soup> {
                     .placement_dependent_keys
                     .saturating_add(keys.placement_dependent);
                 soup.dead_primitives = soup.dead_primitives.saturating_add(mesh.dead_primitives);
+                soup.bounds.merge(&mesh.bounds);
+                soup.simd.merge(&mesh.simd);
                 for triangle in mesh.triangles {
                     let mat = keys.materials.get(&triangle.key).copied().unwrap_or(-1);
                     soup.unmapped = soup.unmapped.saturating_add(usize::from(mat == -1));
@@ -412,6 +419,8 @@ pub fn read_bodies(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Vec<
                             unkeyed_triangle_data: keys.unkeyed_rows,
                             placement_dependent_keys: keys.placement_dependent,
                             dead_primitives: mesh.dead_primitives,
+                            bounds: mesh.bounds,
+                            simd: mesh.simd,
                             unread_custom_primitives: mesh
                                 .custom
                                 .iter()
