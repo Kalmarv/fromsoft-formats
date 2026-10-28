@@ -210,10 +210,12 @@ mod tests {
             name: None,
             flags: 0,
             bytes,
+            wrap: None,
         };
         let binder = Binder {
             version: [0; 8],
             format: 0,
+            layout: crate::binder::Layout::default(),
             files: vec![
                 file(
                     10,

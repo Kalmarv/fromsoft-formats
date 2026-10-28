@@ -1,5 +1,5 @@
 //! `Binder::member` finds a member by the file name its path ends with, ASCII case folded.
-use fromsoft_formats::{Binder, BinderFile};
+use fromsoft_formats::{Binder, BinderFile, binder::Layout};
 
 fn file(id: i32, name: Option<&str>) -> BinderFile {
     BinderFile {
@@ -7,6 +7,7 @@ fn file(id: i32, name: Option<&str>) -> BinderFile {
         name: name.map(str::to_owned),
         flags: 0,
         bytes: vec![id as u8],
+        wrap: None,
     }
 }
 
@@ -15,6 +16,7 @@ fn a_member_is_found_by_its_file_name_in_any_case() {
     let binder = Binder {
         version: [0; 8],
         format: 0,
+        layout: Layout::default(),
         files: vec![
             file(1, None),
             file(2, Some(r"N:\GR\data\Param\NpcParam.PARAM")),

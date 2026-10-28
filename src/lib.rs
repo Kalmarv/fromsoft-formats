@@ -77,6 +77,8 @@ pub mod area;
 pub mod bhd;
 pub mod binder;
 pub mod blf;
+
+mod binder_write;
 pub mod btl;
 mod bytes;
 pub mod clm2;

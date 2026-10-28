@@ -2,7 +2,7 @@
 use crate::{
     Result,
     bytes::{Budget, View, coverage},
-    dcx::{Decoder, Envelope},
+    dcx::{Decoder, Envelope, Format},
     invalid,
 };
 use primase_foundations::compress::{DEFLATE_MAX_RATIO, Decompressor, Zlib};
@@ -19,8 +19,50 @@ pub struct BinderFile {
     /// The member's two flag bits as stored (bit 0: stored compressed).
     pub flags: u8,
     /// The member's bytes, decompressed; a nested DCX envelope is decoded too. Empty when read by
-    /// [`Binder::split_names`].
+    /// [`Binder::split_names`]; the bytes as stored (nothing decoded) when read by [`Binder::read_stored`] or
+    /// [`Binder::read_split_stored`].
     pub bytes: Vec<u8>,
+    /// How the member was framed when it held a DCX envelope, which [`Binder::read`] decoded: [`Binder::write`] frames
+    /// the bytes the same way. `None` for a member stored plain, and for every member read as stored.
+    pub wrap: Option<Format>,
+}
+
+/// The facts of a binder's header that its tables do not repeat, kept so that [`Binder::write`] can reproduce the
+/// file: which byte orders it uses, whether names are UTF-16 and the unexplained header bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Layout {
+    /// The file is big-endian (byte 9). Neither game's binders are.
+    pub big_endian: bool,
+    /// The flags of a file record are stored in the bit order of the format byte as is (byte 10 is 0), not reversed.
+    /// Both games' binders reverse them (byte 10 is 1), which is `false`.
+    pub bit_big_endian: bool,
+    /// Names are UTF-16 (byte 48), else ASCII.
+    pub unicode: bool,
+    /// The format byte (49) as stored. [`Binder::format`] is this byte in the order the reader checks.
+    pub format_raw: u8,
+    /// The extended-header byte (50): 4 when a name hash table follows the names (all but a few hundred of the shipped
+    /// binders), 0 for none; the reader accepts 1 and 128 as well and the writer writes no table for them.
+    pub extended: u8,
+    /// Header byte 4, a boolean no shipped binder sets.
+    pub unknown_04: bool,
+    /// Header byte 5, a boolean no shipped binder sets.
+    pub unknown_05: bool,
+}
+
+impl Default for Layout {
+    /// The layout of both games' hashed BND4 binders: little-endian, reversed flag bits, UTF-16 names, format byte
+    /// `0x74` (ids, names, 32-bit offsets and decoded sizes), a name hash table.
+    fn default() -> Self {
+        Self {
+            big_endian: false,
+            bit_big_endian: false,
+            unicode: true,
+            format_raw: 0x74,
+            extended: 4,
+            unknown_04: false,
+            unknown_05: false,
+        }
+    }
 }
 /// A BND4 binder (or a BHF4 index with its BDF4 payload) read whole.
 #[derive(Debug, Clone)]
@@ -31,24 +73,67 @@ pub struct Binder {
     pub format: u8,
     /// The members, in file-table order.
     pub files: Vec<BinderFile>,
+    /// The header facts [`Binder::write`] needs.
+    pub layout: Layout,
 }
+/// The format byte in the bit order the reader checks, from the byte as stored and the header's bit-order flag: the
+/// byte itself where the flag says big-endian bits or where it looks already reversed, else its bits reversed.
+pub(crate) fn normalised_format(raw: u8, bit_big_endian: bool) -> u8 {
+    if bit_big_endian || raw & 1 != 0 && raw & 128 == 0 {
+        raw
+    } else {
+        raw.reverse_bits()
+    }
+}
+
 impl Binder {
     /// Read a BND4 binder held whole in `data`: its file table and members, with compressed members and nested DCX
     /// envelopes decoded by `decoder`. The members' bytes copied or decoded are bounded by the file's size (a table
     /// that names one range over and over is refused), and every byte of the file must be accounted for, apart from up to 15 zero bytes of padding between parts.
     pub fn read(data: &[u8], decoder: &Decoder<'_>) -> Result<Self> {
-        Self::read_inner(data, None, decoder, false, None)
+        Self::read_inner(data, None, decoder, false, None, true)
+    }
+    /// [`Binder::read`] keeping each member's bytes as stored: a nested DCX envelope stays an envelope and a member
+    /// with the compression flag stays compressed. Every check of the full read is made, but nothing is decoded, so no
+    /// decoder is needed; [`Binder::write_stored`] writes the file again from what this returns.
+    pub fn read_stored(data: &[u8]) -> Result<Self> {
+        Self::read_inner(
+            data,
+            None,
+            &Decoder {
+                oodle: None,
+                max_output: 0,
+            },
+            false,
+            None,
+            false,
+        )
     }
     /// [`Binder::read`] keeping only the files whose name `keep` accepts: the others are validated as the full read
     /// validates them (their bytes are within the file and the file is covered as it demands) and left out, with no
     /// bytes, neither copied nor decoded (a binder of hundreds of shader bundles holds the few a map names, and decoding
     /// all of them is what reading the bundles spent its time and memory on). A file without a name is always kept.
     pub fn read_where(data: &[u8], decoder: &Decoder<'_>, keep: &dyn Fn(&str) -> bool) -> Result<Self> {
-        Self::read_inner(data, None, decoder, false, Some(keep))
+        Self::read_inner(data, None, decoder, false, Some(keep), true)
     }
     /// Read a BHF4 index `header` and its matching BDF4 payload file `payload` (the `.edgebhd`/`.edgebdt` form).
     pub fn read_split(header: &[u8], payload: &[u8], decoder: &Decoder<'_>) -> Result<Self> {
-        Self::read_inner(header, Some(payload), decoder, false, None)
+        Self::read_inner(header, Some(payload), decoder, false, None, true)
+    }
+    /// [`Binder::read_split`] keeping each member's bytes as stored, as [`Binder::read_stored`] does for a BND4;
+    /// [`Binder::write_split_stored`] writes the two files again from what this returns.
+    pub fn read_split_stored(header: &[u8], payload: &[u8]) -> Result<Self> {
+        Self::read_inner(
+            header,
+            Some(payload),
+            &Decoder {
+                oodle: None,
+                max_output: 0,
+            },
+            false,
+            None,
+            false,
+        )
     }
     /// [`Binder::read_split`] keeping only the files whose name `keep` accepts: the others are validated (their bytes
     /// are within the payload and cover it as the full read demands) and left out, with no bytes (a payload of
@@ -60,7 +145,7 @@ impl Binder {
         decoder: &Decoder<'_>,
         keep: &dyn Fn(&str) -> bool,
     ) -> Result<Self> {
-        Self::read_inner(header, Some(payload), decoder, false, Some(keep))
+        Self::read_inner(header, Some(payload), decoder, false, Some(keep), true)
     }
     /// The regulation number the header's version bytes spell: eight ASCII digits (`11730034` for Elden Ring's
     /// 1.17.3 `regulation.bin`), the number a paramdef's `FirstVersion` and `RemovedVersion` are in. `None` where the
@@ -119,6 +204,7 @@ impl Binder {
             },
             true,
             None,
+            true,
         )?
         .files
         .into_iter()
@@ -131,6 +217,7 @@ impl Binder {
         decoder: &Decoder<'_>,
         index_only: bool,
         keep: Option<&dyn Fn(&str) -> bool>,
+        decode_members: bool,
     ) -> Result<Self> {
         let split = payload.is_some() || index_only;
         let mut v = View {
@@ -140,8 +227,8 @@ impl Binder {
             base: 0,
         };
         v.expect(0, if split { b"BHF4" } else { b"BND4" })?;
-        v.boolean(4)?;
-        v.boolean(5)?;
+        let unknown_04 = v.boolean(4)?;
+        let unknown_05 = v.boolean(5)?;
         v.expect(6, &[0, 0, 0])?;
         v.be = v.boolean(9)?;
         let bitbe = !v.boolean(10)?;
@@ -191,11 +278,7 @@ impl Binder {
         v.slice(0, headerend)?;
         let unicode = v.boolean(48)?;
         let raw = v.u8(49)?;
-        let format = if bitbe || raw & 1 != 0 && raw & 128 == 0 {
-            raw
-        } else {
-            raw.reverse_bits()
-        };
+        let format = normalised_format(raw, bitbe);
         if format & 0xc1 != 0 {
             return Err(invalid("BND4", 49, "unsupported format flags"));
         }
@@ -290,6 +373,7 @@ impl Binder {
                     name,
                     flags,
                     bytes: Vec::new(),
+                    wrap: None,
                 });
                 continue;
             }
@@ -314,6 +398,18 @@ impl Binder {
                     name: Some(name.to_owned()),
                     flags,
                     bytes: Vec::new(),
+                    wrap: None,
+                });
+                continue;
+            }
+            // read as stored: the bytes the table names, nothing decompressed or unwrapped
+            if !decode_members {
+                files.push(BinderFile {
+                    id,
+                    name,
+                    flags,
+                    bytes: bytes.to_vec(),
+                    wrap: None,
                 });
                 continue;
             }
@@ -343,17 +439,20 @@ impl Binder {
             } else {
                 bytes.to_vec()
             };
-            let bytes = if bytes.starts_with(b"DCX\0") {
-                decoded_budget.charge(off, Envelope::parse(&bytes, decoder.max_output)?.decoded_size)?;
-                decoder.decode(&bytes)?
+            let (bytes, wrap) = if bytes.starts_with(b"DCX\0") {
+                let envelope = Envelope::parse(&bytes, decoder.max_output)?;
+                decoded_budget.charge(off, envelope.decoded_size)?;
+                let format = envelope.format;
+                (decoder.decode(&bytes)?, Some(format))
             } else {
-                bytes
+                (bytes, None)
             };
             files.push(BinderFile {
                 id,
                 name,
                 flags,
                 bytes,
+                wrap,
             });
         }
         if ext == 4 {
@@ -410,6 +509,15 @@ impl Binder {
             version,
             format,
             files,
+            layout: Layout {
+                big_endian: v.be,
+                bit_big_endian: bitbe,
+                unicode,
+                format_raw: raw,
+                extended: ext,
+                unknown_04,
+                unknown_05,
+            },
         })
     }
 }
