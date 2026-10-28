@@ -19,7 +19,7 @@
 
 use crate::{
     Result,
-    emit::Out,
+    put::Out,
     invalid,
     mapid::MapId,
     msb::{FlagByte, Generation, MapLayout, Part, PartKind},

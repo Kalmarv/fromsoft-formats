@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 
 use crate::{
     Result,
-    emit::Out,
+    put::Out,
     tae::{Animation, Header, Tae, VERSION},
 };
 

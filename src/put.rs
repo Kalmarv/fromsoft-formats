@@ -2,6 +2,10 @@
 //! order, pads and aligns with zeros and patches placeholders once their value is known, and the checked arithmetic and
 //! narrowing of the sizes and offsets a file stores. Every refusal names the format and the offset the writer had
 //! reached.
+
+//! The byte sink the writers of MTD, MATBIN, EMEVD, TAE, MSB and FLVER share ([`Out`]): little-endian puts,
+//! zero alignment, placeholders patched once their value is known, and counts and offsets that must fit the 32-bit
+//! words a file stores them in.
 use crate::{Error, Result, invalid};
 
 /// A growing output buffer of one format, little- or big-endian.

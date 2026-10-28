@@ -22,7 +22,7 @@
 )]
 
 use super::{Material, Mesh, Model, count, encode, is_speedtree, table, vertex};
-use crate::{Result, bytes::View, emit::Out, invalid};
+use crate::{Result, bytes::View, put::Out, invalid};
 
 const FORMAT: &str = "FLVER";
 

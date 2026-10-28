@@ -12,7 +12,7 @@
 
 use crate::{
     Result,
-    emit::Out,
+    put::Out,
     mtd::{BlockLength, MaterialDefinition, PaddingAnomaly, Texture, Value},
 };
 

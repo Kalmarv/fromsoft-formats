@@ -13,7 +13,7 @@
 use crate::{
     Result,
     emevd::{Event, Script},
-    emit::Out,
+    put::Out,
 };
 
 const FORMAT: &str = "EMEVD";

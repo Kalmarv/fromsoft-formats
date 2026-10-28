@@ -87,6 +87,27 @@
   `m00_00_<id>_weatheroutdoor` file) and `WeatherLotParam` (the weighted weathers of a lot).
 - `area::draw_params`: Elden Ring's caves and tunnels (`m31`, `m32`) use the catacombs' `m30_00` files, as the game's
   `GparamRefSettings` rows say (they used to have none); every row of that table agrees with the rule.
+- Writers for MTD, MATBIN, EMEVD, TAE, MSB and FLVER, each proven by writing back every stock file of both installs
+  (`tests/*_write.rs`; the expected counts come from an independent Python parser and writer run over the same files):
+  `mtd::MaterialDefinition::write` (keeping the declared block lengths and the leftover padding a read recorded) and
+  `write_canonical`, `matbin::Material::write`, `emevd::Script::write`, `tae::Tae::write`, `msb::MapLayout::write` and
+  `flver::Model::write` with its `flver::Layout` (`Layout::read`, `Layout::for_model`).
+- Breaking: `mtd::Texture` has `version` (the texture block's version, 5 or 3: Sekiro's definitions hold version-5 blocks
+  with an empty path and no floats, which a version-3 block also reads as). `matbin::Material::unreferenced_tail` holds
+  every byte after the last referenced item, so the zero byte that realigns an item ending at an odd offset (722 of
+  Elden Ring's 20,619 materials) is its first byte rather than skipped.
+- `emevd::Script::write` stores -1 for an event's empty parameter list; 6 events of 4 of Sekiro's 30 files store the
+  running offset there instead (all other files of both installs are byte-equal).
+- `msb::MapLayout::write` lays the parts' fixed fields (placement, entity ID and groups, shadow and draw controls, hit
+  filter, NPC row, effect id, tile-load map) over the part records, so a layout edited through `parts` is written as
+  edited; a name, kind or model a view disagrees with the record on is refused.
+- `flver::Layout` holds what a file stores that `Model` does not (header bounding box and face counts, the meshes'
+  bounding boxes, the version-`0x2001a` skeleton set, each face set's stated index width, the GX area with the lists
+  materials share and the ones no material names, the SpeedTree models' data order). SpeedTree models differ from the rest
+  in an extra zero unit after each texture path, data at a multiple of 0x800 with the vertex buffers first, and a file
+  padded to one; the writer follows them.
+- `tae::Tae::check_templates` and `write_checked`: hold a file to the event templates (`tae::template`), refusing an
+  event whose asserted field stores another value with the animation, event and field named (`tae::TemplateCheck`).
 
 ## 0.10.0 (2026-10-28)
 

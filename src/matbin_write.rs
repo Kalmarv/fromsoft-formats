@@ -12,7 +12,7 @@
 
 use crate::{
     Result,
-    emit::Out,
+    put::Out,
     matbin::{Material, Value},
 };
 
