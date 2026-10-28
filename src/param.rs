@@ -589,6 +589,101 @@ impl GrassParam {
     }
 }
 
+/// The param types [`ModelSfxParam::from_param`] reads: Sekiro's `ModelSfxParam` (keyed by the object model's number
+/// times 1000, plus a row choice) and Elden Ring's `AssetModelSfxParam` (keyed `(nnn * 1000 + mmm) * 1000 + relative id`
+/// for the asset model `AEGnnn_mmm`).
+pub const MODEL_SFX_PARAM_TYPES: [&str; 2] = ["MODEL_SFX_PARAM_ST", "ASSET_MODEL_SFX_PARAM_ST"];
+/// Both types' row size: eight slots of 16 bytes (effect id, dummy polygon id, eight reserved bytes; Elden Ring's last
+/// slot keeps `isDisableIV` in the first of its reserved bytes).
+const MODEL_SFX_ROW: usize = 128;
+/// The slots a row holds.
+const MODEL_SFX_SLOTS: usize = 8;
+
+/// One slot of a model effect row: an effect and the model's dummy polygon it attaches to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct ModelSfxSlot {
+    /// `sfxId_n`: the FXR effect id; an unused slot holds -1 in Elden Ring and 0 in Sekiro.
+    pub effect_id: i32,
+    /// `dmypolyId_n`: the reference id of the FLVER dummy the effect attaches to (the same sentinels as the id).
+    pub dummy_id: i32,
+}
+
+/// One row of the model effect param.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct ModelSfxRow {
+    /// The row's ID.
+    pub id: i32,
+    /// Its eight slots, in order.
+    pub slots: [ModelSfxSlot; MODEL_SFX_SLOTS],
+}
+impl ModelSfxRow {
+    /// The slots in use: those with a positive effect id.
+    pub fn used(&self) -> impl Iterator<Item = ModelSfxSlot> + '_ {
+        self.slots.iter().copied().filter(|s| s.effect_id > 0)
+    }
+}
+
+/// The model effect param's rows: which effects a placed model spawns and at which of its dummy polygons.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct ModelSfxParam {
+    /// The param type: [`MODEL_SFX_PARAM_TYPES`] one of them.
+    pub param_type: String,
+    /// The param's layout revision.
+    pub data_version: u16,
+    /// Every row, in file order.
+    pub rows: Vec<ModelSfxRow>,
+}
+impl ModelSfxParam {
+    /// The rows of `param`, which must be one of [`MODEL_SFX_PARAM_TYPES`] with rows of 128 bytes (the layout both
+    /// games' definitions give; any other is refused).
+    pub fn from_param(param: &Param) -> Result<ModelSfxParam> {
+        if !MODEL_SFX_PARAM_TYPES.contains(&param.param_type.as_str()) || param.row_size != MODEL_SFX_ROW {
+            return Err(invalid(
+                FORMAT,
+                0,
+                format!(
+                    "{} with rows of {} bytes, the model effect param read is one of {MODEL_SFX_PARAM_TYPES:?} with rows of {MODEL_SFX_ROW}",
+                    param.param_type, param.row_size
+                ),
+            ));
+        }
+        let word = |data: &[u8], at: usize| -> Result<i32> {
+            data.get(at..at.saturating_add(4))
+                .and_then(|b| <[u8; 4]>::try_from(b).ok())
+                .map(i32::from_le_bytes)
+                .ok_or_else(|| invalid(FORMAT, at, "word beyond the row"))
+        };
+        let rows = param
+            .rows
+            .iter()
+            .map(|r| {
+                let mut slots = [ModelSfxSlot {
+                    effect_id: 0,
+                    dummy_id: 0,
+                }; MODEL_SFX_SLOTS];
+                for (slot, at) in slots.iter_mut().zip((0..).step_by(16)) {
+                    *slot = ModelSfxSlot {
+                        effect_id: word(&r.data, at)?,
+                        dummy_id: word(&r.data, at.saturating_add(4))?,
+                    };
+                }
+                Ok(ModelSfxRow { id: r.id, slots })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(ModelSfxParam {
+            param_type: param.param_type.clone(),
+            data_version: param.data_version,
+            rows,
+        })
+    }
+
+    /// The rows with `id`: one in every id but one of the installs' (Sekiro's `ModelSfxParam` stores row 1230000 twice,
+    /// with different slots).
+    pub fn rows_with(&self, id: i32) -> impl Iterator<Item = &ModelSfxRow> + '_ {
+        self.rows.iter().filter(move |r| r.id == id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -887,5 +982,34 @@ mod tests {
         let e = NpcParam::read(&bytes, &sekiro).unwrap_err().to_string();
         assert!(!e.contains("  "), "{e}");
         assert!(e.ends_with(&format!("with rows of {}", sekiro.row_size)), "{e}");
+    }
+
+    /// A model effect row reads as eight (effect, dummy) slots; other types and sizes are refused.
+    #[test]
+    fn a_model_effect_row_reads_its_slots() {
+        let mut row = vec![0u8; 128];
+        for k in 0..8usize {
+            let (effect, dummy) = if k == 0 { (803291, 200) } else { (-1, -1) };
+            row[k * 16..k * 16 + 4].copy_from_slice(&i32::to_le_bytes(effect));
+            row[k * 16 + 4..k * 16 + 8].copy_from_slice(&i32::to_le_bytes(dummy));
+        }
+        let bytes = fixture("ASSET_MODEL_SFX_PARAM_ST", 0, 128, &[(3011000, row.clone())]);
+        let param = ModelSfxParam::from_param(&Param::read(&bytes).unwrap()).unwrap();
+        let r = param.rows_with(3011000).next().unwrap();
+        assert_eq!(
+            r.used().collect::<Vec<_>>(),
+            [ModelSfxSlot {
+                effect_id: 803291,
+                dummy_id: 200
+            }]
+        );
+        assert_eq!(param.rows_with(1).count(), 0);
+        for (name, size) in [("NPC_PARAM_ST", 128), ("MODEL_SFX_PARAM_ST", 96)] {
+            let other = fixture(name, 0, size, &[(1, vec![0; size])]);
+            assert!(
+                ModelSfxParam::from_param(&Param::read(&other).unwrap()).is_err(),
+                "{name} {size}"
+            );
+        }
     }
 }

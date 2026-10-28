@@ -281,6 +281,10 @@ pub struct Part {
     /// the think param row, then the NPC row, as SoulsFormats' `MSBS`/`MSBE` `EnemyBase.ReadTypeData` read them);
     /// absent on other part kinds.
     pub npc_param: Option<i32>,
+    /// An Elden Ring asset's `sfxParamRelativeId` (type data +0x1c, a signed 16-bit word): the last three digits of the
+    /// `AssetModelSfxParam` row the asset's effects come from, the row being `(nnn * 1000 + mmm) * 1000 + id` for the
+    /// model `AEGnnn_mmm`; -1 names none. Absent on other part kinds and in Sekiro, whose objects store no such word.
+    pub sfx_param_relative_id: Option<i16>,
     /// Its position, as stored.
     pub position: [f32; 3],
     /// Its rotation in degrees (X, Y, Z), as stored; see [`euler_matrix`] for the order they apply in.
@@ -646,6 +650,14 @@ impl MapLayout {
                     let data = r.size(104)?;
                     r.expect(data, &[0; 8])?;
                     Some(i32_at(r.at(data, 12)?)?)
+                } else {
+                    None
+                },
+                sfx_param_relative_id: if kind == PartKind::Asset
+                    && generation.name != Generation::SEKIRO.name
+                {
+                    let data = r.size(104)?;
+                    Some(r.u16_at(data, 0x1c)? as i16)
                 } else {
                     None
                 },
@@ -1113,6 +1125,17 @@ pub struct Region {
     pub extra_map: Option<MapId>,
 }
 
+/// The effect an SFX region spawns ([`MapLayout::sfx_region`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SfxRegion {
+    /// The FXR effect id (`f<id, nine digits>.fxr`).
+    pub effect_id: i32,
+    /// The region's effect starts disabled; an event script enables it.
+    pub start_disabled: bool,
+    /// The byte after the flag in Sekiro's word (0 or 1; 1 in 13 regions of its maps); 0 in Elden Ring. Not understood.
+    pub second_byte: u8,
+}
+
 /// One event of the layout as stored (`EVENT_PARAM_ST`): what every type
 /// shares, and the type's own data as bytes. SoulsFormats' `MSBS`/`MSBE` `Event` read the header alike: a number at
 /// +8, the type at +12, the index in the type at +16, the base data offset at +24 (a part index, a region index, the
@@ -1476,6 +1499,40 @@ impl MapLayout {
         Ok(out)
     }
 
+    /// What an SFX region (type 5) names: its effect and whether it starts disabled. Sekiro stores the effect id at type
+    /// data +0 and the disabled flag as the word at +20 (SoulsFormats' `StartDisabled`, preceded by -1 words), whose
+    /// low byte is the flag and whose second byte ([`SfxRegion::second_byte`]) is 1 in a few regions; Elden Ring the id
+    /// at +0 and the flag as a word at +4 that is 0 or 1. `None` for a region of another type. A flag byte that is not 0
+    /// or 1, or a flag word with bits above its second byte, is refused.
+    pub fn sfx_region(&self, region: &Region) -> Result<Option<SfxRegion>> {
+        if region.type_code != 5 {
+            return Ok(None);
+        }
+        let r = View {
+            data: &region.type_data,
+            format: "MSB SFX region",
+            be: false,
+            base: 0,
+        };
+        let sekiro = self.generation.name == Generation::SEKIRO.name;
+        let flag_at = if sekiro { 20 } else { 4 };
+        let start_disabled = match r.u8(flag_at)? {
+            0 => false,
+            1 => true,
+            _ => return Err(r.err(flag_at, "start-disabled flag")),
+        };
+        let second_byte = r.u8_at(flag_at, 1)?;
+        if second_byte > 1 || (!sekiro && second_byte != 0) {
+            return Err(r.err(r.at(flag_at, 1)?, "second byte of the start-disabled word"));
+        }
+        r.expect_at(flag_at, 2, &[0; 2])?;
+        Ok(Some(SfxRegion {
+            effect_id: r.u32(0)? as i32,
+            start_disabled,
+            second_byte,
+        }))
+    }
+
     /// Every event of the layout, of every type, in file order, with the bytes of its type data (a MapOffset event's
     /// among them: [`MapLayout::map_offsets`] reads those).
     pub fn map_events(&self) -> Result<Vec<Event>> {
@@ -1634,6 +1691,7 @@ mod region_tests {
             model: None,
             hit_filter: None,
             npc_param: None,
+            sfx_param_relative_id: None,
             position: [index as f32, 2.0, 3.0],
             rotation_degrees: [0.0; 3],
             scale: [1.0; 3],
@@ -1721,6 +1779,7 @@ mod region_tests {
                 model: None,
                 hit_filter: None,
                 npc_param: Some(10002020),
+                sfx_param_relative_id: None,
                 position: [0.; 3],
                 rotation_degrees: [0.; 3],
                 scale: [1.; 3],
@@ -1963,5 +2022,56 @@ mod region_tests {
             );
         }
         layout(&Generation::ELDEN_RING, vec![good]).map_regions().unwrap();
+    }
+
+    /// An SFX region names its effect and flag where each generation keeps them; a region of another type names none;
+    /// a flag that is not a boolean is refused.
+    #[test]
+    fn an_sfx_region_names_its_effect_and_flag() {
+        let words = |w: &[i32]| w.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>();
+        let elden = layout(
+            &Generation::ELDEN_RING,
+            vec![
+                region("A", 5, 0, &[], 1, &words(&[620400, 1])),
+                region("B", 5, 0, &[], 2, &words(&[7, 0])),
+                region("C", 4, 0, &[], 3, &words(&[7, 0])),
+                region("D", 5, 0, &[], 4, &words(&[7, 2])),
+                region("E", 5, 0, &[], 5, &words(&[7, 256])),
+            ],
+        );
+        let regions = elden.map_regions().unwrap();
+        let sfx = |i: usize| elden.sfx_region(&regions[i]);
+        assert_eq!(
+            sfx(0).unwrap(),
+            Some(SfxRegion {
+                effect_id: 620400,
+                start_disabled: true,
+                second_byte: 0
+            })
+        );
+        assert!(!sfx(1).unwrap().unwrap().start_disabled);
+        assert_eq!(sfx(2).unwrap(), None);
+        assert!(sfx(3).is_err() && sfx(4).is_err());
+        // Sekiro: the effect first, three -1 words after an unknown one, then the flag word (low byte the flag)
+        let mut data = words(&[600902, -1, -1, -1, -1, 0x101]);
+        let sekiro = layout(
+            &Generation::SEKIRO,
+            vec![region_in(&Generation::SEKIRO, "S", 5, 0, &[], 1, &data)],
+        );
+        let regions = sekiro.map_regions().unwrap();
+        assert_eq!(
+            sekiro.sfx_region(&regions[0]).unwrap(),
+            Some(SfxRegion {
+                effect_id: 600902,
+                start_disabled: true,
+                second_byte: 1
+            })
+        );
+        data[20] = 2;
+        let bad = layout(
+            &Generation::SEKIRO,
+            vec![region_in(&Generation::SEKIRO, "S", 5, 0, &[], 1, &data)],
+        );
+        assert!(bad.sfx_region(&bad.map_regions().unwrap()[0]).is_err());
     }
 }

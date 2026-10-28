@@ -97,6 +97,20 @@ pub fn read_npc_param(install: &Install, archive: &Archive, decoder: &Decoder<'_
     )
 }
 
+/// The model effect param of the install's game params (Sekiro's `ModelSfxParam`, Elden Ring's `AssetModelSfxParam`):
+/// the effects a placed object or asset spawns, and the dummy polygons they attach to.
+pub fn read_model_sfx_param(
+    install: &Install,
+    archive: &Archive,
+    decoder: &Decoder<'_>,
+) -> Result<crate::param::ModelSfxParam> {
+    let leaf = match install.game {
+        crate::Game::Sekiro => "ModelSfxParam.param",
+        crate::Game::EldenRing => "AssetModelSfxParam.param",
+    };
+    crate::param::ModelSfxParam::from_param(&read_param(install, archive, decoder, leaf)?)
+}
+
 /// The descriptive NPC fields, with the game's explicit layout and no row choice.
 pub fn read_npc_stats(
     install: &Install,

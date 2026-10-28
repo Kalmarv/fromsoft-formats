@@ -204,6 +204,7 @@ mod tests {
             model: None,
             hit_filter: None,
             npc_param: None,
+            sfx_param_relative_id: None,
             position: [0.; 3],
             rotation_degrees: [0.; 3],
             scale: [1.; 3],

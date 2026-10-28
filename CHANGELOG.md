@@ -16,6 +16,15 @@
   an independent walker (`tests/fxr_census.rs`). `Node::config_in_state`, `Config::static_transform` (action 35, six floats: offset and
   rotation in degrees; 20,878 configs of Sekiro and 81,215 of Elden Ring have one) and `PlacedLight::static_transforms` give the
   transforms a light sits under; every node with several configs has a state-config map in both installs.
+- The references from map data to effects: `msb::Part::sfx_param_relative_id` (an Elden Ring asset's type data +0x1c, a
+  signed 16-bit word; the only word of the type data that is -1 or the last digits of an existing row key: 409,246 of the
+  421,253 parts of `AEGnnn_mmm` models store -1, 11,533 name a row of `AssetModelSfxParam`, 474 name an absent one),
+  `MapLayout::sfx_region` (an SFX region's effect id and start-disabled flag: 1,872 Sekiro regions in 9 maps, 54 start
+  disabled; 1,523 Elden Ring regions in 104 maps, 17 disabled) and `param::ModelSfxParam` with
+  `game_params::read_model_sfx_param` (Sekiro's `ModelSfxParam`, 202 rows, and Elden Ring's `AssetModelSfxParam`, 1,293
+  rows: eight slots of an effect id and the id of the model's dummy polygon it attaches to; compared field by field with the
+  Smithbox paramdefs' reading, `tests/model_sfx_census.rs`). `ModelSfxParam::rows_with` is plural because Sekiro's
+  param stores row 1230000 twice, with different slots.
 - `collision::Soup::bounds` and `Soup::simd`: the bounding-volume trees and simd trees of the compressed meshes
   `read_map` and `read_bodies` read, decoded and checked by `havok-formats` (a mesh whose trees do not hold together is
   refused), with the triangles and quads counted against the boxes of their leaves. `tests/bvtree_census.rs` reads
