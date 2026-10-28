@@ -212,6 +212,18 @@ primase_testdata::inputs! {
             about: r#"the community's Sekiro archive path list (as for Elden Ring): 8,949 paths; tests/dictionary_census.rs"#,
             source: r#"third-party: Smithbox fdde3225's `Smithbox.Data/Assets/File Dictionaries/SDT-File-Dictionary.json` (MIT repository), read in place"#,
         },
+        Query::Oracle(OracleSet::Smithbox, Game::Elden, "hit-material-names.json") => {
+            status: Live,
+            gate: false,
+            about: r#"the community's English names of Elden Ring's HitMtrlParam rows (`Entries`: per row an `ID` and its name in `Entries`, empty for the 33 rows it leaves unnamed); tests/hit_class_names.rs"#,
+            source: r#"third-party: Smithbox fdde3225's `Smithbox.Data/Assets/PARAM/ER/Param Row Names/English/HitMtrlParam.json` (MIT repository; the file carries no licence of its own), read in place"#,
+        },
+        Query::Oracle(OracleSet::Smithbox, Game::Sekiro, "hit-material-names.json") => {
+            status: Live,
+            gate: true,
+            about: r#"the community's English names of Sekiro's HitMtrlParam rows (as for Elden Ring; Paramdex's names): 50 of the 51 rows are named; tests/hit_class_names.rs"#,
+            source: r#"third-party: Smithbox fdde3225's `Smithbox.Data/Assets/PARAM/SDT/Param Row Names/English/HitMtrlParam.json` (MIT repository), read in place"#,
+        },
     }
     debug {}
 }

@@ -467,3 +467,96 @@ pub fn read_bodies(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Vec<
     }
     Ok(result)
 }
+
+/// The name of a HitMtrlParam class, a row's ID modulo 100 (the IDs of triangles are `class + 100 * variant`), in `game`:
+/// the community's row names (Smithbox's English list, from Paramdex for Sekiro), `None` for a class whose row it leaves
+/// unnamed. Sekiro's list names 50 of the 51 rows (all but 0; ten are "Unused"), Elden Ring's 18. Of the 46 classes Elden
+/// Ring's collision files use, 29 have no name anywhere (6.2% of its triangles); of Sekiro's, only class 0 (273,823
+/// triangles). The names are labels, not meanings: the class 29 "None" of Sekiro is byte for byte the row 0, and Elden
+/// Ring's differs from it.
+pub fn hit_class_name(game: crate::Game, class: i32) -> Option<&'static str> {
+    use crate::Game;
+    Some(match (game, class) {
+        (Game::Sekiro, 1) => "Stone",
+        (Game::Sekiro, 2 | 25 | 26 | 39 | 41..=44 | 48 | 49) => "Unused",
+        (Game::Sekiro, 3) => "Dirt",
+        (Game::Sekiro, 4) => "Wood",
+        (Game::Sekiro, 5) => "Grass",
+        (Game::Sekiro, 6) => "Gravel",
+        (Game::Sekiro, 7) => "Bamboo",
+        (Game::Sekiro, 8) => "Tree",
+        (Game::Sekiro, 9 | 10) => "Straw",
+        (Game::Sekiro, 11) => "Iron",
+        (Game::Sekiro, 12) => "Flesh",
+        (Game::Sekiro, 13) => "Sand",
+        (Game::Sekiro, 14) => "Bone",
+        (Game::Sekiro, 15) => "Ash",
+        (Game::Sekiro, 16) => "Tiles",
+        (Game::Sekiro, 17) => "Cloth",
+        (Game::Sekiro, 18) => "Dead Leaves",
+        (Game::Sekiro, 19) => "Bell",
+        (Game::Sekiro, 20) => "Water Puddle",
+        (Game::Sekiro, 21) => "Water (Walkable)",
+        (Game::Sekiro, 22) => "Water (Diveable)",
+        (Game::Sekiro, 23) => "Poison Swamp",
+        (Game::Sekiro, 24) => "Poison Swamp (with slowing)",
+        (Game::Sekiro, 27) => "Mud",
+        (Game::Sekiro, 28) => "Tatami",
+        (Game::Sekiro, 29) => "None",
+        (Game::Sekiro, 30) => "Snow",
+        (Game::Sekiro, 31) => "Bush",
+        (Game::Sekiro, 32) => "Wood Indoors",
+        (Game::Sekiro, 33) => "Autumn Leaves",
+        (Game::Sekiro, 34) => "Ice",
+        (Game::Sekiro, 35) => "Water Slope",
+        (Game::Sekiro, 36) => "Water Slope (swimming)",
+        (Game::Sekiro, 37) => "Grass In Water",
+        (Game::Sekiro, 38) => "Grass In Water (swimming)",
+        (Game::Sekiro, 40) => "Cloud",
+        (Game::Sekiro, 45) => "Underwater Dirt",
+        (Game::Sekiro, 46) => "Underwater Stone",
+        (Game::Sekiro, 47) => "Underwater Wood",
+        (Game::Sekiro, 80) => "Miasma",
+        (Game::EldenRing, 0) => "None",
+        (Game::EldenRing, 1) => "Stock",
+        (Game::EldenRing, 2) => "Rock",
+        (Game::EldenRing, 3) => "Sand",
+        (Game::EldenRing, 4) => "Wood",
+        (Game::EldenRing, 5) => "Dirt",
+        (Game::EldenRing, 6) => "Ore",
+        (Game::EldenRing, 7) => "Lava",
+        (Game::EldenRing, 8) => "Scarlet Tree",
+        (Game::EldenRing, 11) => "Iron Grate",
+        (Game::EldenRing, 12) => "Scarlet Mushroom",
+        (Game::EldenRing, 14) => "Bone",
+        (Game::EldenRing, 21) => "Water",
+        (Game::EldenRing, 23) => "Shallow Poison Swamp",
+        (Game::EldenRing, 24) => "Poison Swamp",
+        (Game::EldenRing, 44) => "Rain Dirt",
+        (Game::EldenRing, 46) => "Scarlet Swamp",
+        (Game::EldenRing, 49) => "Lake of Rot",
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hit_class_name;
+    use crate::Game;
+
+    #[test]
+    fn classes_are_named_as_the_community_names_the_rows() {
+        assert_eq!(hit_class_name(Game::Sekiro, 1), Some("Stone"));
+        assert_eq!(hit_class_name(Game::Sekiro, 25), Some("Unused"));
+        assert_eq!(hit_class_name(Game::Sekiro, 43), Some("Unused"));
+        assert_eq!(hit_class_name(Game::Sekiro, 0), None);
+        assert_eq!(hit_class_name(Game::EldenRing, 0), Some("None"));
+        // the numbering is not shared: 3 is Dirt in Sekiro and Sand in Elden Ring
+        assert_eq!(hit_class_name(Game::Sekiro, 3), Some("Dirt"));
+        assert_eq!(hit_class_name(Game::EldenRing, 3), Some("Sand"));
+        assert_eq!(hit_class_name(Game::EldenRing, 29), None);
+        assert_eq!(hit_class_name(Game::Sekiro, -1), None);
+        let named = |g| (0..100).filter(|c| hit_class_name(g, *c).is_some()).count();
+        assert_eq!((named(Game::Sekiro), named(Game::EldenRing)), (50, 18));
+    }
+}
