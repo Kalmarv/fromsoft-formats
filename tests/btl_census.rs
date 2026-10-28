@@ -142,3 +142,183 @@ fn every_light_bank_matches_an_independent_reading() -> Result<()> {
     }
     Ok(())
 }
+
+/// The values of the words the light record names, by field, over every bank of a game: how many lights hold each
+/// value (as the `f32` bits, or the integer).
+#[derive(Default)]
+struct Words {
+    banks: usize,
+    lights: usize,
+    by_field: std::collections::BTreeMap<&'static str, std::collections::BTreeMap<u32, usize>>,
+}
+
+impl Words {
+    /// How many lights hold `value` in `field`.
+    fn count(&self, field: &str, value: f32) -> usize {
+        self.by_field
+            .get(field)
+            .and_then(|c| c.get(&value.to_bits()))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// The values of `field` and how many lights hold each, by value.
+    fn values(&self, field: &str) -> Vec<(u32, usize)> {
+        self.by_field[field].iter().map(|(v, n)| (*v, *n)).collect()
+    }
+
+    /// The number of distinct values of `field` and its least and greatest (the fields it is asked of are non-negative,
+    /// so the bit patterns order like the floats).
+    fn spread(&self, field: &str) -> (usize, f32, f32) {
+        let c = &self.by_field[field];
+        let lo = c.keys().next().copied().unwrap_or(0);
+        let hi = c.keys().next_back().copied().unwrap_or(0);
+        (c.len(), f32::from_bits(lo), f32::from_bits(hi))
+    }
+}
+
+fn tally(game: Game, data: inputs::Game) -> Result<Option<Words>> {
+    let (Some(archive), Some(dll), Some(names)) = (
+        common::archive(game)?,
+        inputs::oodle(inputs::Tool::Oodle6),
+        inputs::oracle(inputs::OracleSet::Uxm, data, "dictionary.txt"),
+    ) else {
+        return Ok(None);
+    };
+    let dll = common::oodle(dll)?;
+    let decoder = Decoder {
+        oodle: Some(&dll),
+        max_output: 1 << 30,
+    };
+    let names = fromsoft_formats::NameDictionary::read_for(names, game)?;
+    let mut w = Words::default();
+    common::each_leaf(&archive, &names, &[".btl.dcx"], &decoder, |label, bytes| {
+        let bank = LightBank::read(bytes).map_err(|e| format!("{label}: {e}"))?;
+        w.banks += 1;
+        for l in &bank.lights {
+            w.lights += 1;
+            let mut add = |field: &'static str, bits: u32| {
+                *w.by_field.entry(field).or_default().entry(bits).or_default() += 1;
+            };
+            add("flicker_interval_min", l.flicker_interval[0].to_bits());
+            add("flicker_interval_max", l.flicker_interval[1].to_bits());
+            add("flicker_brightness", l.flicker_brightness.to_bits());
+            add("event_id", l.event_id as u32);
+            add("near_clip", l.near_clip.to_bits());
+            add("shadow_model_cull_flip", u32::from(l.shadow_model_cull_flip));
+            add("sharpness", l.sharpness.to_bits());
+            add("horizontal_angle", l.horizontal_angle.to_bits());
+            add("near_distance", l.near_distance.to_bits());
+            add("enable_distance", l.enable_distance.to_bits());
+            add("volume_density", l.volume_density.to_bits());
+            add("exposure_weight", l.exposure_weight.to_bits());
+            // the named words are not in the auxiliary map, and the words nobody names are
+            assert!(
+                [116, 120, 124, 128, 156, 164, 184, 188, 196, 208, 224]
+                    .iter()
+                    .all(|o| !l.auxiliary.contains_key(o))
+                    && l.auxiliary.contains_key(&152)
+                    && l.auxiliary.contains_key(&160),
+                "{label}"
+            );
+        }
+        Ok(())
+    })?;
+    Ok(Some(w))
+}
+
+/// The eleven words the community's editor names (and the exposure weight) over every light of Sekiro: the values and
+/// how many lights hold them, from an independent Python reading of the same banks.
+#[test]
+fn sekiros_named_words() -> Result<()> {
+    let Some(w) = tally(Game::Sekiro, inputs::Game::Sekiro)? else {
+        return Ok(());
+    };
+    inputs::expect_found(
+        inputs::Query::Install(inputs::Game::Sekiro, None),
+        "light banks",
+        w.banks,
+    );
+    assert_eq!((w.banks, w.lights), (18, 735));
+    assert_eq!(w.spread("flicker_interval_min"), (2, 0., 0.2));
+    assert_eq!(
+        (
+            w.count("flicker_interval_min", 0.),
+            w.count("flicker_interval_min", 0.2)
+        ),
+        (680, 55)
+    );
+    assert_eq!(w.spread("flicker_interval_max"), (3, 0., 1.));
+    assert_eq!(
+        (
+            w.count("flicker_interval_max", 0.),
+            w.count("flicker_interval_max", 0.8),
+            w.count("flicker_interval_max", 1.)
+        ),
+        (646, 55, 34)
+    );
+    assert_eq!(
+        (
+            w.count("flicker_brightness", 1.),
+            w.count("flicker_brightness", 0.6)
+        ),
+        (646, 89)
+    );
+    assert_eq!(w.values("event_id"), vec![(-1i32 as u32, 735)]);
+    assert_eq!(w.values("near_clip"), vec![(1f32.to_bits(), 735)]);
+    assert_eq!(w.values("shadow_model_cull_flip"), vec![(0, 6), (1, 729)]);
+    assert_eq!(w.spread("sharpness"), (33, 0.2, 30.));
+    assert_eq!(w.spread("horizontal_angle"), (16, 0., 90.));
+    assert_eq!(w.count("horizontal_angle", 0.), 668);
+    assert_eq!(w.spread("near_distance"), (20, 0., 34.));
+    assert_eq!(w.count("near_distance", 0.), 670);
+    assert_eq!(w.spread("enable_distance"), (8, 0., 1000.));
+    assert_eq!(w.count("enable_distance", 0.), 685);
+    assert_eq!(w.spread("volume_density"), (17, 0., 10.));
+    assert_eq!(
+        (w.count("volume_density", 1.), w.count("volume_density", 0.)),
+        (302, 193)
+    );
+    assert_eq!(
+        (w.count("exposure_weight", 0.), w.count("exposure_weight", 1.)),
+        (715, 20)
+    );
+    Ok(())
+}
+
+/// The same over every light of Elden Ring: no flicker, no event, no exposure weight.
+#[test]
+fn elden_rings_named_words() -> Result<()> {
+    let Some(w) = tally(Game::EldenRing, inputs::Game::Elden)? else {
+        return Ok(());
+    };
+    inputs::expect_found(
+        inputs::Query::Install(inputs::Game::Elden, None),
+        "light banks",
+        w.banks,
+    );
+    assert_eq!((w.banks, w.lights), (109, 11_229));
+    assert_eq!(w.values("flicker_interval_min"), vec![(0, 11_229)]);
+    assert_eq!(w.values("flicker_interval_max"), vec![(0, 11_229)]);
+    assert_eq!(w.values("flicker_brightness"), vec![(1f32.to_bits(), 11_229)]);
+    assert_eq!(w.values("event_id"), vec![(-1i32 as u32, 11_229)]);
+    assert_eq!(w.values("near_clip"), vec![(1f32.to_bits(), 11_229)]);
+    assert_eq!(w.values("shadow_model_cull_flip"), vec![(0, 9_600), (1, 1_629)]);
+    assert_eq!(w.spread("sharpness"), (70, 0.01, 80.));
+    assert_eq!(w.spread("horizontal_angle"), (28, 0., 100.));
+    assert_eq!(w.count("horizontal_angle", 0.), 11_007);
+    assert_eq!(w.spread("near_distance"), (23, 0., 60.));
+    assert_eq!(w.count("near_distance", 0.), 10_998);
+    assert_eq!(w.spread("enable_distance"), (28, 0., 1000.));
+    assert_eq!(
+        (w.count("enable_distance", 40.), w.count("enable_distance", 0.)),
+        (4_928, 1_611)
+    );
+    assert_eq!(w.spread("volume_density"), (16, 0., 10.));
+    assert_eq!(
+        (w.count("volume_density", 0.), w.count("volume_density", 1.)),
+        (8_009, 2_221)
+    );
+    assert_eq!(w.values("exposure_weight"), vec![(0, 11_229)]);
+    Ok(())
+}
