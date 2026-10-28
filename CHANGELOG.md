@@ -18,6 +18,17 @@
   with Smithbox's definitions, and a second decoder (Python) agrees on every value of every param.
 - `Binder::regulation_number` (the eight ASCII digits of a regulation's BND4 version, `11730034`; `None` for Sekiro's
   `07D7R6`) and `game_params::regulation_binder` (the binder of any `regulation.bin`, with the key).
+- Overworld: `overworld` reads Elden Ring's `WorldMapLegacyConvParam` (`ConvParam::from_param`, `Game::legacy_conv`,
+  strict: padding, map numbers and coordinates are checked, 196 rows of the installed regulation) and turns its rows into
+  a transform per legacy map (`Placements::from_conv`, `game_params::read_legacy_placements`): the map's origin in the
+  frame of an overworld tile (`Placement`, re-expressed in any tile of the area with `origin_in_frame_of`, or in the
+  area's frame with `global_origin`). `tile_origin` gives every tile of every level its origin in that frame. The rules are
+  Smithbox's (first base row to a tile, chained rows between legacy maps, two restricted destinations, the ending
+  cutscenes' map, the sky map, three colosseums) with one refinement: maps whose two reference points in a row between
+  them are the same numbers share one origin (`Source::SharedOrigin`), which moves two maps from where the base-row rule
+  puts them (`m12_07_00_00` 11.2 m, `m34_14_00_00` 2.0 m; the first is exact against the connecting collision of
+  `m12_02_00_00`). 100 maps are placed, 79 of them in the base game's install; 15 maps the param names (areas 37, 38, 39
+  and 70) have no rule.
 
 ## 0.5.0 (2026-10-27)
 

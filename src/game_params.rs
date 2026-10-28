@@ -109,6 +109,26 @@ pub fn read_npc_stats(
     )
 }
 
+/// The legacy maps' places in the overworld ([`crate::overworld::Placements`]): the install's `WorldMapLegacyConvParam`
+/// read and put through the placement rules. Refused for a game that has no such param (Sekiro).
+pub fn read_legacy_placements(
+    install: &Install,
+    archive: &Archive,
+    decoder: &Decoder<'_>,
+) -> Result<crate::overworld::Placements> {
+    let layout = install.game.legacy_conv().ok_or_else(|| {
+        invalid(
+            FORMAT,
+            0,
+            format!("{} has no WorldMapLegacyConvParam", install.game.name()),
+        )
+    })?;
+    let param = read_param(install, archive, decoder, "WorldMapLegacyConvParam.param")?;
+    Ok(crate::overworld::Placements::from_conv(
+        &crate::overworld::ConvParam::from_param(&param, &layout)?,
+    ))
+}
+
 /// A map part that names an NPC param row: an Enemy or DummyEnemy part, its model and its `NPCParamID`.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct NpcPlacement {

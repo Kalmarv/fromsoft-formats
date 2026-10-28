@@ -98,6 +98,7 @@ pub mod metaparam;
 pub mod msb;
 pub mod mtd;
 pub mod names;
+pub mod overworld;
 pub mod param;
 pub mod paramdef;
 mod sekiro;

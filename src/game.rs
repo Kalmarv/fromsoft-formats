@@ -173,6 +173,15 @@ impl Game {
         }
     }
 
+    /// Where the game keeps the fields of its `WorldMapLegacyConvParam` ([`crate::overworld::ConvParam`]): Elden Ring's
+    /// only; Sekiro has no such param.
+    pub fn legacy_conv(self) -> Option<crate::overworld::ConvLayout> {
+        match self {
+            Game::Sekiro => None,
+            Game::EldenRing => Some(crate::elden::LEGACY_CONV),
+        }
+    }
+
     /// Whether a map model belongs to the game's distant-backdrop series (Sekiro's `m9xxxxx`).
     pub fn far_model(self, model: &str) -> bool {
         match self {

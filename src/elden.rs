@@ -49,6 +49,15 @@ pub(crate) const NPC_STATS: crate::param::NpcStatLayout = crate::param::NpcStatL
     offsets: [4, 12, 16, 20, 24, 28, 32, 36, 40, 44],
 };
 
+/// Elden Ring's `WorldMapLegacyConvParam`, `WORLD_MAP_LEGACY_CONV_PARAM_ST` data version 2 with rows of 48 bytes: the flags
+/// byte, the source map and its reference point, the destination map and its, and the `isBasePoint` bit (Paramdex's
+/// `ER/Defs/WorldMapLegacyConvParam.xml` as Smithbox ships it at `fdde322`, FormatVersion 203; the padding after each
+/// map is one byte, after the bit 11).
+pub(crate) const LEGACY_CONV: crate::overworld::ConvLayout = crate::overworld::ConvLayout {
+    data_version: 2,
+    row_size: 48,
+};
+
 /// An asset model `AEGnnn_mmm`: its binder `/asset/aeg/aegnnn/aegnnn_mmm.geombnd.dcx` and FLVER member; its collision is
 /// in binders of its own, `aegnnn_mmm_h.geomhkxbnd.dcx` (high resolution, member `aegnnn_mmm_h.hkx`, a subset of the
 /// assets) and `aegnnn_mmm_l.geomhkxbnd.dcx` (low, `aegnnn_mmm_l.hkx`, every collidable asset).
