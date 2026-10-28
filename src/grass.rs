@@ -96,11 +96,11 @@ impl Grass {
             base: 0,
         };
         v.expect(0, &1u32.to_le_bytes())?;
-        v.expect(4, &(HEADER as u32).to_le_bytes())?;
-        v.expect(8, &(VOLUME as u32).to_le_bytes())?;
-        v.expect(16, &(VERTEX as u32).to_le_bytes())?;
-        v.expect(24, &(FACE as u32).to_le_bytes())?;
-        v.expect(32, &(BOX as u32).to_le_bytes())?;
+        v.expect(4, &0x28u32.to_le_bytes())?;
+        v.expect(8, &0x14u32.to_le_bytes())?;
+        v.expect(16, &0x24u32.to_le_bytes())?;
+        v.expect(24, &0x18u32.to_le_bytes())?;
+        v.expect(32, &0x18u32.to_le_bytes())?;
         let volumes = count(&v, 12)?;
         let vertices = count(&v, 20)?;
         let faces = count(&v, 28)?;
