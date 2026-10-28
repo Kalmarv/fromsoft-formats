@@ -860,7 +860,7 @@ mod tests {
             ),
             (None, None)
         );
-        let name: Vec<u8> = "skeleton ".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let name: Vec<u8> = "skeleton\0".encode_utf16().flat_map(u16::to_le_bytes).collect();
         put(&mut b, NAME, &name);
         u64le(&mut b, 0xb0, NAME as u64);
         assert_eq!(Tae::read(&b).unwrap().skeleton_name.as_deref(), Some("skeleton"));
