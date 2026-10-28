@@ -351,8 +351,22 @@ fn draw_blocks_and_the_numbers_of_regions_and_events() -> Result<()> {
         let mut kinds = BTreeMap::<String, [usize; 7]>::new();
         let (mut tails, mut conditions) = (BTreeMap::<[u8; 4], usize>::new(), BTreeSet::new());
         let mut display_tails = BTreeMap::<[u8; 4], usize>::new();
+        // collisions, collisions that set a display group, drawn parts, parts with no draw group, parts under a draw group
+        // that one collision's display groups include, and parts under none that any does
+        let mut census = [0usize; 6];
         for layout in layouts.values() {
             files += 1;
+            let c = layout.group_census()?;
+            for (total, n) in census.iter_mut().zip([
+                c.collisions,
+                c.collisions_with_groups,
+                c.parts,
+                c.no_groups,
+                c.met,
+                c.unmet,
+            ]) {
+                *total += n;
+            }
             for p in &layout.parts {
                 kinds.entry(format!("{:?}", p.kind)).or_default()[0] += 1;
             }
@@ -408,6 +422,15 @@ fn draw_blocks_and_the_numbers_of_regions_and_events() -> Result<()> {
             "{}",
             game.name()
         );
+        // against the independent census (a separate parser of the part records, the same union of the collisions' display words),
+        // over the map pieces, objects and assets: Sekiro's 51,508 parts have 654 with no draw group, 49,433 that meet a
+        // display group and 1,421 that meet none; Elden Ring's 425,775 have 317,870, 70,713 and 37,192
+        let expected_census = if game == Game::Sekiro {
+            [1_304, 999, 51_508, 654, 49_433, 1_421]
+        } else {
+            [3_266, 906, 425_775, 317_870, 70_713, 37_192]
+        };
+        assert_eq!(census, expected_census, "{} groups", game.name());
         // the draw block's fourth field is 0 in Sekiro; in Elden Ring -1 as a signed word, then a byte that is 1 on 177 map
         // pieces
         if game == Game::Sekiro {

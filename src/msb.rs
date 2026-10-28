@@ -984,6 +984,46 @@ pub struct DrawInfo {
     pub tail: [u8; 4],
 }
 
+/// The group numbers (0 to 255) set in eight group words: group `n` is bit `n % 32` of word `n / 32`, counting from the
+/// least significant bit. The numbering is a convention of this crate's: the files only ever compare one group word with
+/// another, so any fixed numbering of the 256 bits meets the same groups.
+pub fn group_numbers(words: &[u32; 8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (i, word) in words.iter().enumerate() {
+        for bit in 0..32u32 {
+            if word.checked_shr(bit).is_some_and(|w| w & 1 == 1)
+                && let Ok(n) = u8::try_from(i.saturating_mul(32).saturating_add(bit as usize))
+            {
+                out.push(n);
+            }
+        }
+    }
+    out
+}
+
+impl DrawInfo {
+    /// The numbers of the draw groups the part is under ([`group_numbers`] of [`DrawInfo::draw_groups`]).
+    pub fn draw_group_numbers(&self) -> Vec<u8> {
+        group_numbers(&self.draw_groups)
+    }
+
+    /// The numbers of the display groups the part sets ([`group_numbers`] of [`DrawInfo::display_groups`]); the community
+    /// documents these as meaningful on collisions only.
+    pub fn display_group_numbers(&self) -> Vec<u8> {
+        group_numbers(&self.display_groups)
+    }
+
+    /// Whether one of the part's draw groups is in `display`, eight words of display groups: the test the community
+    /// documents for a part to be drawn while those display groups are active. Whether a part with no draw group is drawn
+    /// is not decided here.
+    pub fn draws_under(&self, display: &[u32; 8]) -> bool {
+        self.draw_groups
+            .iter()
+            .zip(display)
+            .any(|(draw, shown)| draw & shown != 0)
+    }
+}
+
 /// The second block a part may store (the header's slot at +88), 72 bytes: Elden Ring's assets and the collisions and
 /// connect collisions of both games. A signed word, eight display-group words, four bytes, and 32 zero bytes. As
 /// stored; what the word and the groups do is the game's.
@@ -1103,6 +1143,65 @@ impl MapLayout {
             }
         }
         Ok(out)
+    }
+}
+
+/// How a layout's drawn parts (map pieces, objects, assets) meet its collisions' display groups
+/// ([`MapLayout::group_census`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GroupCensus {
+    /// The collision parts that store a draw block.
+    pub collisions: usize,
+    /// ... of which set at least one display group.
+    pub collisions_with_groups: usize,
+    /// The drawn parts that store a draw block.
+    pub parts: usize,
+    /// ... of which have no draw group set.
+    pub no_groups: usize,
+    /// ... of which have a draw group that one collision's display groups include.
+    pub met: usize,
+    /// ... of which are under draw groups none of the collisions' display groups include.
+    pub unmet: usize,
+}
+
+impl MapLayout {
+    /// How the layout's map pieces, objects and assets meet the display groups of its collisions: a part is *met* if one
+    /// of its draw groups is in the union of the collisions' display groups ([`DrawInfo::display_groups`]; the second
+    /// block's groups are not counted). Reads [`MapLayout::draw_infos`], and refuses where it does.
+    pub fn group_census(&self) -> Result<GroupCensus> {
+        let infos = self.draw_infos()?;
+        let kinds: std::collections::BTreeMap<usize, PartKind> =
+            self.parts.iter().map(|p| (p.index, p.kind)).collect();
+        let kind_of = |part: usize| kinds.get(&part).copied();
+        let mut shown = [0u32; 8];
+        let mut census = GroupCensus::default();
+        for info in &infos {
+            if let (Some(draw), Some(PartKind::Collision)) = (&info.draw, kind_of(info.part)) {
+                census.collisions += 1;
+                census.collisions_with_groups += usize::from(draw.display_groups.iter().any(|&w| w != 0));
+                for (all, word) in shown.iter_mut().zip(draw.display_groups) {
+                    *all |= word;
+                }
+            }
+        }
+        for info in &infos {
+            let Some(draw) = &info.draw else { continue };
+            if !matches!(
+                kind_of(info.part),
+                Some(PartKind::MapPiece | PartKind::Object | PartKind::Asset)
+            ) {
+                continue;
+            }
+            census.parts += 1;
+            if draw.draw_groups.iter().all(|&w| w == 0) {
+                census.no_groups += 1;
+            } else if draw.draws_under(&shown) {
+                census.met += 1;
+            } else {
+                census.unmet += 1;
+            }
+        }
+        Ok(census)
     }
 }
 
@@ -2408,5 +2507,80 @@ mod region_tests {
         .unwrap_err()
         .to_string();
         assert!(e.starts_with("MSB display info at 0x"), "{e}");
+    }
+
+    /// Group `n` is bit `n % 32` of word `n / 32`; a part is under display groups that share a bit with its draw groups.
+    #[test]
+    fn groups_are_numbered_by_word_and_bit_and_met_by_a_shared_bit() {
+        assert_eq!(group_numbers(&[0; 8]), Vec::<u8>::new());
+        assert_eq!(group_numbers(&[1, 0, 0, 0, 0, 0, 0, 0]), [0]);
+        assert_eq!(
+            group_numbers(&[0x8000_0001, 2, 0, 0, 0, 0, 0, 1 << 31]),
+            [0, 31, 33, 255]
+        );
+        assert_eq!(group_numbers(&[u32::MAX; 8]).len(), 256);
+        let draw = DrawInfo {
+            display_groups: [0; 8],
+            draw_groups: [0, 0b100, 0, 0, 0, 0, 0, 0],
+            collision_mask: [0; 32],
+            conditions: [0; 4],
+            tail: [0; 4],
+        };
+        assert_eq!(draw.draw_group_numbers(), [34]);
+        assert!(draw.display_group_numbers().is_empty());
+        assert!(draw.draws_under(&[0, 0b110, 0, 0, 0, 0, 0, 0]));
+        assert!(!draw.draws_under(&[u32::MAX, 0b011, u32::MAX, 0, 0, 0, 0, 0]));
+        // a part with no draw group meets nothing
+        let none = DrawInfo {
+            draw_groups: [0; 8],
+            ..draw
+        };
+        assert!(!none.draws_under(&[u32::MAX; 8]));
+    }
+
+    /// A draw block with the given display and draw words (the rest zero).
+    fn grouped_block(len: usize, display: [u32; 8], draw: [u32; 8]) -> Vec<u8> {
+        let mut b = vec![0u8; len];
+        for (i, w) in display.iter().chain(&draw).enumerate() {
+            b[4 * i..4 * i + 4].copy_from_slice(&w.to_le_bytes());
+        }
+        b
+    }
+
+    /// Of the drawn parts, those under no draw group, those under one a collision displays and those under none are counted
+    /// apart; enemies are not drawn parts and a part's own display groups do not count.
+    #[test]
+    fn a_layouts_draw_groups_are_counted_against_its_collisions_display_groups() {
+        let word = |w: u32| [w, 0, 0, 0, 0, 0, 0, 0];
+        let none = [0u32; 8];
+        let header = 160;
+        let mut layout = layout_of_parts(
+            &Generation::SEKIRO,
+            vec![
+                part_with_blocks(Some(grouped_block(388, word(0b0110), none)), None, header),
+                part_with_blocks(Some(grouped_block(388, none, word(0b0100))), None, header),
+                part_with_blocks(Some(grouped_block(388, none, word(0b1000))), None, header),
+                // the part's own display groups are not a collision's
+                part_with_blocks(Some(grouped_block(388, word(0b1000), none)), None, header),
+                part_with_blocks(Some(grouped_block(388, none, word(0b0100))), None, header),
+                part_with_blocks(None, None, header),
+            ],
+        );
+        layout.parts[0].kind = PartKind::Collision;
+        layout.parts[3].kind = PartKind::Object;
+        layout.parts[4].kind = PartKind::Enemy;
+        let census = layout.group_census().unwrap();
+        assert_eq!(
+            census,
+            GroupCensus {
+                collisions: 1,
+                collisions_with_groups: 1,
+                // the map pieces 1 and 2 and the object 3
+                parts: 3,
+                no_groups: 1,
+                met: 1,
+                unmet: 1,
+            }
+        );
     }
 }
