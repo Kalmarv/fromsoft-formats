@@ -7,6 +7,9 @@
 //! file order ([`MapId::from_bytes`]; an event argument is read as a little-endian `u32`, so [`MapId::from_bytes`] of
 //! its `to_le_bytes`). The area, X and Z bytes hold the name's numbers (60, 44, 36); the variant holds the name's two
 //! digits as hexadecimal digits (`_10` is the byte `0x10`). A byte of `0xff` stands for any.
+//!
+//! Elden Ring's event scripts also pass a map as one decimal number, the digits of the name run together
+//! (`60444500` is `m60_44_45_00`): [`MapId::from_decimal`].
 use std::fmt;
 
 /// A map's identity, as four bytes: the area, the grid X and Z, and the variant.
@@ -36,6 +39,48 @@ impl MapId {
     /// and the area in the top byte.
     pub const fn from_msb_word(word: u32) -> MapId {
         MapId::from_bytes(word.to_be_bytes())
+    }
+
+    /// The identity of a decimal map number: the four two-digit numbers of the name run together, `AABBCCDD` (the
+    /// `Map ID` argument of Elden Ring's cutscene-and-warp instructions, `11050000` for `m11_05_00_00`). `None` for a
+    /// negative number or one of more than eight digits.
+    pub fn from_decimal(number: i32) -> Option<MapId> {
+        let n = u32::try_from(number).ok()?;
+        if n > 99_999_999 {
+            return None;
+        }
+        let variant = n % 100;
+        Some(MapId {
+            area: u8::try_from(n / 1_000_000).ok()?,
+            x: u8::try_from(n / 10_000 % 100).ok()?,
+            z: u8::try_from(n / 100 % 100).ok()?,
+            // the variant byte holds the two digits as hexadecimal digits
+            variant: u8::try_from(((variant / 10) << 4) | (variant % 10)).ok()?,
+        })
+    }
+
+    /// The decimal number of [`MapId::from_decimal`]: `None` for an identity with a wildcard, or one whose numbers or
+    /// variant digits are not the two decimal digits a name holds (the same identities that have no [`MapId::name`]).
+    pub fn to_decimal(self) -> Option<i32> {
+        self.name()?;
+        let variant = u32::from(self.variant >> 4)
+            .checked_mul(10)?
+            .checked_add(u32::from(self.variant & 15))?;
+        let number = u32::from(self.area)
+            .checked_mul(1_000_000)?
+            .checked_add(u32::from(self.x).checked_mul(10_000)?)?
+            .checked_add(u32::from(self.z).checked_mul(100)?)?
+            .checked_add(variant)?;
+        i32::try_from(number).ok()
+    }
+
+    /// Whether this identity, whose wildcard bytes stand for any value, includes `other`: every field is the wildcard
+    /// or equals `other`'s.
+    pub const fn covers(self, other: MapId) -> bool {
+        (self.area == Self::WILDCARD || self.area == other.area)
+            && (self.x == Self::WILDCARD || self.x == other.x)
+            && (self.z == Self::WILDCARD || self.z == other.z)
+            && (self.variant == Self::WILDCARD || self.variant == other.variant)
     }
 
     /// Whether any field is the wildcard.
@@ -125,6 +170,36 @@ mod tests {
     }
 
     #[test]
+    fn a_decimal_number_runs_the_name_digits_together() {
+        let id = MapId::from_decimal(60_444_500).unwrap();
+        assert_eq!(id, MapId::from_bytes([60, 44, 45, 0]));
+        assert_eq!(id.name().as_deref(), Some("m60_44_45_00"));
+        assert_eq!(
+            MapId::from_decimal(11_050_000).unwrap().to_string(),
+            "m11_05_00_00"
+        );
+        // the variant digits are stored as hexadecimal digits, as in a name
+        assert_eq!(MapId::from_decimal(14_000_099).unwrap().variant, 0x99);
+        assert_eq!(
+            MapId::from_decimal(14_000_010).unwrap(),
+            MapId::from_name("m14_00_00_10").unwrap()
+        );
+        // and read back
+        for name in ["m60_44_36_10", "m10_00_00_00", "m14_00_00_99", "m61_51_43_00"] {
+            let id = MapId::from_name(name).unwrap();
+            assert_eq!(MapId::from_decimal(id.to_decimal().unwrap()), Some(id), "{name}");
+        }
+        assert_eq!(MapId::from_decimal(0), Some(MapId::from_bytes([0, 0, 0, 0])));
+        // negative numbers and numbers of more than eight digits are no map
+        assert_eq!(MapId::from_decimal(-1), None);
+        assert_eq!(MapId::from_decimal(100_000_000), None);
+        assert_eq!(MapId::from_decimal(i32::MAX), None);
+        // a wildcard, or a variant that is not two decimal digits, has no decimal number
+        assert_eq!(MapId::from_bytes([60, 255, 255, 255]).to_decimal(), None);
+        assert_eq!(MapId::from_bytes([60, 44, 36, 0x1a]).to_decimal(), None);
+    }
+
+    #[test]
     fn a_name_reads_back_as_the_identity_it_names() {
         for name in [
             "m60_44_36_10",
@@ -155,6 +230,17 @@ mod tests {
         ] {
             assert_eq!(MapId::from_name(bad), None, "{bad:?}");
         }
+    }
+
+    #[test]
+    fn a_wildcard_covers_any_value_of_its_field() {
+        let any_variant = MapId::from_bytes([60, 44, 36, 0xff]);
+        assert!(any_variant.covers(MapId::from_bytes([60, 44, 36, 0x10])));
+        assert!(any_variant.covers(any_variant));
+        assert!(!any_variant.covers(MapId::from_bytes([60, 44, 37, 0])));
+        // an identity without a wildcard covers itself only
+        let one = MapId::from_bytes([60, 44, 36, 0x10]);
+        assert!(one.covers(one) && !one.covers(MapId::from_bytes([60, 44, 36, 0])));
     }
 
     #[test]
