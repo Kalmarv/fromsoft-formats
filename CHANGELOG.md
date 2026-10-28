@@ -13,6 +13,10 @@
 - The unwrap of an archive index squares with a dedicated Montgomery square (each cross product once) instead of
   multiplying a number by itself: the same bytes (held to `BigUint::modpow` and to the product), about a fifth less time
   in `unwrap_rsa`.
+- `Binder::read_where(data, decoder, keep)`: `Binder::read` keeping only the members whose name `keep` accepts. The others
+  are validated as a full read validates them and come back with no bytes, neither copied nor decoded: a binder of
+  hundreds of shader bundles holds the few a map names, and reading it whole decoded all of them (Elden Ring's area read
+  spent 15 % of its CPU there).
 - `examples/read_bench.rs`: a timed read of an install's archives by stage (index unwrap, BDT read and decryption, DCX
   decode, binder split, FLVER parse) with a digest of everything decoded and a census of the vertices' list lengths, for
   comparing changes to the read path.

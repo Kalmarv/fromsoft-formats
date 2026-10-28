@@ -39,6 +39,13 @@ impl Binder {
     pub fn read(data: &[u8], decoder: &Decoder<'_>) -> Result<Self> {
         Self::read_inner(data, None, decoder, false, None)
     }
+    /// [`Binder::read`] keeping only the files whose name `keep` accepts: the others are validated as the full read
+    /// validates them (their bytes are within the file and the file is covered as it demands) and left out, with no
+    /// bytes, neither copied nor decoded (a binder of hundreds of shader bundles holds the few a map names, and decoding
+    /// all of them is what reading the bundles spent its time and memory on). A file without a name is always kept.
+    pub fn read_where(data: &[u8], decoder: &Decoder<'_>, keep: &dyn Fn(&str) -> bool) -> Result<Self> {
+        Self::read_inner(data, None, decoder, false, Some(keep))
+    }
     /// Read a BHF4 index `header` and its matching BDF4 payload file `payload` (the `.edgebhd`/`.edgebdt` form).
     pub fn read_split(header: &[u8], payload: &[u8], decoder: &Decoder<'_>) -> Result<Self> {
         Self::read_inner(header, Some(payload), decoder, false, None)
