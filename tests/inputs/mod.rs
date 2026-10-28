@@ -188,6 +188,30 @@ primase_testdata::inputs! {
             about: r#"the community's names and types for the words of the FLVER material extension items (`GX_Item_Descriptors.json`: a `list` of items with an `ID`, a version `Unk04`, a `Category` and `Items`, each a `Name` and a `Type` code); tests/gx_census.rs"#,
             source: r#"third-party: Smithbox fdde3225's `Smithbox.Data/Assets/FLVER/GX_Item_Descriptors.json` (MIT repository; the file carries no licence of its own), read in place"#,
         },
+        Query::Oracle(OracleSet::Smithbox, Game::Elden, "tae-template.xml") => {
+            status: Live,
+            gate: false,
+            about: r#"the community's Elden Ring TAE event templates (an `event_template` document: per event type a name and the typed parameter fields, with asserted values, named values and the param tables they refer to); tests/tae_template_census.rs"#,
+            source: r#"third-party: Smithbox fdde3225's `Smithbox.Data/Assets/TAE/TAE.Template.ER.xml` (MIT repository, DSAnimStudio's template format; the file carries no licence of its own), read in place"#,
+        },
+        Query::Oracle(OracleSet::Smithbox, Game::Sekiro, "tae-template.xml") => {
+            status: Live,
+            gate: true,
+            about: r#"the community's Sekiro TAE event templates (as for Elden Ring); tests/tae_template_census.rs"#,
+            source: r#"third-party: Smithbox fdde3225's `Smithbox.Data/Assets/TAE/TAE.Template.SDT.xml` (MIT repository; the file carries no licence of its own), read in place"#,
+        },
+        Query::Oracle(OracleSet::Smithbox, Game::Elden, "file-dictionary.json") => {
+            status: Live,
+            gate: false,
+            about: r#"the community's Elden Ring archive path list (`Entries`: per path its `Archive`, `Path`, `Folder`, `Filename`, `Extension` and a `Validated` flag): 130,951 paths that name all 97,118 entries of the base archives; tests/dictionary_census.rs"#,
+            source: r#"third-party: Smithbox fdde3225's `Smithbox.Data/Assets/File Dictionaries/ER-File-Dictionary.json` (MIT repository; a list of archive paths, taken as data), read in place and never copied into a repository"#,
+        },
+        Query::Oracle(OracleSet::Smithbox, Game::Sekiro, "file-dictionary.json") => {
+            status: Live,
+            gate: true,
+            about: r#"the community's Sekiro archive path list (as for Elden Ring): 8,949 paths; tests/dictionary_census.rs"#,
+            source: r#"third-party: Smithbox fdde3225's `Smithbox.Data/Assets/File Dictionaries/SDT-File-Dictionary.json` (MIT repository), read in place"#,
+        },
     }
     debug {}
 }

@@ -1,8 +1,8 @@
 //! TAE files (`.tae`): the time-action event tables of a character's animation binder. One file holds the animations of
 //! a character by number (`3000`, `20010`) and, for each, the timed events the game runs while it plays: a type, a start
 //! and an end in seconds, and the event's parameters as bytes. What a type or a byte means is the game's event
-//! templates, which the file does not carry (community definitions name them; this reader names none): an event is its
-//! type number, its times and its parameter bytes as stored.
+//! templates, which the file does not carry (community definitions name them: [`template`] reads those a caller
+//! supplies; this reader names none): an event is its type number, its times and its parameter bytes as stored.
 //!
 //! Read: the 64-bit little-endian layout of version `0x1000D`, Sekiro's and Elden Ring's (SoulsFormatsNEXT's `TAE` reads
 //! it as format `SDT`); the other versions (Demon's Souls, Dark Souls, Bloodborne, Dark Souls III) are refused by their
@@ -25,6 +25,8 @@
 
 use crate::bytes::{Budget, View};
 use crate::{Binder, BinderFile, Result, invalid};
+
+pub mod template;
 
 const FORMAT: &str = "TAE";
 
