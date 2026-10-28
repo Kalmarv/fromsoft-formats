@@ -20,7 +20,7 @@ const FORMAT: &str = "FromSoftware params";
 
 /// `data` decrypted with AES-256 in CBC mode under `key`, its first 16 bytes the initialisation vector. The rest must
 /// be whole blocks (the game's files are); no padding is removed (the DCX envelope inside states its own size).
-fn decrypt_cbc(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>> {
+pub(crate) fn decrypt_cbc(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>> {
     let (iv, body) = data
         .split_first_chunk::<16>()
         .ok_or_else(|| invalid(FORMAT, 0, "shorter than its initialisation vector"))?;

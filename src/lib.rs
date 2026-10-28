@@ -109,6 +109,7 @@ pub mod overworld;
 pub mod param;
 mod param_write;
 pub mod paramdef;
+pub mod regulation;
 mod sekiro;
 pub mod shader;
 pub mod states;
