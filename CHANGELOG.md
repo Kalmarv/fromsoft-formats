@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- Breaking: `msb::Region::index_in_type` (+12) and `Region::number` (+44), `msb::Event::index_in_type` (+16). The region index
+  is the per-type counter in all 45,121 regions; the region number is unique within its map in all 945 maps (0 to n-1 in
+  419) and is not the record index; the event index is the per-type counter in 9,209 of 9,211 events (the two others have
+  type `0xffffffff`). `Event::event_id` (+8) is unique within its map in all 945 and equals the record index in 367 of 9,211.
+- `MapLayout::draw_infos`, with `DrawInfo`, `DisplayInfo2` and `PartDrawInfo`: the block of a part's first payload slot
+  (+80: eight display-group words, eight draw-group words, 32 collision-mask words and two four-byte fields; 388 bytes in
+  Sekiro, 392 in Elden Ring) and of its second (+88, 72 bytes), as stored. A block of another length, or with data in its
+  zero bytes, is refused. Read over all 55,352 Sekiro and 457,108 Elden Ring parts; the counts of non-zero arrays per kind
+  equal an independent census's (`tests/map_census.rs`). What the groups do is not read.
+- Breaking: `flver::FaceSet::unknown_06` (the word at +6, 1 on 85,996 of Sekiro's face sets and 149,048 of Elden Ring's) and
+  the bone fields `flver::Bone::{child, next_sibling, previous_sibling, bounds_min, bounds_max, flags}` (+30, +44, +46,
+  +48, +64, +60). `Model::read` now refuses a bone chain that does not visit exactly the bones naming the bone as parent
+  (through `child` then `next_sibling`, `previous_sibling` inverting it): none of the installs' bones is refused.
+- Breaking: `tae::Animation::event_groups` (`tae::EventGroup`: the group's type number and the indices of its events), and
+  `Tae::read` now checks the header's constant words, the animation numbers (strictly rising), the animation groups table
+  (one entry per maximal run of consecutive numbers), each animation's times table (its events' distinct start and end
+  times, ascending) and the event groups (32 bytes, members that are the animation's event headers). None of the 326 Sekiro
+  and 1,071 Elden Ring event files of the installs is refused.
+
 - The references from map data to effects: `msb::Part::sfx_param_relative_id` (an Elden Ring asset's type data +0x1c, a
   signed 16-bit word; the only word of the type data that is -1 or the last digits of an existing row key: 409,246 of the
   421,253 parts of `AEGnnn_mmm` models store -1, 11,533 name a row of `AssetModelSfxParam`, 474 name an absent one),
