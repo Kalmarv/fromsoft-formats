@@ -169,6 +169,15 @@ impl Vertex {
         Ok(())
     }
 
+    /// Makes room in every list for as many values as `like`'s, which are in a vertex of the same layout.
+    pub(super) fn reserve_like(&mut self, like: &Vertex) {
+        self.uvs.reserve_total(like.uvs.len());
+        self.layer_bytes.reserve_total(like.layer_bytes.len());
+        self.tangents.reserve_total(like.tangents.len());
+        self.tangent_indices.reserve_total(like.tangent_indices.len());
+        self.colors.reserve_total(like.colors.len());
+    }
+
     pub(super) fn read(
         &mut self,
         data: &[u8],

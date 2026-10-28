@@ -76,6 +76,21 @@ impl<T: Copy + Default, const N: usize> Channel<T, N> {
         self.truncate(0);
     }
 
+    /// Makes room for `total` values in all: nothing for a list that fits inline, else the heap block, made once at
+    /// that size (a list grown by pushes moves to the heap at `N` + 1 and doubles from there). The values already in
+    /// the list stay.
+    pub fn reserve_total(&mut self, total: usize) {
+        match &mut self.repr {
+            Repr::Inline { len, items } if total > N => {
+                let mut grown = Vec::with_capacity(total);
+                grown.extend_from_slice(items.get(..usize::from(*len)).unwrap_or_default());
+                self.repr = Repr::Heap(grown);
+            }
+            Repr::Inline { .. } => {}
+            Repr::Heap(values) => values.reserve_exact(total.saturating_sub(values.len())),
+        }
+    }
+
     /// Whether the values are on the heap (they stay inline while there are at most `N`).
     pub fn spilled(&self) -> bool {
         matches!(self.repr, Repr::Heap(_))
@@ -229,6 +244,14 @@ mod tests {
         c.clear();
         assert!(c.is_empty());
         assert_eq!(c.pop(), None);
+        // room made for a length once is room enough: the list does not move to the heap until it must
+        let mut sized: Channel<u8, 3> = Channel::new();
+        sized.reserve_total(2);
+        assert!(!sized.spilled());
+        sized.reserve_total(8);
+        assert!(sized.spilled());
+        sized.extend(0..8);
+        assert_eq!(sized, [0, 1, 2, 3, 4, 5, 6, 7]);
         // inline: pops and pushes keep the values in order
         let mut small: Channel<u8, 3> = Channel::from([1u8, 2]);
         assert_eq!(small.pop(), Some(2));

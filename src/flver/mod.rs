@@ -802,7 +802,29 @@ impl Model {
                 budget.charge(start, n.saturating_mul(stride))?;
                 streams.push((l, stride, start));
             }
+            // The first vertex, read once on its own, says how long each list of the mesh's vertices gets, so that a list
+            // too long for a vertex's room is made at its length instead of grown by pushes. A first vertex a stream
+            // refuses is read again below, and refused there.
+            let mut probe = Vertex::default();
+            if !speedtree {
+                for &(l, stride, start) in &streams {
+                    let members = layouts.get(l).map(Vec::as_slice).unwrap_or_default();
+                    let Some((at, data)) = v
+                        .element(start, 0, stride)
+                        .and_then(|at| v.slice(at, stride).map(|data| (at, data)))
+                        .ok()
+                    else {
+                        break;
+                    };
+                    if probe.read(data, at, members, 2048.).is_err() {
+                        break;
+                    }
+                }
+            }
             let mut vertices = vec![Vertex::default(); n];
+            for vert in &mut vertices {
+                vert.reserve_like(&probe);
+            }
             for &(l, stride, start) in &streams {
                 let members = layouts.get(l).map(Vec::as_slice).unwrap_or_default();
                 for (j, vert) in vertices.iter_mut().enumerate() {
