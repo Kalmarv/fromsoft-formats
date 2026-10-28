@@ -1,14 +1,23 @@
-//! FXR effect files (`f000800042.fxr`, in the `sfxbnd_*.ffxbnd.dcx` binders): what an effect is made of, and the
-//! lights in it.
+//! FXR effect files (`f000800042.fxr`, in the `sfxbnd_*.ffxbnd.dcx` binders): what an effect is made of, every action
+//! typed, and the lights in it.
 //!
 //! An FXR holds a state machine (states with conditions that move between them), a tree of nodes, each with the
 //! configs its states choose from and the actions a node performs, and, in the actions, parameters stored as
-//! properties (a constant or a keyframed function) and plain 32-bit field words. This reader keeps all of that as
+//! properties (a constant or a keyframed function) and plain 32-bit field words. [`Fxr::read`] keeps all of that as
 //! stored: an [`Action`] is its type number, its field words, its properties and its field lists, and what a type
-//! number means is the game's (the community tools name 80 of them). What it types is the lights: a
-//! [`PointLight`] (action 609) and a [`SpotLight`] (action 11000), with the position in the tree that a placement
-//! needs ([`Fxr::lights`]). `LightShaft` (action 10003) is read as an ordinary action: no file of either installed
-//! game holds one.
+//! number means is the game's (the community tools name 80 of them).
+//!
+//! What the crate types, over and above the stored form:
+//!
+//! - every action of the 72 types the installed files hold ([`actions`]: [`actions::Typed::read`], or
+//!   [`Fxr::typed`] for the whole tree): each parameter by the fxr project's name, in its type, with the project's
+//!   default where a file's lists are too short to store it, and [`Extra`] for what the names do not cover;
+//! - the property functions ([`Property::value_at`]) and modifiers ([`Modifier::kind`], [`ModifierKind`]);
+//! - the value sets the project names ([`enums`]);
+//! - the files an effect refers to by number ([`resources`]);
+//! - the lights with the position in the tree that a placement needs ([`Fxr::lights`]): a [`PointLight`] (action 609) and
+//!   a [`SpotLight`] (action 11000). `LightShaft` (action 10003) is read as an ordinary action: no file of either
+//!   installed game holds one.
 //!
 //! Read: version 5, header minor 0, the layout of every file in Sekiro's and Elden Ring's archives. Refused by their
 //! header: version 4 (Dark Souls III, whose header lacks the three id lists) and minor 1 (Nightreign), neither of
@@ -27,6 +36,17 @@
 use crate::bytes::{Budget, View};
 use crate::{Binder, Result, invalid};
 use std::collections::BTreeSet;
+
+pub mod actions;
+mod curve;
+pub mod enums;
+pub mod resources;
+mod tree;
+mod typed;
+
+pub use curve::ModifierKind;
+pub use tree::{TypedConfig, TypedNode};
+pub use typed::{Extra, List, Param, Place, Stored, WordKind};
 
 const FORMAT: &str = "FXR";
 /// The header of a version-5 file: 112 bytes and the four lists of the version-5 extension.

@@ -136,6 +136,30 @@ primase_testdata::inputs! {
             about: r#"the fxr library's reading of Sekiro's 2,913 effect files (as for Elden Ring; it refuses three, `f000800042` to `f000800044`, by an action-603 field it types as a boolean); tests/fxr_census.rs"#,
             source: r#"independent: EvenTorset/fxr 2b6b52f (Unlicense, version 32.1.3) built privately, its `FXR.read(bytes, Game.Sekiro)` over the `.fxr` members of the install's `/sfx/*.ffxbnd.dcx` binders (the harness is not part of this repository)"#,
         },
+        Query::Oracle(OracleSet::Fxr, Game::Elden, "params.jsonl") => {
+            status: Live,
+            gate: false,
+            about: r#"the fxr library's reading of every parameter of every action of 1,246 of Elden Ring's effect files (a covering sample: the smallest file for each action type and list-length layout, and every tenth file): per file the id and the library's JSON for each action; tests/fxr_actions_census.rs"#,
+            source: r#"independent: EvenTorset/fxr 2b6b52f (Unlicense, version 32.1.3) built privately, `FXR.read(bytes, Game.EldenRing)` and each action's `toJSON()` (the harness is not part of this repository)"#,
+        },
+        Query::Oracle(OracleSet::Fxr, Game::Sekiro, "params.jsonl") => {
+            status: Live,
+            gate: true,
+            about: r#"the fxr library's reading of every parameter of every action of 334 of Sekiro's effect files (as for Elden Ring; the library refuses `f000800042`, which holds actions in Dark Souls III's layout it cannot read, so that file is a line with an error); tests/fxr_actions_census.rs"#,
+            source: r#"independent: EvenTorset/fxr 2b6b52f (Unlicense, version 32.1.3) built privately, `FXR.read(bytes, Game.Sekiro)` and each action's `toJSON()` (the harness is not part of this repository)"#,
+        },
+        Query::Oracle(OracleSet::Fxr, Game::Elden, "curves.jsonl") => {
+            status: Live,
+            gate: false,
+            about: r#"the fxr library's `valueAt` of keyframed properties (stepped, linear, Bezier, Hermite) of Elden Ring's sampled effect files, at the keyframes, between them and past the ends (up to 60 properties per action type, parameter and function); tests/fxr_actions_oracle.rs"#,
+            source: r#"independent: EvenTorset/fxr 2b6b52f (Unlicense, version 32.1.3) built privately, `valueAt` of the properties `FXR.read(bytes, Game.EldenRing)` yields (the harness is not part of this repository)"#,
+        },
+        Query::Oracle(OracleSet::Fxr, Game::Sekiro, "curves.jsonl") => {
+            status: Live,
+            gate: true,
+            about: r#"the fxr library's `valueAt` of keyframed properties of Sekiro's sampled effect files (as for Elden Ring); tests/fxr_actions_oracle.rs"#,
+            source: r#"independent: EvenTorset/fxr 2b6b52f (Unlicense, version 32.1.3) built privately, `valueAt` of the properties `FXR.read(bytes, Game.Sekiro)` yields (the harness is not part of this repository)"#,
+        },
         Query::Oracle(OracleSet::Uxm, Game::Elden, "dictionary.txt") => {
             status: Live,
             gate: false,
