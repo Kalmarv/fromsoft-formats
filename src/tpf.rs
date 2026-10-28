@@ -115,6 +115,9 @@ pub struct Package {
     pub flags: u8,
     /// The names' encoding as stored (1: UTF-16, else ASCII).
     pub encoding: u8,
+    /// Zero bytes between the last name and the first DDS file: none in 288,920 of the 288,921 packages of the
+    /// installs, 272 in Sekiro's `/font/dbgfont14h.tpf.dcx`.
+    pub names_padding: usize,
     /// The textures, in file order.
     pub textures: Vec<Texture>,
 }
@@ -244,6 +247,7 @@ impl Package {
         Ok(Self {
             flags,
             encoding,
+            names_padding: first.saturating_sub(names_end),
             textures,
         })
     }
