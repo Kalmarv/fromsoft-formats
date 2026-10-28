@@ -360,6 +360,56 @@ impl Node {
         let map = self.actions.iter().find(|a| a.id == STATE_CONFIG_MAP)?;
         map.field_lists.first().map(Vec::as_slice)
     }
+
+    /// The config the node runs in `state`: the one its state-config map gives (none for the map's -1 or an index
+    /// the node lacks), else its only config.
+    pub fn config_in_state(&self, state: usize) -> Option<&Config> {
+        match self.state_configs() {
+            Some(map) => self.configs.get(usize::try_from(*map.get(state)?).ok()?),
+            None if self.configs.len() == 1 => self.configs.first(),
+            None => None,
+        }
+    }
+}
+
+/// A static translation and rotation of a node (action 35): its children and actions are placed in the frame it makes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StaticTransform {
+    /// The translation, as stored.
+    pub offset: [f32; 3],
+    /// The rotation about each axis in degrees, as stored. The fxr project documents the order as Z, then X, then Y, with
+    /// the translation after all rotations.
+    pub rotation_degrees: [f32; 3],
+}
+
+impl Config {
+    /// The config's static node transform (action 35, six float field words), if it has one; a config with more than
+    /// one, or one with other counts or a non-finite word, is an error.
+    pub fn static_transform(&self) -> Result<Option<StaticTransform>> {
+        let mut found = None;
+        for a in self.actions.iter().filter(|a| a.id == STATIC_NODE_TRANSFORM) {
+            let counts = (
+                a.fields1.len(),
+                a.fields2.len(),
+                a.properties1.len(),
+                a.properties2.len(),
+                a.field_lists.len(),
+            );
+            let bad = |detail: String| invalid(FORMAT, 0, format!("static node transform: {detail}"));
+            if counts != (6, 0, 0, 0, 0) || found.is_some() {
+                return Err(bad(format!("counts {counts:?}, or a second one in the config")));
+            }
+            let w = Words {
+                id: a.id,
+                list: &a.fields1,
+            };
+            found = Some(StaticTransform {
+                offset: [w.float(0)?, w.float(1)?, w.float(2)?],
+                rotation_degrees: [w.float(3)?, w.float(4)?, w.float(5)?],
+            });
+        }
+        Ok(found)
+    }
 }
 
 /// A whole effect.
@@ -1106,6 +1156,25 @@ impl PlacedLight<'_> {
             None => node.configs.len() == 1,
         }
     }
+
+    /// The static transforms from the root down to the light: of the config each ancestor runs in `state`, and of the
+    /// light's own config (which is the holder's, whether or not `state` chooses it). A node that runs no config in
+    /// `state` (it has several and no map, or the map gives none) contributes nothing.
+    pub fn static_transforms(&self, state: usize) -> Result<Vec<StaticTransform>> {
+        let mut out = Vec::new();
+        for (i, node) in self.ancestors.iter().enumerate() {
+            let last = i.saturating_add(1) == self.ancestors.len();
+            let config = if last {
+                Some(self.config)
+            } else {
+                node.config_in_state(state)
+            };
+            if let Some(t) = config.map(Config::static_transform).transpose()?.flatten() {
+                out.push(t);
+            }
+        }
+        Ok(out)
+    }
 }
 
 /// A typed light.
@@ -1712,5 +1781,68 @@ mod tests {
         assert_eq!(p.settled(), Some(vec![30.0, 40.0]));
         p.looped = true;
         assert_eq!(p.settled(), None);
+    }
+
+    #[test]
+    fn a_node_runs_the_config_its_map_gives_and_a_config_reads_its_transform() {
+        let transform = |offset: [f32; 3], rotation: [f32; 3]| Action {
+            id: STATIC_NODE_TRANSFORM,
+            unknown_02: 0,
+            unknown_03: 1,
+            unknown_04: 0,
+            fields1: offset.iter().chain(&rotation).map(|v| v.to_bits()).collect(),
+            fields2: Vec::new(),
+            properties1: Vec::new(),
+            properties2: Vec::new(),
+            field_lists: Vec::new(),
+        };
+        let config = |id: i16, actions: Vec<Action>| Config { id, actions };
+        let map = |indices: &[u32]| Action {
+            id: STATE_CONFIG_MAP,
+            unknown_02: 0,
+            unknown_03: 1,
+            unknown_04: 0,
+            fields1: Vec::new(),
+            fields2: Vec::new(),
+            properties1: Vec::new(),
+            properties2: Vec::new(),
+            field_lists: vec![indices.to_vec()],
+        };
+        let node = Node {
+            id: 2200,
+            actions: vec![map(&[1, u32::MAX])],
+            configs: vec![
+                config(1, Vec::new()),
+                config(2, vec![transform([0.0, 1.5, 0.0], [0.0, 90.0, 0.0])]),
+            ],
+            children: Vec::new(),
+        };
+        assert_eq!(node.config_in_state(0).map(|c| c.id), Some(2));
+        assert_eq!(node.config_in_state(1).map(|c| c.id), None);
+        assert_eq!(node.config_in_state(2).map(|c| c.id), None);
+        assert_eq!(
+            node.configs[1].static_transform().unwrap(),
+            Some(StaticTransform {
+                offset: [0.0, 1.5, 0.0],
+                rotation_degrees: [0.0, 90.0, 0.0],
+            })
+        );
+        assert_eq!(node.configs[0].static_transform().unwrap(), None);
+        // two in one config, or one that is not six floats, is refused
+        let two = config(
+            3,
+            vec![transform([0.0; 3], [0.0; 3]), transform([0.0; 3], [0.0; 3])],
+        );
+        assert!(two.static_transform().is_err());
+        let mut short = transform([0.0; 3], [0.0; 3]);
+        short.fields1.pop();
+        assert!(config(4, vec![short]).static_transform().is_err());
+        let single = Node {
+            id: 2200,
+            actions: Vec::new(),
+            configs: vec![config(1, Vec::new())],
+            children: Vec::new(),
+        };
+        assert_eq!(single.config_in_state(5).map(|c| c.id), Some(1));
     }
 }

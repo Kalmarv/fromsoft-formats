@@ -13,7 +13,9 @@
   in either install and are read as plain actions. Version 4 (Dark Souls III) and minor 1 (Nightreign) are refused by
   their header. Every file's action counts and every light's parameters agree with the fxr library
   (EvenTorset/fxr 2b6b52f, Unlicense, from which the parameter names and types are taken), and the totals agree with
-  an independent walker (`tests/fxr_census.rs`).
+  an independent walker (`tests/fxr_census.rs`). `Node::config_in_state`, `Config::static_transform` (action 35, six floats: offset and
+  rotation in degrees; 20,878 configs of Sekiro and 81,215 of Elden Ring have one) and `PlacedLight::static_transforms` give the
+  transforms a light sits under; every node with several configs has a state-config map in both installs.
 - `collision::Soup::bounds` and `Soup::simd`: the bounding-volume trees and simd trees of the compressed meshes
   `read_map` and `read_bodies` read, decoded and checked by `havok-formats` (a mesh whose trees do not hold together is
   refused), with the triangles and quads counted against the boxes of their leaves. `tests/bvtree_census.rs` reads

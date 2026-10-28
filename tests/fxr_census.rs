@@ -252,6 +252,26 @@ struct Totals {
     bounds_not_extremes: usize,
     /// type 0 actions that hold a field word, a property or a field list
     placeholders_with_content: usize,
+    /// configs with a static node transform, nodes with several configs and no state-config map, lights with a rotated
+    /// transform among their ancestors'
+    transforms: usize,
+    unmapped_multi_config_nodes: usize,
+    rotated_lights: usize,
+}
+
+fn tally_nodes(totals: &mut Totals, node: &fxr::Node) -> Result<()> {
+    if node.configs.len() > 1 && node.state_configs().is_none() {
+        totals.unmapped_multi_config_nodes += 1;
+    }
+    for c in &node.configs {
+        if c.static_transform()?.is_some() {
+            totals.transforms += 1;
+        }
+    }
+    for child in &node.children {
+        tally_nodes(totals, child)?;
+    }
+    Ok(())
 }
 
 fn tally(totals: &mut Totals, fxr: &Fxr) {
@@ -360,6 +380,7 @@ fn every_effect_file_reads_and_its_lights_agree_with_the_fxr_library() -> Result
                     t.reference_mismatches += 1;
                 }
                 tally(&mut t, &read);
+                tally_nodes(&mut t, &read.root).map_err(|e| format!("{path} {name}: {e}"))?;
                 let lights = read.lights().map_err(|e| format!("{path} {name}: {e}"))?;
                 let file = name.rsplit(['\\', '/']).next().unwrap_or(&name).to_owned();
                 // layouts of every light action, including a refusal by counts
@@ -391,6 +412,12 @@ fn every_effect_file_reads_and_its_lights_agree_with_the_fxr_library() -> Result
                     }
                     if !l.active_in_state(0) {
                         t.lights_not_selected_in_state_zero += 1;
+                    }
+                    let chain = l
+                        .static_transforms(0)
+                        .map_err(|e| format!("{path} {name}: {e}"))?;
+                    if chain.iter().any(|s| s.rotation_degrees.iter().any(|&r| r != 0.0)) {
+                        t.rotated_lights += 1;
                     }
                 }
                 t.point_lights += points;
@@ -462,7 +489,7 @@ fn every_effect_file_reads_and_its_lights_agree_with_the_fxr_library() -> Result
             }
         }
         println!(
-            "{}: {} binders, {} members ({} effect files, {} others), {} ids, {} point lights in {} files, {} spot lights in {} files, {} light shafts, {} legacy-layout, {} refused {:?}, not in the library's list {}, action-count mismatches {}, light mismatches {}, header-list mismatches {}, id mismatches {}, lights not chosen by state 0 {}, tree depth {}, {} properties, bounds not the extremes {}",
+            "{}: {} binders, {} members ({} effect files, {} others), {} ids, {} point lights in {} files, {} spot lights in {} files, {} light shafts, {} legacy-layout, {} refused {:?}, not in the library's list {}, action-count mismatches {}, light mismatches {}, header-list mismatches {}, id mismatches {}, lights not chosen by state 0 {}, tree depth {}, {} properties, bounds not the extremes {}, configs with a static transform {}, multi-config nodes without a state map {}, lights with a rotated transform above them {}",
             game.name(),
             t.binders,
             t.members,
@@ -486,6 +513,9 @@ fn every_effect_file_reads_and_its_lights_agree_with_the_fxr_library() -> Result
             t.max_depth,
             t.properties,
             t.bounds_not_extremes,
+            t.transforms,
+            t.unmapped_multi_config_nodes,
+            t.rotated_lights,
         );
         println!(
             "layouts (properties1, properties2, fields1, fields2): {:?}",
@@ -550,6 +580,12 @@ fn every_effect_file_reads_and_its_lights_agree_with_the_fxr_library() -> Result
             game.name()
         );
         assert_eq!(
+            (t.transforms, t.unmapped_multi_config_nodes, t.rotated_lights),
+            expect.transforms,
+            "{}: configs with a static transform, multi-config nodes without a state map, lights with a rotated transform",
+            game.name()
+        );
+        assert_eq!(
             (
                 t.lights_not_selected_in_state_zero,
                 t.bounds_not_extremes,
@@ -578,6 +614,8 @@ struct Expect {
     /// lights whose config state 0 does not choose, keyframed properties whose stored bounds are not the extremes of
     /// their values, the deepest tree
     shape: (usize, usize, usize),
+    /// configs with a static transform, multi-config nodes without a state map, lights with a rotated transform above
+    transforms: (usize, usize, usize),
 }
 
 impl Expect {
@@ -600,6 +638,7 @@ impl Expect {
                 ((11, 0, 24, 0), 8),
             ],
             shape: (2, 87, 10),
+            transforms: (20_878, 0, 167),
         }
     }
     fn elden() -> Expect {
@@ -618,6 +657,7 @@ impl Expect {
                 ((11, 0, 28, 0), 12),
             ],
             shape: (76, 432, 14),
+            transforms: (81_215, 0, 725),
         }
     }
 }
