@@ -240,6 +240,9 @@ struct Totals {
     light_shafts: usize,
     legacy_lights: usize,
     spawns: usize,
+    colour_components: usize,
+    colour_not_255ths: usize,
+    colours_without_value: usize,
     own_spawns: usize,
     spawn_mismatches: usize,
     spawns_not_active_in_state_zero: usize,
@@ -423,6 +426,26 @@ fn every_effect_file_reads_and_its_lights_agree_with_the_fxr_library() -> Result
                 }
                 let (mut points, mut spots) = (0, 0);
                 for l in &lights {
+                    // the diffuse colour at its first keyframe and where it settles: whole numbers of 255ths
+                    let diffuse = match &l.light {
+                        Light::Point(p) => &p.diffuse_color,
+                        Light::Spot(s) => &s.diffuse_color,
+                    };
+                    let first = diffuse
+                        .constant()
+                        .or_else(|| diffuse.keyframes().and_then(|k| k.values.first().cloned()));
+                    for value in [first, diffuse.settled()] {
+                        match value {
+                            None => t.colours_without_value += 1,
+                            Some(v) => {
+                                for c in &v[..3] {
+                                    t.colour_components += 1;
+                                    t.colour_not_255ths +=
+                                        usize::from((c * 255.0 - (c * 255.0).round()).abs() > 2e-3);
+                                }
+                            }
+                        }
+                    }
                     match &l.light {
                         Light::Point(p) => {
                             points += 1;
@@ -548,6 +571,25 @@ fn every_effect_file_reads_and_its_lights_agree_with_the_fxr_library() -> Result
             t.spawn_mismatches
         );
         // the independent walker (fxrpy) counts 543 and 5,228 SFXReference actions, none in a config
+        println!(
+            "{}: {} diffuse colour components read, {} not a whole number of 255ths, {} colours with no value (looping)",
+            game.name(),
+            t.colour_components,
+            t.colour_not_255ths,
+            t.colours_without_value
+        );
+        // 847 and 5,016 lights, each read at its first keyframe and where it settles, three components each; the 7 Elden Ring
+        // colours that loop have no settled value
+        assert_eq!(
+            (t.colour_components, t.colour_not_255ths, t.colours_without_value),
+            if game == Game::Sekiro {
+                (5_082, 0, 0)
+            } else {
+                (30_075, 0, 7)
+            },
+            "{}: colour components",
+            game.name()
+        );
         assert_eq!(t.spawn_mismatches, 0, "{}: spawns", game.name());
         assert_eq!(
             (t.spawns, t.own_spawns, t.spawns_not_active_in_state_zero),
