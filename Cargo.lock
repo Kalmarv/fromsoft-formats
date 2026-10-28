@@ -187,7 +187,7 @@ name = "dxcontainer"
 version = "0.2.0"
 source = "git+https://github.com/Kalmarv/dx?rev=91c6b5e1ddcb71472414c92759911949428bba93#91c6b5e1ddcb71472414c92759911949428bba93"
 dependencies = [
- "primase-foundations",
+ "primase-foundations 0.2.0",
  "thiserror",
 ]
 
@@ -259,7 +259,7 @@ dependencies = [
  "half",
  "havok-formats",
  "num-bigint",
- "primase-foundations",
+ "primase-foundations 0.2.1",
  "primase-testdata",
  "serde",
  "serde_json",
@@ -377,7 +377,7 @@ name = "havok-formats"
 version = "0.4.0"
 source = "git+https://github.com/Kalmarv/havok-formats?rev=d02a031aa67c3893a1ff7225703c5ef8923127ee#d02a031aa67c3893a1ff7225703c5ef8923127ee"
 dependencies = [
- "primase-foundations",
+ "primase-foundations 0.2.0",
  "thiserror",
 ]
 
@@ -559,6 +559,15 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 name = "primase-foundations"
 version = "0.2.0"
 source = "git+https://github.com/Kalmarv/primase-foundations?rev=b3a3d4b3a892b8342fda081ab4449bb57052a2f8#b3a3d4b3a892b8342fda081ab4449bb57052a2f8"
+dependencies = [
+ "half",
+ "thiserror",
+]
+
+[[package]]
+name = "primase-foundations"
+version = "0.2.1"
+source = "git+https://github.com/Kalmarv/primase-foundations?rev=e895f966130651bd78c47505b53322cc3f58083a#e895f966130651bd78c47505b53322cc3f58083a"
 dependencies = [
  "flate2",
  "half",

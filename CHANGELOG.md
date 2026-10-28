@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- DCX: a Kraken envelope's Oodle payload is walked block by block before it is decoded
+  (`primase_foundations::compress::oodle_framing::walk`), and an envelope whose blocks do not consume exactly the
+  payload is refused with `Error::Invalid` naming the offset in the envelope and the block: bytes left after the last
+  quantum, a header or body that runs past the payload, an unknown decoder type, the checksum bit. The Oodle library
+  itself decodes a payload with bytes added after its last block. All 144,194 Kraken payloads of Sekiro and Elden Ring
+  pass; DFLT and ZSTD envelopes are unchanged.
+- Depends on `primase-foundations` 0.2.1.
+
 ## 0.4.0 (2026-10-27)
 
 - TPF: the texture-flags byte may be `0x80`, as on every texture of Elden Ring's environment-probe packages (221,796

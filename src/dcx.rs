@@ -1,7 +1,11 @@
 //! DCX envelopes with DFLT (zlib), KRAK (Oodle Kraken) and ZSTD payloads. Only the header variants listed at
 //! [`Envelope::parse`] are accepted; any other is an error naming the field.
 use crate::{Result, bytes::View, invalid};
-use primase_foundations::compress::{Decompressor, Zlib, Zstd, oodle::Oodle};
+use primase_foundations::compress::{
+    Decompressor, Error as CompressError, Zlib, Zstd, oodle::Oodle, oodle_framing,
+};
+/// Where the payload starts in an envelope: after the 76-byte header every variant [`Envelope::parse`] accepts shares.
+const PAYLOAD_START: usize = 76;
 /// The four-character compression tag a DCX envelope names at offset 40 (`KRAK`, `DFLT`, `ZSTD`), or `None` for bytes
 /// that do not start with a DCX header. The tag is not validated here; [`Envelope::parse`] does that.
 pub fn compression(data: &[u8]) -> Option<[u8; 4]> {
@@ -76,8 +80,8 @@ impl<'a> Envelope<'a> {
         if decoded_size > max_output {
             return Err(invalid("DCX", 28, "output exceeds configured limit"));
         }
-        let payload = v.slice(76, size)?;
-        let end = v.at(76, size)?;
+        let payload = v.slice(PAYLOAD_START, size)?;
+        let end = v.at(PAYLOAD_START, size)?;
         if data.len().saturating_sub(end) >= 16
             || v.slice(end, data.len().saturating_sub(end))?
                 .iter()
@@ -132,15 +136,32 @@ pub struct Decoder<'a> {
     /// The largest decoded size in bytes an envelope may state.
     pub max_output: usize,
 }
+/// Refuses an Oodle `payload` whose blocks and quanta do not consume exactly its bytes for `decoded_size`, naming the
+/// offset in the envelope.
+fn check_framing(payload: &[u8], decoded_size: usize) -> Result<()> {
+    match oodle_framing::walk(payload, decoded_size) {
+        Ok(_) => Ok(()),
+        Err(CompressError::Invalid { offset, detail, .. }) => Err(invalid(
+            "DCX",
+            PAYLOAD_START.saturating_add(offset),
+            format!("Oodle payload: {detail}"),
+        )),
+        Err(e) => Err(e.into()),
+    }
+}
 impl Decoder<'_> {
     /// Decode the DCX envelope `data`; anything else is an error.
     pub fn decode(&self, data: &[u8]) -> Result<Vec<u8>> {
         let envelope = Envelope::parse(data, self.max_output)?;
         match envelope.compression {
-            Compression::Kraken => Ok(self
-                .oodle
-                .ok_or_else(|| invalid("DCX", 40, "Oodle required"))?
-                .decompress(envelope.payload, envelope.decoded_size)?),
+            Compression::Kraken => {
+                // The library accepts bytes after the last block, so the framing is checked before it decodes.
+                check_framing(envelope.payload, envelope.decoded_size)?;
+                Ok(self
+                    .oodle
+                    .ok_or_else(|| invalid("DCX", 40, "Oodle required"))?
+                    .decompress(envelope.payload, envelope.decoded_size)?)
+            }
             Compression::Deflate => Ok(Zlib.decompress(envelope.payload, envelope.decoded_size)?),
             Compression::Zstd => Ok(Zstd.decompress(envelope.payload, envelope.decoded_size)?),
         }
@@ -198,6 +219,68 @@ mod compression_tests {
         let mut dirty = bytes;
         dirty.push(1);
         assert!(Envelope::parse(&dirty, usize::MAX).is_err());
+    }
+
+    /// An Oodle payload for 10 decoded bytes: one Kraken block (`8C 06`) holding one quantum whose three-byte header
+    /// (compressed size minus one, 18 bits) states a four-byte body. Only the framing is real; the body is not decodable.
+    const FRAMED: [u8; 9] = [0x8C, 0x06, 0, 0, 3, 1, 2, 3, 4];
+
+    /// The refusal `decode` gives an envelope around `payload`, which no Oodle library is given to decode: either the
+    /// framing check's (offset, detail) or the error for the missing library.
+    fn refusal(kind: &[u8; 4], decoded: u32, payload: &[u8]) -> (usize, String) {
+        let decoder = Decoder {
+            oodle: None,
+            max_output: 1 << 20,
+        };
+        match decoder.decode(&envelope(kind, decoded, payload)) {
+            Err(crate::Error::Invalid {
+                format: "DCX",
+                offset,
+                detail,
+            }) => (offset, detail),
+            other => panic!("expected a DCX refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_kraken_payload_must_end_where_its_blocks_end() {
+        // exactly framed: the framing check passes and only the missing library stops the decode
+        assert_eq!(refusal(b"KRAK", 10, &FRAMED), (40, "Oodle required".into()));
+        // a byte appended: refused before decoding, at the offset in the envelope where the blocks end
+        let mut long = FRAMED.to_vec();
+        long.push(0);
+        let (offset, detail) = refusal(b"KRAK", 10, &long);
+        assert_eq!(offset, 76 + FRAMED.len());
+        assert!(detail.contains("1 trailing bytes"), "{detail}");
+        // a byte short: the last quantum's body runs past the payload
+        let (offset, detail) = refusal(b"KRAK", 10, &FRAMED[..FRAMED.len() - 1]);
+        assert!(offset >= 76, "{offset}");
+        assert!(detail.starts_with("Oodle payload: "), "{detail}");
+        assert_ne!(detail, "Oodle required");
+        // a stored block (`CC 06`, raw bytes) is framed by the decoded size alone
+        let mut stored = vec![0xCC, 0x06];
+        stored.extend([7; 10]);
+        assert_eq!(refusal(b"KRAK", 10, &stored), (40, "Oodle required".into()));
+        stored.pop();
+        assert_ne!(refusal(b"KRAK", 10, &stored).1, "Oodle required");
+        // a header that is not a block header, and bytes for a stream that decodes to nothing
+        assert_ne!(refusal(b"KRAK", 10, &[0, 0, 0, 0]).1, "Oodle required");
+        assert_ne!(refusal(b"KRAK", 0, &[0x8C, 0x06]).1, "Oodle required");
+    }
+
+    #[test]
+    fn other_payloads_are_not_walked_as_oodle() {
+        // a DFLT or ZSTD envelope around Oodle-shaped bytes fails in its own codec, not in the Oodle framing check
+        let decoder = Decoder {
+            oodle: None,
+            max_output: 1 << 20,
+        };
+        for kind in [b"DFLT", b"ZSTD"] {
+            assert!(matches!(
+                decoder.decode(&envelope(kind, 10, &FRAMED)),
+                Err(crate::Error::Compression(_))
+            ));
+        }
     }
 
     #[test]
