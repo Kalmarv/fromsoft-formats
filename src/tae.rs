@@ -28,6 +28,8 @@ use crate::{Binder, BinderFile, Result, invalid};
 
 pub mod template;
 
+pub use crate::tae_check::TemplateCheck;
+
 const FORMAT: &str = "TAE";
 
 /// The only version read: Sekiro's and Elden Ring's.
