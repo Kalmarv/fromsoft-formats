@@ -111,6 +111,7 @@ mod matbin_write;
 pub mod messages;
 pub mod metaparam;
 pub mod msb;
+mod msb_write;
 pub mod mtd;
 mod mtd_write;
 pub mod names;
