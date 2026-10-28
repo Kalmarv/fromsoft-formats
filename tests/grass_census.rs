@@ -28,6 +28,10 @@ struct Totals {
     over_one: usize,
     mask_differs: usize,
     box_misses_a_vertex: usize,
+    /// Volumes with two children whose faces are the two children's ranges abutting, and volumes with one child that hold
+    /// more faces than it does.
+    two_children_fill: usize,
+    one_child_holds_more: usize,
     /// Faces with a stored normal of length zero, and (of those with a normal and an area) the ones whose normal is not within
     /// 0.001 of one in length and the ones whose cosine with the cross product of their edges is above -0.999.
     zero_normals: usize,
@@ -85,6 +89,21 @@ fn census(game: Game, data: inputs::Game) -> Result<Option<Totals>> {
                                 || p > f64::from(volume.bounds[1][a]) + 1e-3
                         });
                     }
+                }
+                match (volume.first_child, volume.second_child) {
+                    (Some(a), Some(b)) => {
+                        let (a, b) = (&grass.volumes[a].faces, &grass.volumes[b].faces);
+                        let (first, second) = if a.start <= b.start { (a, b) } else { (b, a) };
+                        t.two_children_fill += usize::from(
+                            first.start == volume.faces.start
+                                && first.end == second.start
+                                && second.end == volume.faces.end,
+                        );
+                    }
+                    (Some(c), None) | (None, Some(c)) => {
+                        t.one_child_holds_more += usize::from(grass.volumes[c].faces != volume.faces);
+                    }
+                    (None, None) => {}
                 }
                 t.mask_differs += usize::from(mask != volume.grass_types);
                 t.box_misses_a_vertex += usize::from(misses);
@@ -157,6 +176,7 @@ fn sekiros_grass_meshes() -> Result<()> {
         (772, 15_344, 723_967, 1_065_442)
     );
     assert_eq!(t.children, BTreeMap::from([(0, 7_937), (1, 242), (2, 7_165)]));
+    assert_eq!((t.two_children_fill, t.one_child_holds_more), (7_165, 242));
     assert_eq!(
         t.types_per_vertex,
         BTreeMap::from([
@@ -211,6 +231,7 @@ fn elden_rings_grass_meshes() -> Result<()> {
         (1_925, 89_852, 4_490_801, 7_799_267)
     );
     assert_eq!(t.children, BTreeMap::from([(0, 45_879), (1, 19), (2, 43_954)]));
+    assert_eq!((t.two_children_fill, t.one_child_holds_more), (43_954, 19));
     assert_eq!(
         t.types_per_vertex,
         BTreeMap::from([

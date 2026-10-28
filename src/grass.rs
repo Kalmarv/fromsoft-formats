@@ -32,7 +32,9 @@ pub struct Volume {
     pub first_child: Option<usize>,
     /// The index of its second child, if it has one.
     pub second_child: Option<usize>,
-    /// The faces under it, as a range of [`Grass::faces`]: its children's and, in the volumes that hold some, its own.
+    /// The faces under it, as a range of [`Grass::faces`]. A volume with two children holds exactly theirs (the two ranges
+    /// abut and fill it: 7,165 of Sekiro's volumes and 43,954 of Elden Ring's); a volume with one child holds more than
+    /// that child does (242 and 19); a leaf holds the faces of its range.
     pub faces: Range<usize>,
     /// The grass types its faces' vertices grow, a bit for each of the six: bit n is set when a vertex of one of its faces
     /// has a density above 0 for type n. (The community's reader leaves this word unnamed.)
