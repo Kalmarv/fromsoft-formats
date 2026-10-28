@@ -57,6 +57,41 @@ pub struct Param {
     pub rows: Vec<Row>,
 }
 
+/// The two facts of a PARAM file that its rows do not say and no reader here uses, kept so that [`Param::write`] can
+/// write the file again byte for byte.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Stored {
+    /// The header's first word, which the game's tools state as the start of the strings: the param type's offset
+    /// rounded up to a multiple of 16 in 4,939 of the 5,724 params of an independent reading of Sekiro's 190 and Elden
+    /// Ring's 45 archive params and of the 5,489 params of 29 regulation files, the offset itself in the rest (which of
+    /// the two a file has follows the tool version that wrote it, not the param).
+    pub strings_offset: u32,
+    /// Zero bytes after the last string: 0 or 8 when no row has a name, 2 after the one shared empty name. The
+    /// graphics-quality params of the archives (`Gconfig_*.param`, 24 files with real row names) end in 4 to 15, and
+    /// those with more than 8 are refused by [`Param::read`], whose limit is 8.
+    pub padding: usize,
+}
+
+impl Stored {
+    /// What the tools write for `param` more often than not: the strings offset rounded up to 16, and the padding of
+    /// the common cases (none when no row has a name, 2 when some row has).
+    pub fn derived(param: &Param) -> Stored {
+        let rows = param.rows.len();
+        let type_offset = HEADER
+            .saturating_add(rows.saturating_mul(ROW_ENTRY))
+            .saturating_add(rows.saturating_mul(param.row_size));
+        let rounded = type_offset.saturating_add(type_offset.wrapping_neg() & 15);
+        Stored {
+            strings_offset: u32::try_from(rounded).unwrap_or(u32::MAX),
+            padding: if param.rows.iter().any(|r| r.name.is_some()) {
+                2
+            } else {
+                0
+            },
+        }
+    }
+}
+
 fn utf16(v: &View<'_>, offset: usize) -> Result<(String, usize)> {
     let mut units = Vec::new();
     let mut p = offset;
@@ -75,6 +110,11 @@ fn utf16(v: &View<'_>, offset: usize) -> Result<(String, usize)> {
 impl Param {
     /// Read the file `data`, a param of the layout Sekiro and Elden Ring share.
     pub fn read(data: &[u8]) -> Result<Param> {
+        Ok(Self::read_stored(data)?.0)
+    }
+
+    /// [`Param::read`] and the [`Stored`] facts of the file, for [`Param::write`].
+    pub fn read_stored(data: &[u8]) -> Result<(Param, Stored)> {
         let v = View {
             data,
             format: FORMAT,
@@ -167,6 +207,7 @@ impl Param {
             spans.push((data_start, span));
         }
         let mut names: Vec<(usize, usize)> = Vec::new();
+        let mut strings_end = type_offset.saturating_add(type_len);
         for (i, &(at, id, offset, name)) in entries.iter().enumerate() {
             if offset != v.element(data_start, i, row_size)? {
                 return Err(invalid(
@@ -180,6 +221,7 @@ impl Param {
             } else {
                 let (text, len) = utf16(&v, name)?;
                 names.push((name, len));
+                strings_end = strings_end.max(name.saturating_add(len));
                 Some(text)
             };
             rows.push(Row {
@@ -192,13 +234,19 @@ impl Param {
         names.dedup();
         spans.extend(names);
         coverage_split(&v, spans, data.len(), GAP, TAIL)?;
-        Ok(Param {
-            param_type,
-            data_version,
-            unk06,
-            row_size,
-            rows,
-        })
+        Ok((
+            Param {
+                param_type,
+                data_version,
+                unk06,
+                row_size,
+                rows,
+            },
+            Stored {
+                strings_offset: v.u32(0)?,
+                padding: data.len().saturating_sub(strings_end),
+            },
+        ))
     }
 }
 

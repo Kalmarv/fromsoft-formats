@@ -107,6 +107,7 @@ pub mod mtd;
 pub mod names;
 pub mod overworld;
 pub mod param;
+mod param_write;
 pub mod paramdef;
 mod sekiro;
 pub mod shader;
