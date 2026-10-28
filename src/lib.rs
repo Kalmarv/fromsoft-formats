@@ -100,6 +100,8 @@ pub mod game;
 pub mod game_params;
 pub mod gparam;
 pub mod grass;
+
+pub mod gparam_events;
 mod keys;
 pub mod mapid;
 pub mod matbin;

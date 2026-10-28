@@ -841,6 +841,30 @@ pub struct PartGparam {
     pub scene_sub_id: Option<u8>,
 }
 
+impl PartGparam {
+    /// The slot (the hundreds digit) of the draw-param file a collision part's scene config chooses: the first of its four
+    /// scene bytes (SoulsFormats' `GparamSubID_Base` in Elden Ring). `None` for a part with no scene config and for a
+    /// byte that is no digit (-1: none).
+    pub fn draw_param_slot(&self) -> Option<u8> {
+        self.scene
+            .and_then(|[base, ..]| u8::try_from(base).ok())
+            .filter(|&slot| slot <= 9)
+    }
+
+    /// The draw-param file id a collision part's scene config names: [`PartGparam::draw_param_slot`] as the hundreds digit
+    /// and, in Elden Ring, [`PartGparam::scene_sub_id`] as the last two digits; a slot or sub id the part does not state
+    /// counts as 0 (Sekiro's collisions state no sub id: the area's events set it). `None` for a part with no scene
+    /// config. Across the installs the file of this id exists for 3,019 of the 3,056 Elden Ring collisions of the maps that
+    /// have draw-param files and for all 1,304 of Sekiro's (`tests/gparam_census.rs`).
+    pub fn draw_param_id(&self) -> Option<crate::area::DrawParamId> {
+        self.scene?;
+        crate::area::DrawParamId::new(
+            self.draw_param_slot().unwrap_or(0),
+            self.scene_sub_id.unwrap_or(0),
+        )
+    }
+}
+
 impl Generation {
     /// Where the four scene bytes sit in a part's scene config: Sekiro's block is 0x3c zero bytes, the four, a float and
     /// three zero words; Elden Ring's is 24 bytes (zeros, a transition time, a zero word), the four, and the rest.
@@ -1177,8 +1201,10 @@ impl MapLayout {
         let mut census = GroupCensus::default();
         for info in &infos {
             if let (Some(draw), Some(PartKind::Collision)) = (&info.draw, kind_of(info.part)) {
-                census.collisions += 1;
-                census.collisions_with_groups += usize::from(draw.display_groups.iter().any(|&w| w != 0));
+                census.collisions = census.collisions.saturating_add(1);
+                census.collisions_with_groups = census
+                    .collisions_with_groups
+                    .saturating_add(usize::from(draw.display_groups.iter().any(|&w| w != 0)));
                 for (all, word) in shown.iter_mut().zip(draw.display_groups) {
                     *all |= word;
                 }
@@ -1192,13 +1218,13 @@ impl MapLayout {
             ) {
                 continue;
             }
-            census.parts += 1;
+            census.parts = census.parts.saturating_add(1);
             if draw.draw_groups.iter().all(|&w| w == 0) {
-                census.no_groups += 1;
+                census.no_groups = census.no_groups.saturating_add(1);
             } else if draw.draws_under(&shown) {
-                census.met += 1;
+                census.met = census.met.saturating_add(1);
             } else {
-                census.unmet += 1;
+                census.unmet = census.unmet.saturating_add(1);
             }
         }
         Ok(census)
@@ -2582,5 +2608,31 @@ mod region_tests {
                 unmet: 1,
             }
         );
+    }
+
+    /// The first scene byte is the file's hundreds digit and the byte at +32 its last two; an unstated one counts as 0.
+    #[test]
+    fn a_collisions_scene_config_names_its_draw_param_file() {
+        let part = |scene: Option<[i8; 4]>, sub: Option<u8>| PartGparam {
+            part: 0,
+            light_set: -1,
+            fog: -1,
+            light_scattering: -1,
+            env_map: -1,
+            scene,
+            gparam_override: None,
+            scene_sub_id: sub,
+        };
+        let number = |p: PartGparam| p.draw_param_id().map(|id| id.number());
+        assert_eq!(number(part(Some([3, -1, -1, -1]), None)), Some(300));
+        assert_eq!(number(part(Some([9, -1, -1, -1]), Some(20))), Some(920));
+        assert_eq!(number(part(Some([-1, -1, -1, -1]), Some(41))), Some(41));
+        assert_eq!(number(part(None, Some(41))), None);
+        // a first byte that is no digit names no slot
+        assert_eq!(part(Some([10, 0, 0, 0]), None).draw_param_slot(), None);
+        assert_eq!(part(Some([-1, 0, 0, 0]), None).draw_param_slot(), None);
+        assert_eq!(part(Some([7, 0, 0, 0]), None).draw_param_slot(), Some(7));
+        // a sub id of three digits names no file
+        assert_eq!(number(part(Some([1, -1, -1, -1]), Some(100))), None);
     }
 }

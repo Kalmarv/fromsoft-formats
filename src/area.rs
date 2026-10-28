@@ -68,6 +68,63 @@ fn draw_param_maps(game: Game, area: &str) -> Vec<String> {
     }
 }
 
+/// The four-digit id of a draw-param file (`0720` of `m11_01_0720`; every file of both installs has a 0 for its first digit).
+/// Its hundreds digit is the *slot* (0 to 9: the first
+/// scene byte of a collision part chooses it, and the area's lighting states fill the slots of `m10_00`) and its last
+/// two digits the *sub id* (0, 10, 20 ... : an event sets it for an area, a collision's scene config or override names
+/// it in the open world). Across the installs, 3,019 of the 3,056 Elden Ring collisions and all 1,304 Sekiro collisions
+/// name a file that exists by these two numbers (`tests/gparam_census.rs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct DrawParamId(u16);
+
+impl DrawParamId {
+    /// The id of slot `slot` (0 to 9) and sub id `sub` (0 to 99).
+    pub fn new(slot: u8, sub: u8) -> Option<DrawParamId> {
+        if slot > 9 || sub > 99 {
+            return None;
+        }
+        u16::from(slot)
+            .checked_mul(100)?
+            .checked_add(u16::from(sub))
+            .map(DrawParamId)
+    }
+
+    /// The id with this number (0 to 999: every file of both installs is below 1000, the thousands digit being 0).
+    pub fn from_number(number: u16) -> Option<DrawParamId> {
+        (number <= 999).then_some(DrawParamId(number))
+    }
+
+    /// The four-digit number.
+    pub fn number(self) -> u16 {
+        self.0
+    }
+
+    /// The slot, the hundreds digit.
+    pub fn slot(self) -> u8 {
+        u8::try_from(self.0 / 100).unwrap_or(u8::MAX)
+    }
+
+    /// The sub id, the last two digits.
+    pub fn sub(self) -> u8 {
+        u8::try_from(self.0 % 100).unwrap_or(u8::MAX)
+    }
+
+    /// The stem of this id's file for the map `map` (`m11_01`): `m11_01_0720`.
+    pub fn stem(self, map: &str) -> String {
+        format!("{map}_{:04}", self.0)
+    }
+
+    /// A stem of the plain `<map>_<four digits>` form read back: `m11_01_0720` is (`m11_01`, 0720). `None` for the
+    /// layered names (`m00_00_0000_weatherbase`) and for anything else.
+    pub fn from_stem(stem: &str) -> Option<(&str, DrawParamId)> {
+        let (map, digits) = stem.rsplit_once('_')?;
+        if digits.len() != 4 || !digits.bytes().all(|b| b.is_ascii_digit()) || map.is_empty() {
+            return None;
+        }
+        Some((map, DrawParamId::from_number(digits.parse().ok()?)?))
+    }
+}
+
 /// The archive path of the draw-param file `stem` (`m11_01_0720`).
 pub fn draw_param_path(stem: &str) -> String {
     format!("/param/drawparam/{stem}.gparam.dcx")
@@ -95,6 +152,30 @@ fn draw_params_where(game: Game, area: &str, has: impl Fn(&str) -> bool) -> Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_draw_param_id_is_a_slot_and_a_sub_id() {
+        let id = DrawParamId::new(7, 20).unwrap();
+        assert_eq!((id.number(), id.slot(), id.sub()), (720, 7, 20));
+        assert_eq!(id.stem("m11_01"), "m11_01_0720");
+        assert_eq!(DrawParamId::from_stem("m11_01_0720"), Some(("m11_01", id)));
+        assert_eq!(DrawParamId::from_number(0).unwrap().stem("m60_00"), "m60_00_0000");
+        assert_eq!(DrawParamId::from_number(999).unwrap().slot(), 9);
+        // a slot is one digit, a sub id two, a number below 1000
+        assert_eq!(DrawParamId::new(10, 0), None);
+        assert_eq!(DrawParamId::new(0, 100), None);
+        assert_eq!(DrawParamId::from_number(1000), None);
+        for stem in [
+            "m00_00_0000_weatherbase",
+            "m11_01_720",
+            "m11_01_07200",
+            "_0720",
+            "m11_01_07x0",
+            "default",
+        ] {
+            assert_eq!(DrawParamId::from_stem(stem), None, "{stem}");
+        }
+    }
 
     fn maps(game: Game, area: &str) -> Vec<String> {
         draw_param_maps(game, area)
