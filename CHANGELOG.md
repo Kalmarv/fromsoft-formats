@@ -10,6 +10,9 @@
   `Channel::from(..)` (where a field was assigned `vec![..]`). A vertex used to own up to five heap blocks; reading
   Sekiro's models (16.5 million vertices in a tenth of the archives) now allocates one per vertex only for the lists
   longer than the room above, and `Model::resident_bytes` counts those. `Vertex::speedtree` stays a `Vec`.
+- The unwrap of an archive index squares with a dedicated Montgomery square (each cross product once) instead of
+  multiplying a number by itself: the same bytes (held to `BigUint::modpow` and to the product), about a fifth less time
+  in `unwrap_rsa`.
 - `examples/read_bench.rs`: a timed read of an install's archives by stage (index unwrap, BDT read and decryption, DCX
   decode, binder split, FLVER parse) with a digest of everything decoded and a census of the vertices' list lengths, for
   comparing changes to the read path.

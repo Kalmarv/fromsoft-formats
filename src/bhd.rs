@@ -147,6 +147,8 @@ pub struct Header {
 /// Limbs of a 2048-bit number, least significant first.
 const LIMBS: usize = 32;
 type Limbs = [u64; LIMBS];
+/// The limbs of a product of two such numbers.
+const WIDE: usize = LIMBS * 2;
 /// The bit length of `R^2`, `R = 2^2048`.
 const R2_SHIFT: usize = 64 * LIMBS * 2;
 
@@ -240,7 +242,12 @@ impl Montgomery {
             top0 = top1.wrapping_add(low(s >> 64));
             t = next;
         }
-        if top0 != 0 || at_least(&t, &self.n) {
+        self.finish(t, top0)
+    }
+
+    /// `t + top * R` below `2n`, as a number below `n`: `n` taken off once if it is not already below it.
+    fn finish(&self, mut t: Limbs, top: u64) -> Limbs {
+        if top != 0 || at_least(&t, &self.n) {
             let mut borrow = false;
             for (o, n) in t.iter_mut().zip(&self.n) {
                 let (d, b1) = o.overflowing_sub(*n);
@@ -252,12 +259,71 @@ impl Montgomery {
         t
     }
 
+    /// `a * a / R mod n`: [`Montgomery::multiply`]`(a, a)` with each cross product of the square formed once (doubled
+    /// after), then the product reduced limb by limb: about three quarters of the multiplications.
+    fn square(&self, a: &Limbs) -> Limbs {
+        let mut t = [0u64; WIDE];
+        // the products a[i] * a[j] for i < j, at limb i + j; the limb above a row is not yet written when the row ends
+        for (i, &ai) in a.iter().enumerate() {
+            let next = i.saturating_add(1);
+            let mut carry = 0u128;
+            for (tj, &aj) in t.iter_mut().skip(next.saturating_add(i)).zip(a.iter().skip(next)) {
+                let s = mac(*tj, ai, aj, carry);
+                *tj = low(s);
+                carry = s >> 64;
+            }
+            if let Some(slot) = t.get_mut(i.saturating_add(LIMBS)) {
+                *slot = low(carry);
+            }
+        }
+        // twice the cross products, and the squares a[i]^2 at limb 2 i; the whole is below 2^4096
+        let mut top = 0u64;
+        for tj in &mut t {
+            let v = *tj;
+            *tj = (v << 1) | top;
+            top = v >> 63;
+        }
+        let mut carry = 0u128;
+        for ([lo, hi], &ai) in t.as_chunks_mut::<2>().0.iter_mut().zip(a) {
+            let s = mac(*lo, ai, ai, carry);
+            *lo = low(s);
+            let s = u128::from(*hi).wrapping_add(s >> 64);
+            *hi = low(s);
+            carry = s >> 64;
+        }
+        // t = (t + m * n) / 2^64 per limb of t, m chosen to clear that limb; what carries past the top is `extra`
+        let mut extra = 0u64;
+        for i in 0..LIMBS {
+            let m = t.get(i).copied().unwrap_or_default().wrapping_mul(self.n0);
+            let mut carry = 0u128;
+            for (tj, &nj) in t.iter_mut().skip(i).zip(&self.n) {
+                let s = mac(*tj, m, nj, carry);
+                *tj = low(s);
+                carry = s >> 64;
+            }
+            for tj in t.iter_mut().skip(i.saturating_add(LIMBS)) {
+                if carry == 0 {
+                    break;
+                }
+                let s = u128::from(*tj).wrapping_add(carry);
+                *tj = low(s);
+                carry = s >> 64;
+            }
+            extra = extra.wrapping_add(low(carry));
+        }
+        let mut out: Limbs = [0; LIMBS];
+        for (o, &v) in out.iter_mut().zip(t.iter().skip(LIMBS)) {
+            *o = v;
+        }
+        self.finish(out, extra)
+    }
+
     /// `x^e mod n` for `x` below `n`, `e` nonzero, by left-to-right square and multiply.
     fn power(&self, x: &Limbs, exponent: &BigUint) -> Limbs {
         let base = self.multiply(x, &self.r2);
         let mut result = base;
         for bit in (0..exponent.bits().saturating_sub(1)).rev() {
-            result = self.multiply(&result, &result);
+            result = self.square(&result);
             if exponent.bit(bit) {
                 result = self.multiply(&result, &base);
             }
@@ -660,6 +726,29 @@ mod tests {
                         "key {key}, exponent {e}"
                     );
                 }
+            }
+        }
+    }
+
+    /// The Montgomery square is the product of a number with itself, limb for limb, on the edge blocks and random ones.
+    #[test]
+    fn the_montgomery_square_is_the_product_with_itself() {
+        for modulus in moduli(4) {
+            let n = BigUint::from_bytes_be(&modulus);
+            let context = Montgomery::new(&modulus, &n);
+            for block in blocks(&modulus, 40).chunks(256) {
+                let x = limbs_of(block);
+                assert_eq!(context.square(&x), context.multiply(&x, &x));
+            }
+            // the largest values below the modulus, which carry out of the top limb
+            let mut below = n.clone() - 1u8;
+            for _ in 0..8 {
+                let bytes = below.to_bytes_be();
+                let mut block = vec![0u8; 256 - bytes.len()];
+                block.extend(bytes);
+                let x = limbs_of(&block);
+                assert_eq!(context.square(&x), context.multiply(&x, &x));
+                below -= 0x1_0000_0001u64;
             }
         }
     }
