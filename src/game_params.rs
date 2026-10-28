@@ -44,6 +44,12 @@ fn decrypt_cbc(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// The param binder inside the bytes of a `regulation.bin`, decrypted with the regulation `key` (a regulation file
+/// of any version of the game, not only the installed one).
+pub fn regulation_binder(key: &[u8; 32], bytes: &[u8], decoder: &Decoder<'_>) -> Result<Binder> {
+    Binder::read(&decoder.decode_if_dcx(&decrypt_cbc(key, bytes)?)?, decoder)
+}
+
 /// The game's param binder, from where `install`'s game keeps it: every param file of the game, as stored (a member is
 /// read with [`Param::read`]).
 pub fn param_binder(install: &Install, archive: &Archive, decoder: &Decoder<'_>) -> Result<Binder> {
@@ -68,7 +74,7 @@ pub fn param_binder(install: &Install, archive: &Archive, decoder: &Decoder<'_>)
             let path = install.root.join(file);
             let bytes =
                 std::fs::read(&path).map_err(|e| invalid(FORMAT, 0, format!("{}: {e}", path.display())))?;
-            Binder::read(&decoder.decode_if_dcx(&decrypt_cbc(key, &bytes)?)?, decoder)
+            regulation_binder(key, &bytes, decoder)
         }
     }
 }

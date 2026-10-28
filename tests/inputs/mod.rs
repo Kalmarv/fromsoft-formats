@@ -50,6 +50,10 @@ primase_testdata::inputs! {
             about: "SoulsFormats' readings of FromSoftware archives and files (rigid parts, skins, parts, census, frames, formats)",
             source: "independent: SoulsFormats 9c0da6b (Sekiro) and SoulsFormatsNEXT ee1dd61 (Elden Ring), through a small dump harness that is not part of this repository",
         },
+        Smithbox = "smithbox" {
+            about: "Smithbox's Paramdex-derived paramdefs (`defs`, XML, with `FirstVersion`/`RemovedVersion`) and the `regulation.bin` of each Elden Ring release it ships",
+            source: "third-party: Smithbox fdde3225's `Smithbox.Data/Assets/PARAM` (MIT repository; the defs and regulations carry no licence of their own, so they are read in place and never copied into a repository)",
+        },
         Uxm = "uxm" {
             about: "UXM's path dictionaries (`dictionary.txt`, UTF-8, one archive path per line)",
             source: "third-party: UXM-Selective-Unpack 9501be8's dictionaries",
@@ -97,6 +101,24 @@ primase_testdata::inputs! {
             gate: true,
             about: r#"independent texture-package census (packages.jsonl, area-dds/, errors.tsv); schema in https://github.com/Kalmarv/primase/tree/main/worlds/fromsoft/README.md; tests/tpf_census.rs"#,
             source: r#"independent: SoulsFormats 9c0da6b, through a small dump harness that is not part of this repository (`tpf` mode); area-dds/ holds every distinct DDS under `/map/`"#,
+        },
+        Query::Oracle(OracleSet::Smithbox, Game::Elden, "defs") => {
+            status: Live,
+            gate: false,
+            about: r#"the Elden Ring paramdefs (`ER/Defs`: 179 XML files, 29 with version-gated fields); tests/paramdef_census.rs"#,
+            source: r#"third-party: Smithbox fdde3225's `Smithbox.Data/Assets/PARAM/ER/Defs`, read in place"#,
+        },
+        Query::Oracle(OracleSet::Smithbox, Game::Elden, "regulations") => {
+            status: Live,
+            gate: false,
+            about: r#"the 28 Elden Ring regulations of Smithbox's releases, one folder `<release> (<regulation number>)` each holding `regulation.bin` (1.00.0 to 1.17.3); tests/paramdef_census.rs"#,
+            source: r#"third-party: Smithbox fdde3225's `Smithbox.Data/Assets/PARAM/ER/Regulations`, read in place (encrypted with the install's `regulation.key`)"#,
+        },
+        Query::Oracle(OracleSet::Smithbox, Game::Sekiro, "defs") => {
+            status: Live,
+            gate: true,
+            about: r#"the Sekiro paramdefs (`SDT/Defs`: 160 XML files, none version-gated); tests/paramdef_census.rs"#,
+            source: r#"third-party: Smithbox fdde3225's `Smithbox.Data/Assets/PARAM/SDT/Defs`, read in place"#,
         },
         Query::Oracle(OracleSet::Uxm, Game::Elden, "dictionary.txt") => {
             status: Live,

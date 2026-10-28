@@ -99,10 +99,12 @@ pub mod msb;
 pub mod mtd;
 pub mod names;
 pub mod param;
+pub mod paramdef;
 mod sekiro;
 pub mod states;
 pub mod tae;
 pub mod tpf;
+mod xml;
 
 pub use archive::{Archive, Install, Keys, NameDictionary};
 pub use binder::{Binder, BinderFile};

@@ -8,6 +8,16 @@
   reads: 1,145 Sekiro files (12,688 bodies, 537,436 triangles) and 1,850 Elden Ring files (264,858 bodies,
   1,707,650 triangles), `tests/extern_mesh_census.rs`. Depends on `havok-formats` at the commit that adds
   `extern_mesh`.
+- `paramdef`: typed reading of any param by its paramdef. `ParamDef::from_xml` reads Paramdex's XML (the crate holds no
+  definition: Paramdex states no licence, so the caller supplies the text), `ParamDef::layout(regulation)` lays the fields
+  out with the SoulsFormats container rule and the regulation's `FirstVersion`/`RemovedVersion`, and
+  `ParamDefs::bind(&Param, regulation)` picks the definition of the param's type whose layout size is the row size (a
+  tie goes to the file's data version), then reads every row strictly (text decodes, no undeclared bit is set) into a
+  `TypedParam` of `TypedRow`s with `get(name)` and `fields()`. All 194 params of the Elden Ring 1.17.3 install, the 135 params of
+  Sekiro's 64-bit form and all 5,295 params of Smithbox's 28 other Elden Ring regulations (4,352,472 rows in all) bind
+  with Smithbox's definitions, and a second decoder (Python) agrees on every value of every param.
+- `Binder::regulation_number` (the eight ASCII digits of a regulation's BND4 version, `11730034`; `None` for Sekiro's
+  `07D7R6`) and `game_params::regulation_binder` (the binder of any `regulation.bin`, with the key).
 
 ## 0.5.0 (2026-10-27)
 

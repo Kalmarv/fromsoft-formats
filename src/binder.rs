@@ -55,6 +55,16 @@ impl Binder {
     ) -> Result<Self> {
         Self::read_inner(header, Some(payload), decoder, false, Some(keep))
     }
+    /// The regulation number the header's version bytes spell: eight ASCII digits (`11730034` for Elden Ring's
+    /// 1.17.3 `regulation.bin`), the number a paramdef's `FirstVersion` and `RemovedVersion` are in. `None` where the
+    /// version is not eight digits (Sekiro's `gameparam.parambnd.dcx` holds `07D7R6`).
+    pub fn regulation_number(&self) -> Option<u32> {
+        if !self.version.iter().all(u8::is_ascii_digit) {
+            return None;
+        }
+        std::str::from_utf8(&self.version).ok()?.parse().ok()
+    }
+
     /// The first member whose file name (what follows its last `/` or `\`) is `leaf`, ASCII case folded; `None` where no
     /// member has it. A member without a name is never found.
     pub fn member(&self, leaf: &str) -> Option<&BinderFile> {
