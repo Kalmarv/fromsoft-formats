@@ -54,15 +54,18 @@ pub fn edge_files(
 }
 
 /// The stems the draw-param files of an area's map can share, first choice first: `m11_01` for `m11_01_00_00`; Elden Ring's
-/// open-world tiles share `m60_00` and `m61_00` (no file carries a tile's coordinates), and an Elden Ring map with
-/// no file of its own stem uses its family's `mAA_00` (m30's dungeons, m19, one m11 map). Empty for a name that is not
-/// an area's.
+/// open-world tiles share `m60_00` and `m61_00` (no file carries a tile's coordinates), an Elden Ring map with
+/// no file of its own stem uses its family's `mAA_00` (m30's dungeons, m19, one m11 map), and the caves and tunnels (`m31`,
+/// `m32`) use the catacombs' `m30_00`. The game's own table says so for these (`GparamRefSettingsParam`: a row per map,
+/// keyed by its decimal map number, names the map whose files it uses; 70 rows, every one of them agrees with this rule,
+/// `tests/weather_census.rs`). Empty for a name that is not an area's.
 fn draw_param_maps(game: Game, area: &str) -> Vec<String> {
     let (Some(first), Some(second)) = (area.get(..3), area.get(4..6)) else {
         return Vec::new();
     };
     match (game, first) {
         (Game::EldenRing, "m60" | "m61") => vec![format!("{first}_00")],
+        (Game::EldenRing, "m31" | "m32") => vec![format!("{first}_{second}"), "m30_00".to_owned()],
         (Game::EldenRing, _) if second != "00" => vec![format!("{first}_{second}"), format!("{first}_00")],
         _ => vec![format!("{first}_{second}")],
     }
@@ -72,7 +75,7 @@ fn draw_param_maps(game: Game, area: &str) -> Vec<String> {
 /// Its hundreds digit is the *slot* (0 to 9: the first
 /// scene byte of a collision part chooses it, and the area's lighting states fill the slots of `m10_00`) and its last
 /// two digits the *sub id* (0, 10, 20 ... : an event sets it for an area, a collision's scene config or override names
-/// it in the open world). Across the installs, 3,019 of the 3,056 Elden Ring collisions and all 1,304 Sekiro collisions
+/// it in the open world). Across the installs all 1,304 Sekiro collisions and 3,209 of the 3,266 Elden Ring collisions
 /// name a file that exists by these two numbers (`tests/gparam_census.rs`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DrawParamId(u16);
@@ -131,7 +134,7 @@ pub fn draw_param_path(stem: &str) -> String {
 }
 
 /// The draw-param files the archive holds for `area`'s map, by stem, in ID order: every `<map>_<0000..9999>` of the first
-/// of its [`draw_param_maps`] that has any. A map none of whose stems has a file (Elden Ring's m31 and m32) has none.
+/// of its [`draw_param_maps`] that has any. A map none of whose stems has a file has none.
 pub fn draw_params(archive: &Archive, game: Game, area: &str) -> Vec<String> {
     draw_params_where(game, area, |path| archive.contains(path))
 }
@@ -188,6 +191,10 @@ mod tests {
         assert_eq!(maps(Game::EldenRing, "m12_02_00_00"), ["m12_02", "m12_00"]);
         assert_eq!(maps(Game::EldenRing, "m60_44_36_00"), ["m60_00"]);
         assert_eq!(maps(Game::EldenRing, "m61_50_50_00"), ["m61_00"]);
+        // the caves and tunnels use the catacombs' files
+        assert_eq!(maps(Game::EldenRing, "m31_05_00_00"), ["m31_05", "m30_00"]);
+        assert_eq!(maps(Game::EldenRing, "m32_12_00_00"), ["m32_12", "m30_00"]);
+        assert_eq!(maps(Game::Sekiro, "m31_05_00_00"), ["m31_05"]);
         assert!(maps(Game::Sekiro, "m6").is_empty());
         assert_eq!(
             draw_param_path("m11_01_0720"),
@@ -209,8 +216,13 @@ mod tests {
             draw_params_where(Game::EldenRing, "m30_05_00_00", has),
             ["m30_00_0000", "m30_00_0100"]
         );
-        // neither (m31's files are not drawn from m31_05's family, and a missing family is not an error)
-        assert!(draw_params_where(Game::EldenRing, "m32_00_00_00", has).is_empty());
+        // the caves and tunnels have none of their own and use the catacombs'
+        assert_eq!(
+            draw_params_where(Game::EldenRing, "m32_00_00_00", has),
+            ["m30_00_0000", "m30_00_0100"]
+        );
+        // neither: a missing family is not an error
+        assert!(draw_params_where(Game::EldenRing, "m35_05_00_00", has).is_empty());
         // Sekiro has no family fallback
         assert!(draw_params_where(Game::Sekiro, "m30_05_00_00", has).is_empty());
     }

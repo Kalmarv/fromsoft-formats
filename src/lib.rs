@@ -102,6 +102,7 @@ pub mod gparam;
 pub mod grass;
 
 pub mod gparam_events;
+pub mod gparam_params;
 mod keys;
 pub mod mapid;
 pub mod matbin;

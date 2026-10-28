@@ -81,8 +81,12 @@
 - `msb`: `group_numbers`, `DrawInfo::{draw_group_numbers, display_group_numbers, draws_under}` and
   `MapLayout::group_census` (a layout's map pieces, objects and assets against its collisions' display groups).
 - `area::DrawParamId` (a draw-param file's slot and sub id), `PartGparam::{draw_param_slot, draw_param_id}` (the file a
-  collision's scene config names: it exists for all 1,304 Sekiro and 3,019 of the 3,056 Elden Ring collisions of the maps that
-  have files) and `gparam_events` (the calls of the event instructions that switch an area's draw-param file).
+  collision's scene config names: it exists for all 1,304 Sekiro and 3,209 of the 3,266 Elden Ring collisions) and `gparam_events` (the calls of the event instructions that switch an area's draw-param file).
+- `gparam_params`: Elden Ring's params that decide the draw-param file: `GparamRefSettings` (a map uses another map's files:
+  70 rows keyed by the decimal map number), `WeatherParam` (a weather's file id: all 82 distinct ids name a
+  `m00_00_<id>_weatheroutdoor` file) and `WeatherLotParam` (the weighted weathers of a lot).
+- `area::draw_params`: Elden Ring's caves and tunnels (`m31`, `m32`) use the catacombs' `m30_00` files, as the game's
+  `GparamRefSettings` rows say (they used to have none); every row of that table agrees with the rule.
 
 ## 0.10.0 (2026-10-28)
 

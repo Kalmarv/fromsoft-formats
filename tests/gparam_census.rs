@@ -2,9 +2,10 @@
 //!
 //! - A collision part's scene config names a file: the first scene byte is the hundreds digit of the file's id and, in
 //!   Elden Ring, the byte at +32 its last two digits ([`PartGparam::draw_param_id`]). Of Sekiro's 1,304 collisions every
-//!   one names a file the install holds; of Elden Ring's 3,266, 3,019 do, 37 name a file their map's family lacks and 210
-//!   stand in the 27 maps (m31, m32) that have no draw-param file at all. (An independent census of the same layouts and the
-//!   file names, a separate parser of the MSB records, gives the same three numbers.)
+//!   one names a file the install holds; of Elden Ring's 3,266, 3,209 do (190 of them in the 27 caves and tunnels, `m31` and
+//!   `m32`, which use the catacombs' `m30_00`) and 57 name a file their map's stem lacks (20 in those 27 maps). (An
+//!   independent census of the same layouts and the file names, a separate parser of the MSB records, gives the same
+//!   numbers.)
 //! - The events that switch a file ([`gparam_events`]): Sekiro's 43 sub id calls name 0, 10, 20, 30, 40 and 50, and 35 name
 //!   an area that has a file of exactly that number; Elden Ring's 11 override activations name 0, 1, 2, 3, 4 and 500, of
 //!   the 10 that belong to a map 6 name an existing file, and 14 deactivations.
@@ -69,7 +70,7 @@ fn a_collisions_scene_config_names_a_draw_param_file_that_exists() -> Result<()>
     for (game, data, expected) in [
         // (names an existing file, names one the map's files lack, stands in a map with no file)
         (Game::Sekiro, Data::Sekiro, [1_304, 0, 0]),
-        (Game::EldenRing, Data::Elden, [3_019, 37, 210]),
+        (Game::EldenRing, Data::Elden, [3_209, 57, 0]),
     ] {
         let Some((archive, dll, dictionary)) = open(game, data)? else {
             continue;

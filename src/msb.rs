@@ -854,8 +854,8 @@ impl PartGparam {
     /// The draw-param file id a collision part's scene config names: [`PartGparam::draw_param_slot`] as the hundreds digit
     /// and, in Elden Ring, [`PartGparam::scene_sub_id`] as the last two digits; a slot or sub id the part does not state
     /// counts as 0 (Sekiro's collisions state no sub id: the area's events set it). `None` for a part with no scene
-    /// config. Across the installs the file of this id exists for 3,019 of the 3,056 Elden Ring collisions of the maps that
-    /// have draw-param files and for all 1,304 of Sekiro's (`tests/gparam_census.rs`).
+    /// config. Across the installs the file of this id exists for all 1,304 of Sekiro's collisions and for 3,209 of the 3,266
+    /// Elden Ring ones (`tests/gparam_census.rs`).
     pub fn draw_param_id(&self) -> Option<crate::area::DrawParamId> {
         self.scene?;
         crate::area::DrawParamId::new(
