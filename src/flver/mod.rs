@@ -1,12 +1,14 @@
 //! FLVER2 models (versions `0x20013`, `0x20014`, `0x20016` and `0x2001a`: Sekiro's and Elden Ring's): bones, dummy
 //! polygons, materials with their texture bindings, vertex layouts and the meshes' decoded vertices and face sets,
 //! kept in the file's coordinates. Edge-compressed indices and the legacy text encoding are refused.
+mod channel;
 mod vertex;
 use crate::{
     Result,
     bytes::{Budget, View},
     invalid,
 };
+pub use channel::Channel;
 pub use vertex::Vertex;
 
 /// One member of a vertex layout: an attribute a vertex stores, and where.
@@ -316,28 +318,27 @@ fn refs(v: &View<'_>, o: usize, n: usize, limit: usize, budget: &Budget) -> Resu
         .collect()
 }
 impl Model {
-    /// The bytes the model's meshes hold: each vertex as it sits in memory with the lengths of its channels, and each
-    /// face set's indices. A copy of the model costs about this much (the bones, layouts and materials are small beside
+    /// The bytes the model's meshes hold: each vertex as it sits in memory with the heap its longer channels take, and
+    /// each face set's indices. A copy of the model costs about this much (the bones, layouts and materials are small beside
     /// it).
     pub fn resident_bytes(&self) -> u64 {
-        let channel = std::mem::size_of::<[f32; 4]>();
         self.meshes
             .iter()
             .map(|mesh| {
+                // a vertex holds its short lists itself; only a list that outgrew its room (and a SpeedTree vertex's
+                // members) takes heap bytes of its own
                 let vertices: usize = mesh
                     .vertices
                     .iter()
                     .map(|v| {
                         [
                             std::mem::size_of::<Vertex>(),
-                            [v.uvs.len(), v.tangents.len(), v.colors.len(), v.speedtree.len()]
-                                .into_iter()
-                                .fold(0usize, usize::saturating_add)
-                                .saturating_mul(channel),
-                            v.tangent_indices.len(),
-                            v.layer_bytes
-                                .len()
-                                .saturating_mul(std::mem::size_of::<(usize, [u8; 4])>()),
+                            v.uvs.heap_bytes(),
+                            v.tangents.heap_bytes(),
+                            v.tangent_indices.heap_bytes(),
+                            v.colors.heap_bytes(),
+                            v.layer_bytes.heap_bytes(),
+                            v.speedtree.len().saturating_mul(std::mem::size_of::<[f32; 4]>()),
                         ]
                         .into_iter()
                         .fold(0usize, usize::saturating_add)

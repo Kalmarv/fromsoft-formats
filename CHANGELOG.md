@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Breaking: the variable-length lists of `flver::Vertex` (`uvs`, `layer_bytes`, `tangents`, `tangent_indices`, `colors`)
+  are `flver::Channel`s, not `Vec`s: a list keeps its first few values in the vertex (`uvs` two, `tangents`, `colors` and
+  `layer_bytes` one, `tangent_indices` four) and moves to the heap beyond that. A `Channel` dereferences to a slice
+  and has `push`, `pop`, `truncate`, `clear`, `extend` and `iter_mut`, compares equal to the same values in a `Vec`, an
+  array or a slice, prints and serializes as the slice does, and is built from a `Vec` or an array with
+  `Channel::from(..)` (where a field was assigned `vec![..]`). A vertex used to own up to five heap blocks; reading
+  Sekiro's models (16.5 million vertices in a tenth of the archives) now allocates one per vertex only for the lists
+  longer than the room above, and `Model::resident_bytes` counts those. `Vertex::speedtree` stays a `Vec`.
+- `examples/read_bench.rs`: a timed read of an install's archives by stage (index unwrap, BDT read and decryption, DCX
+  decode, binder split, FLVER parse) with a digest of everything decoded and a census of the vertices' list lengths, for
+  comparing changes to the read path.
+
 ## 0.9.0 (2026-10-28)
 
 - Breaking: depends on havok-formats 0.8.0 (a breaking release: it reads the whole `hclClothData`), whose collision

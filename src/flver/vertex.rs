@@ -1,4 +1,4 @@
-use super::Member;
+use super::{Channel, Member};
 use crate::{Result, bytes::View, invalid};
 use half::f16;
 use primase_foundations::vertex::Format;
@@ -28,18 +28,18 @@ pub struct Vertex {
     /// are coordinates in metres, outside [0, 1]. Only meshes of pivot materials (and grass and tree assets) store one;
     /// a SpeedTree mesh's member is in [`Vertex::speedtree`] instead. Members are kept in stream order because the
     /// programs number their `TEXCOORDn` inputs by that order.
-    pub uvs: Vec<[f32; 4]>,
+    pub uvs: Channel<[f32; 4], 2>,
     /// The four stored bytes of each `UByte4Norm` UV member and the index in [`Vertex::uvs`] of its attribute, for layer
     /// weights (the same values as that attribute's lanes before the `/ 255`).
-    pub layer_bytes: Vec<(usize, [u8; 4])>,
+    pub layer_bytes: Channel<(usize, [u8; 4]), 1>,
     /// The tangents (semantic 6), in stream order.
-    pub tangents: Vec<[f32; 4]>,
+    pub tangents: Channel<[f32; 4], 1>,
     /// Source semantic-6 member indices, parallel to tangents. Sparse indices stay sparse.
-    pub tangent_indices: Vec<u8>,
+    pub tangent_indices: Channel<u8, 4>,
     /// The bitangent (semantic 7), where the layout stores one.
     pub bitangent: [f32; 4],
     /// The vertex colours (semantic 10), in stream order.
-    pub colors: Vec<[f32; 4]>,
+    pub colors: Channel<[f32; 4], 1>,
     /// A SpeedTree vertex's stored members in layout order, each as its format gives it to a vertex program (four
     /// lanes, unused ones zero): half floats as floats, normalized unsigned bytes as `x / 255`, floats as stored.
     /// What each member stands for is the game's shader's, not the layout's semantic: the position, normal, one
@@ -137,7 +137,7 @@ impl Vertex {
         let [px, py, pz, _] = self.speedtree_member(position)?;
         let [tu, tv, ..] = self.speedtree_member(uv)?;
         self.position = [px, py, pz];
-        self.uvs = vec![[tu, tv, 0., 0.]];
+        self.uvs = Channel::from([[tu, tv, 0., 0.]]);
         self.speedtree_frame(normal, tangent)
     }
 
@@ -153,8 +153,8 @@ impl Vertex {
         let s = unpack(self.speedtree_member(tangent)?);
         let ([nx, ny, nz], [sx, sy, sz]) = (n, s);
         self.normal = n;
-        self.tangents = vec![[sy * nz - sz * ny, sz * nx - sx * nz, sx * ny - sy * nx, 1.]];
-        self.tangent_indices = vec![0];
+        self.tangents = Channel::from([[sy * nz - sz * ny, sz * nx - sx * nz, sx * ny - sy * nx, 1.]]);
+        self.tangent_indices = Channel::from([0]);
         Ok(())
     }
 
