@@ -304,3 +304,149 @@ fn a_dungeon_without_draw_param_files_of_its_own_uses_its_familys() -> Result<()
     assert_eq!(none, BTreeMap::from([("m31", 19), ("m32", 8)]));
     Ok(())
 }
+
+/// The draw and display blocks of every part, and the numbers regions and events store besides their record index,
+/// against an independent census of the same files (a separate parser of the records, reading no output of this crate).
+#[test]
+fn draw_blocks_and_the_numbers_of_regions_and_events() -> Result<()> {
+    // per kind: parts, parts with a draw block, with a display block, and with non-zero display, draw and collision-mask
+    // words in the draw block, and with non-zero display words in the display block
+    let expected = [
+        (
+            Game::Sekiro,
+            vec![
+                ("Collision", [1_304, 1_304, 1_304, 999, 1_185, 1_060, 11]),
+                ("ConnectCollision", [582, 0, 582, 0, 0, 0, 73]),
+                ("DummyEnemy", [206, 0, 0, 0, 0, 0, 0]),
+                ("DummyObject", [125, 0, 0, 0, 0, 0, 0]),
+                ("Enemy", [1_557, 1_557, 0, 1, 2, 5, 0]),
+                ("MapPiece", [40_970, 40_970, 0, 28_522, 40_741, 40_879, 0]),
+                ("Object", [10_538, 10_538, 0, 5_840, 10_113, 8_561, 0]),
+                ("Player", [70, 0, 0, 0, 0, 0, 0]),
+            ],
+        ),
+        (
+            Game::EldenRing,
+            vec![
+                ("Asset", [421_253, 421_253, 421_253, 281_090, 106_461, 80_643, 3]),
+                ("Collision", [3_266, 3_266, 3_266, 906, 1_053, 883, 341]),
+                ("ConnectCollision", [800, 800, 800, 130, 110, 161, 322]),
+                ("DummyAsset", [2_661, 2_661, 0, 53, 77, 1, 0]),
+                ("DummyEnemy", [7_108, 7_108, 0, 3_028, 4, 1, 0]),
+                ("Enemy", [16_776, 16_776, 0, 11_849, 1, 6, 0]),
+                ("MapPiece", [4_522, 4_522, 0, 2_886, 1_444, 1_341, 0]),
+                ("Player", [722, 722, 0, 203, 0, 3, 0]),
+            ],
+        ),
+    ];
+    let (mut regions, mut region_counter, mut events, mut event_counter) = (0, 0, 0, 0);
+    let (mut event_is_index, mut event_ids_unique, mut event_ids_dense) = (0, 0, 0);
+    let (mut numbers_unique, mut numbers_dense, mut files) = (0, 0, 0);
+    for (game, table) in expected {
+        let Some((_, layouts)) = layouts(game)? else {
+            continue;
+        };
+        let mut kinds = BTreeMap::<String, [usize; 7]>::new();
+        let (mut tails, mut conditions) = (BTreeMap::<[u8; 4], usize>::new(), BTreeSet::new());
+        let mut display_tails = BTreeMap::<[u8; 4], usize>::new();
+        for layout in layouts.values() {
+            files += 1;
+            for p in &layout.parts {
+                kinds.entry(format!("{:?}", p.kind)).or_default()[0] += 1;
+            }
+            for info in layout.draw_infos()? {
+                let row = kinds
+                    .entry(format!("{:?}", layout.parts[info.part].kind))
+                    .or_default();
+                if let Some(draw) = info.draw {
+                    row[1] += 1;
+                    row[3] += usize::from(draw.display_groups.iter().any(|&w| w != 0));
+                    row[4] += usize::from(draw.draw_groups.iter().any(|&w| w != 0));
+                    row[5] += usize::from(draw.collision_mask.iter().any(|&w| w != 0));
+                    *tails.entry(draw.tail).or_default() += 1;
+                    conditions.insert(draw.conditions);
+                }
+                if let Some(display) = info.display2 {
+                    row[2] += 1;
+                    row[6] += usize::from(display.display_groups.iter().any(|&w| w != 0));
+                    *display_tails.entry(display.tail).or_default() += 1;
+                }
+            }
+            let mut counters = BTreeMap::<u32, u32>::new();
+            let list = layout.map_regions()?;
+            for r in &list {
+                let counter = counters.entry(r.type_code).or_default();
+                region_counter += usize::from(r.index_in_type == *counter);
+                *counter += 1;
+            }
+            regions += list.len();
+            let mut numbers: Vec<i32> = list.iter().map(|r| r.number).collect();
+            numbers.sort_unstable();
+            numbers.dedup();
+            numbers_unique += usize::from(numbers.len() == list.len());
+            numbers_dense += usize::from(numbers.iter().copied().eq(0..list.len() as i32));
+            let mut counters = BTreeMap::<u32, u32>::new();
+            let list = layout.map_events()?;
+            for e in &list {
+                let counter = counters.entry(e.type_code).or_default();
+                event_counter += usize::from(e.index_in_type == *counter);
+                *counter += 1;
+                event_is_index += usize::from(e.event_id as usize == e.index);
+            }
+            events += list.len();
+            let mut ids: Vec<i32> = list.iter().map(|e| e.event_id).collect();
+            ids.sort_unstable();
+            ids.dedup();
+            event_ids_unique += usize::from(ids.len() == list.len());
+            event_ids_dense += usize::from(ids.iter().copied().eq(0..list.len() as i32));
+        }
+        assert_eq!(
+            kinds.iter().map(|(k, v)| (k.as_str(), *v)).collect::<Vec<_>>(),
+            table,
+            "{}",
+            game.name()
+        );
+        // the draw block's fourth field is 0 in Sekiro; in Elden Ring -1 as a signed word, then a byte that is 1 on 177 map
+        // pieces
+        if game == Game::Sekiro {
+            assert_eq!(tails, BTreeMap::from([([0, 0, 0, 0], 54_369)]));
+            assert_eq!(conditions.len(), 4);
+            // the display block's last four bytes: -1 as a signed word on all but the connect collisions that store a
+            // number (12 in Sekiro's maps), whose first byte is then 1
+            assert_eq!(display_tails.values().sum::<usize>(), 1_304 + 582);
+            assert_eq!(
+                display_tails
+                    .iter()
+                    .filter(|(t, _)| **t != [0, 0, 255, 255])
+                    .map(|(_, n)| n)
+                    .sum::<usize>(),
+                12
+            );
+        } else {
+            assert_eq!(
+                tails.keys().copied().collect::<Vec<_>>(),
+                [[255, 255, 0, 0], [255, 255, 1, 0]]
+            );
+            assert_eq!(tails[&[255, 255, 1, 0]], 177);
+            assert_eq!(conditions.len(), 8);
+            assert_eq!(display_tails.values().sum::<usize>(), 421_253 + 3_266 + 800);
+            assert_eq!(
+                display_tails
+                    .iter()
+                    .filter(|(t, _)| **t != [0, 0, 255, 255])
+                    .map(|(_, n)| n)
+                    .sum::<usize>(),
+                3
+            );
+        }
+    }
+    // 945 maps: the region index within the type is the per-type counter on all 45,121 regions; the number at +44 is
+    // unique in every map and is 0 to n-1 in 419; the event number at +8 equals the record index on 367 of 9,211 events,
+    // is unique in every map and dense in 731; the event's index within its type is the counter on all but the two events of
+    // type 0xffffffff
+    assert_eq!((files, regions, region_counter), (945, 45_121, 45_121));
+    assert_eq!((numbers_unique, numbers_dense), (945, 419));
+    assert_eq!((events, event_counter, event_is_index), (9_211, 9_209, 367));
+    assert_eq!((event_ids_unique, event_ids_dense), (945, 731));
+    Ok(())
+}

@@ -962,6 +962,150 @@ pub struct PartGrass {
     pub ids: [i32; 6],
 }
 
+/// The groups a part is drawn and displayed under, and the collision groups it answers to: the block the part header's
+/// first payload slot (+80) names, as stored. Sekiro's block is 388 bytes (map pieces, objects, enemies and collisions;
+/// players, placeholders and connect collisions store none), Elden Ring's 392 (every kind); the first 192 bytes are the
+/// same in both: eight display-group words, eight draw-group words and 32 collision-mask words. What the groups do
+/// (whether a part with no draw group is always drawn, how a collision's display groups meet a part's draw groups) is
+/// the game's, not the file's, and is not read here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DrawInfo {
+    /// The eight display-group words (+0).
+    pub display_groups: [u32; 8],
+    /// The eight draw-group words (+32).
+    pub draw_groups: [u32; 8],
+    /// The 32 collision-mask words (+64).
+    pub collision_mask: [u32; 32],
+    /// The four bytes at +192: the first two are 0 or 1 in both games, the third 0 or 2 and the fourth 0, 1 or 2 in Elden
+    /// Ring's, 0 in Sekiro's. Their meaning is not known.
+    pub conditions: [u8; 4],
+    /// The four bytes at +196, as stored. Sekiro's are 0. Elden Ring's are `[0xff, 0xff, b, 0]` with `b` 0 on all but
+    /// 177 map pieces (1): a signed word of -1, then one byte. The rest of the block (from +200) is zero in both games.
+    pub tail: [u8; 4],
+}
+
+/// The second block a part may store (the header's slot at +88), 72 bytes: Elden Ring's assets and the collisions and
+/// connect collisions of both games. A signed word, eight display-group words, four bytes, and 32 zero bytes. As
+/// stored; what the word and the groups do is the game's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DisplayInfo2 {
+    /// The word at +0 (-1 on every Elden Ring asset).
+    pub condition: i32,
+    /// The eight display-group words (+4).
+    pub display_groups: [u32; 8],
+    /// The four bytes at +36, as stored: `[0, 0, 0xff, 0xff]` on all but 15 connect collisions (their first byte is 1 or
+    /// their third byte another value).
+    pub tail: [u8; 4],
+}
+
+/// The draw and display blocks one part stores ([`MapLayout::draw_infos`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PartDrawInfo {
+    /// The part's index in the layout's parts ([`Part::index`]).
+    pub part: usize,
+    /// The block of the header's slot at +80, where the part stores one.
+    pub draw: Option<DrawInfo>,
+    /// The block of the header's slot at +88, where the part stores one.
+    pub display2: Option<DisplayInfo2>,
+}
+
+impl MapLayout {
+    /// The draw and display groups of every part that stores either block, in part order. A block that is not the
+    /// length of its generation's (388 or 392 bytes and 72), or has data where the format holds zeros, is refused at its
+    /// field.
+    pub fn draw_infos(&self) -> Result<Vec<PartDrawInfo>> {
+        let (first, slots) = self.generation.part_payloads;
+        let draw_len = if self.generation.name == Generation::SEKIRO.name {
+            388
+        } else {
+            392
+        };
+        let mut out = Vec::new();
+        for part in &self.parts {
+            let data = self
+                .sections
+                .get(5)
+                .and_then(|s| s.records.get(part.index))
+                .ok_or_else(|| invalid("MSB part", part.index, "no record"))?;
+            let r = View {
+                data,
+                format: "MSB part",
+                be: false,
+                base: self.sections.get(5).map_or(0, |s| s.base(part.index)),
+            };
+            let pointers = (0..slots)
+                .map(|i| r.size(r.element(first, i, 8)?))
+                .collect::<Result<Vec<_>>>()?;
+            // a block runs to the next higher block's start, else to the record's end
+            let block = |slot: usize, len: usize, format: &'static str| -> Result<Option<View<'_>>> {
+                let Some(&at) = pointers.get(slot).filter(|&&at| at != 0) else {
+                    return Ok(None);
+                };
+                let end = pointers
+                    .iter()
+                    .copied()
+                    .filter(|&p| p > at)
+                    .min()
+                    .unwrap_or(r.data.len());
+                if end.saturating_sub(at) != len {
+                    return Err(r.err(
+                        r.element(first, slot, 8)?,
+                        format!("{format} of {} bytes, {len} expected", end.saturating_sub(at)),
+                    ));
+                }
+                r.sub(at, len, format).map(Some)
+            };
+            let words = |b: &View<'_>, at: usize, out: &mut [u32]| -> Result<()> {
+                for (i, w) in out.iter_mut().enumerate() {
+                    *w = b.u32(b.element(at, i, 4)?)?;
+                }
+                Ok(())
+            };
+            let tail = |b: &View<'_>, at: usize| -> Result<[u8; 4]> {
+                b.slice(at, 4)?.try_into().map_err(|_| b.err(at, "four bytes"))
+            };
+            let draw = match block(0, draw_len, "MSB draw info")? {
+                None => None,
+                Some(b) => {
+                    let mut info = DrawInfo {
+                        display_groups: [0; 8],
+                        draw_groups: [0; 8],
+                        collision_mask: [0; 32],
+                        conditions: tail(&b, 192)?,
+                        tail: tail(&b, 196)?,
+                    };
+                    words(&b, 0, &mut info.display_groups)?;
+                    words(&b, 32, &mut info.draw_groups)?;
+                    words(&b, 64, &mut info.collision_mask)?;
+                    b.expect(200, &vec![0; draw_len.saturating_sub(200)])?;
+                    Some(info)
+                }
+            };
+            let display2 = match block(1, 72, "MSB display info")? {
+                None => None,
+                Some(b) => {
+                    let mut info = DisplayInfo2 {
+                        condition: b.u32(0)? as i32,
+                        display_groups: [0; 8],
+                        tail: tail(&b, 36)?,
+                    };
+                    words(&b, 4, &mut info.display_groups)?;
+                    b.expect(40, &[0; 32])?;
+                    Some(info)
+                }
+            };
+            if draw.is_some() || display2.is_some() {
+                out.push(PartDrawInfo {
+                    part: part.index,
+                    draw,
+                    display2,
+                });
+            }
+        }
+        Ok(out)
+    }
+}
+
 /// A checkpoint/warp spawn region (type 8), position and rotation as stored in the layout's common frame. Its facing
 /// convention and human-readable labels are the caller's to choose.
 #[derive(Clone, Debug)]
@@ -1093,8 +1237,8 @@ pub enum RegionShape {
 
 /// One region of the layout as stored (`POINT_PARAM_ST`): what every type
 /// shares, and the type's own data as bytes. SoulsFormats' `MSBS`/`MSBE` `Region` read the header alike: name offset at
-/// +0, type at +8, the index at +12, the shape at +16, position at +20, rotation (degrees) at +32, the shape data
-/// offset at +72, the entity block offset at +80 (an activation part index, then the entity ID) and the type data
+/// +0, type at +8, the index within the type at +12, the shape at +16, position at +20, rotation (degrees) at +32, the
+/// shape data offset at +72, the entity block offset at +80 (an activation part index, then the entity ID) and the type data
 /// offset at +88. What a type's data holds (a sound's id, an effect, a message) is per type and is not read: the
 /// bytes are kept, from the type data offset to the end of the type data: the record's end in Sekiro, the extra block
 /// ([`EXTRA_BLOCK`], pointer at +96) in Elden Ring.
@@ -1106,6 +1250,12 @@ pub struct Region {
     pub name: String,
     /// The type code as stored.
     pub type_code: u32,
+    /// The word at +12: the region's index among the regions of its type, counted in file order from 0 (all 45,121
+    /// regions of Sekiro's and Elden Ring's maps).
+    pub index_in_type: u32,
+    /// The word at +44: a number unique within the file (all 945 maps), not the record's index and not dense (419 maps
+    /// number their regions 0 to n-1, in no order the file keeps).
+    pub number: i32,
     /// The type's name where SoulsFormats names it ([`Generation::region_type`]).
     pub type_name: Option<&'static str>,
     /// The shape the region marks out.
@@ -1151,6 +1301,10 @@ pub struct Event {
     pub event_id: i32,
     /// The type code as stored.
     pub type_code: u32,
+    /// The word at +16: the event's index among the events of its type, counted in file order from 0 (9,209 of the 9,211
+    /// events of Sekiro's and Elden Ring's maps; the other two have type `0xffffffff`, no type data, and another
+    /// number).
+    pub index_in_type: u32,
     /// The type's name where SoulsFormats names it ([`Generation::event_type`]).
     pub type_name: Option<&'static str>,
     /// The name of the part it names, if any.
@@ -1487,6 +1641,8 @@ impl MapLayout {
                 index,
                 name,
                 type_code,
+                index_in_type: r.u32(12)?,
+                number: r.u32(44)? as i32,
                 type_name: self.generation.region_type(type_code),
                 shape,
                 position: vector(&r, 20)?,
@@ -1567,6 +1723,7 @@ impl MapLayout {
                 name,
                 event_id: r.u32(8)? as i32,
                 type_code,
+                index_in_type: r.u32(16)?,
                 type_name: self.generation.event_type(type_code),
                 part: named(r.u32(base)? as i32, &|i| {
                     self.parts.get(i).map(|p| p.name.clone())
@@ -2073,5 +2230,183 @@ mod region_tests {
             vec![region_in(&Generation::SEKIRO, "S", 5, 0, &[], 1, &data)],
         );
         assert!(bad.sfx_region(&bad.map_regions().unwrap()[0]).is_err());
+    }
+
+    /// A Sekiro event record: the header, then the name and the base block (part, region, entity).
+    fn event_in_sekiro(id: u32, type_code: u32, index_in_type: u32) -> Vec<u8> {
+        let name = utf16("Ev");
+        let mut r = vec![0u8; 40];
+        r[0..8].copy_from_slice(&40u64.to_le_bytes());
+        r[8..12].copy_from_slice(&id.to_le_bytes());
+        r[12..16].copy_from_slice(&type_code.to_le_bytes());
+        r[16..20].copy_from_slice(&index_in_type.to_le_bytes());
+        r[24..32].copy_from_slice(&((40 + name.len()) as u64).to_le_bytes());
+        r.extend(name);
+        r.extend((-1i32).to_le_bytes());
+        r.extend((-1i32).to_le_bytes());
+        r.extend(7i32.to_le_bytes());
+        r
+    }
+
+    /// The word at +12 of a region and of an event (+16) is its index within its type, the region's word at +44 a
+    /// number of its own; both are read as stored and the event's +8 stays its own number.
+    #[test]
+    fn the_index_in_type_and_the_numbers_are_read_as_stored() {
+        let mut first = region_in(&Generation::SEKIRO, "A", 4, 0, &[], 1, &[]);
+        first[12..16].copy_from_slice(&3u32.to_le_bytes());
+        first[44..48].copy_from_slice(&(-5i32).to_le_bytes());
+        let mut second = region_in(&Generation::SEKIRO, "B", 4, 0, &[], 2, &[]);
+        second[44..48].copy_from_slice(&9u32.to_le_bytes());
+        let mut layout = layout(&Generation::SEKIRO, vec![first, second]);
+        layout.sections[1].records = vec![event_in_sekiro(40, 9, 2), event_in_sekiro(41, u32::MAX, 17)];
+        let regions = layout.map_regions().unwrap();
+        assert_eq!(
+            regions
+                .iter()
+                .map(|r| (r.index_in_type, r.number))
+                .collect::<Vec<_>>(),
+            [(3, -5), (0, 9)]
+        );
+        let events = layout.map_events().unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .map(|e| (e.event_id, e.index_in_type, e.entity_id))
+                .collect::<Vec<_>>(),
+            [(40, 2, 7), (41, 17, 7)]
+        );
+    }
+
+    /// A part record with a draw block and a display block after its header, pointed at from the first two payload slots.
+    fn part_with_blocks(draw: Option<Vec<u8>>, display2: Option<Vec<u8>>, header: usize) -> Vec<u8> {
+        let mut r = vec![0u8; header];
+        for (slot, block) in [draw, display2].into_iter().enumerate() {
+            if let Some(block) = block {
+                let at = r.len() as u64;
+                r[80 + 8 * slot..88 + 8 * slot].copy_from_slice(&at.to_le_bytes());
+                r.extend(block);
+            }
+        }
+        r
+    }
+
+    fn draw_block(len: usize) -> Vec<u8> {
+        let mut b = vec![0u8; len];
+        for w in 0..48u32 {
+            let at = 4 * w as usize;
+            b[at..at + 4].copy_from_slice(&(w + 1).to_le_bytes());
+        }
+        b[192..196].copy_from_slice(&[1, 0, 2, 1]);
+        b[196..200].copy_from_slice(&[0xff, 0xff, 1, 0]);
+        b[200..].fill(0);
+        b
+    }
+
+    fn display_block() -> Vec<u8> {
+        let mut b = vec![0u8; 72];
+        b[0..4].copy_from_slice(&(-1i32).to_le_bytes());
+        for i in 0..8usize {
+            b[4 + 4 * i..8 + 4 * i].copy_from_slice(&(100 + i as u32).to_le_bytes());
+        }
+        b[36..40].copy_from_slice(&[1, 0, 0xdc, 0]);
+        b
+    }
+
+    fn layout_of_parts(generation: &'static Generation, records: Vec<Vec<u8>>) -> MapLayout {
+        let mut layout = layout(generation, Vec::new());
+        for index in 0..records.len() {
+            layout.parts.push(Part {
+                index,
+                name: format!("p{index}"),
+                kind: PartKind::MapPiece,
+                model: None,
+                hit_filter: None,
+                npc_param: None,
+                sfx_param_relative_id: None,
+                position: [0.; 3],
+                rotation_degrees: [0.; 3],
+                scale: [1.; 3],
+                entity_id: -1,
+                entity_group_ids: [-1; 8],
+                shadows: Default::default(),
+                draw: Default::default(),
+                tile_load: None,
+            });
+        }
+        layout.sections[5].records = records;
+        layout
+    }
+
+    /// The draw block (388 bytes in Sekiro, 392 in Elden Ring) holds eight display words, eight draw words, 32 mask words
+    /// and two four-byte fields; the second block holds a word, eight display words and four bytes. A part with neither
+    /// is left out.
+    #[test]
+    fn a_parts_draw_and_display_blocks_are_read_as_stored() {
+        for (generation, len, header) in [
+            (&Generation::SEKIRO, 388, 160),
+            (&Generation::ELDEN_RING, 392, 192),
+        ] {
+            let layout = layout_of_parts(
+                generation,
+                vec![
+                    part_with_blocks(Some(draw_block(len)), None, header),
+                    part_with_blocks(None, None, header),
+                    part_with_blocks(Some(draw_block(len)), Some(display_block()), header),
+                    part_with_blocks(None, Some(display_block()), header),
+                ],
+            );
+            let infos = layout.draw_infos().unwrap();
+            assert_eq!(infos.iter().map(|i| i.part).collect::<Vec<_>>(), [0, 2, 3]);
+            let draw = infos[0].draw.unwrap();
+            assert_eq!(draw.display_groups, [1, 2, 3, 4, 5, 6, 7, 8]);
+            assert_eq!(draw.draw_groups, [9, 10, 11, 12, 13, 14, 15, 16]);
+            assert_eq!(draw.collision_mask[0], 17);
+            assert_eq!(draw.collision_mask[31], 48);
+            assert_eq!((draw.conditions, draw.tail), ([1, 0, 2, 1], [0xff, 0xff, 1, 0]));
+            assert_eq!(infos[0].display2, None);
+            let display = infos[1].display2.unwrap();
+            assert_eq!(display.condition, -1);
+            assert_eq!(display.display_groups, [100, 101, 102, 103, 104, 105, 106, 107]);
+            assert_eq!(display.tail, [1, 0, 0xdc, 0]);
+            assert_eq!(infos[1].draw, Some(draw));
+            assert_eq!(infos[2].draw, None);
+        }
+    }
+
+    /// A block of another length, or data in the bytes the format holds zero, is refused at the block's slot or field.
+    #[test]
+    fn a_draw_block_of_another_length_or_with_data_in_its_zero_bytes_is_refused() {
+        let header = 160;
+        for len in [387, 389, 392] {
+            let layout = layout_of_parts(
+                &Generation::SEKIRO,
+                vec![part_with_blocks(Some(draw_block(len)), None, header)],
+            );
+            let e = layout.draw_infos().unwrap_err().to_string();
+            assert!(
+                e.starts_with("MSB part at 0x50") && e.contains("draw info"),
+                "{e}"
+            );
+        }
+        let mut block = draw_block(388);
+        block[300] = 1;
+        let e = layout_of_parts(
+            &Generation::SEKIRO,
+            vec![part_with_blocks(Some(block), None, header)],
+        )
+        .draw_infos()
+        .unwrap_err()
+        .to_string();
+        assert!(e.starts_with("MSB draw info at 0x"), "{e}");
+        let mut block = display_block();
+        block[50] = 1;
+        let e = layout_of_parts(
+            &Generation::SEKIRO,
+            vec![part_with_blocks(None, Some(block), header)],
+        )
+        .draw_infos()
+        .unwrap_err()
+        .to_string();
+        assert!(e.starts_with("MSB display info at 0x"), "{e}");
     }
 }
