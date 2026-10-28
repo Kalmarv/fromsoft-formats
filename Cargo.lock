@@ -185,9 +185,9 @@ dependencies = [
 [[package]]
 name = "dxcontainer"
 version = "0.2.0"
-source = "git+https://github.com/Kalmarv/dx?rev=91c6b5e1ddcb71472414c92759911949428bba93#91c6b5e1ddcb71472414c92759911949428bba93"
+source = "git+https://github.com/Kalmarv/dx?rev=f5b2af5b55ae06537cfce386102ee63c99b5a641#f5b2af5b55ae06537cfce386102ee63c99b5a641"
 dependencies = [
- "primase-foundations 0.2.0",
+ "primase-foundations",
  "thiserror",
 ]
 
@@ -251,7 +251,7 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "fromsoft-formats"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "aes",
  "dxcontainer",
@@ -259,7 +259,7 @@ dependencies = [
  "half",
  "havok-formats",
  "num-bigint",
- "primase-foundations 0.2.1",
+ "primase-foundations",
  "primase-testdata",
  "serde",
  "serde_json",
@@ -375,9 +375,9 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 [[package]]
 name = "havok-formats"
 version = "0.4.0"
-source = "git+https://github.com/Kalmarv/havok-formats?rev=d02a031aa67c3893a1ff7225703c5ef8923127ee#d02a031aa67c3893a1ff7225703c5ef8923127ee"
+source = "git+https://github.com/Kalmarv/havok-formats?rev=e1d130e1addc44864dc1fee71ea44a20d3a6d91d#e1d130e1addc44864dc1fee71ea44a20d3a6d91d"
 dependencies = [
- "primase-foundations 0.2.0",
+ "primase-foundations",
  "thiserror",
 ]
 
@@ -554,15 +554,6 @@ name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
-
-[[package]]
-name = "primase-foundations"
-version = "0.2.0"
-source = "git+https://github.com/Kalmarv/primase-foundations?rev=b3a3d4b3a892b8342fda081ab4449bb57052a2f8#b3a3d4b3a892b8342fda081ab4449bb57052a2f8"
-dependencies = [
- "half",
- "thiserror",
-]
 
 [[package]]
 name = "primase-foundations"

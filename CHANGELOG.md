@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 (2026-10-27)
 
 - DCX: a Kraken envelope's Oodle payload is walked block by block before it is decoded
   (`primase_foundations::compress::oodle_framing::walk`), and an envelope whose blocks do not consume exactly the
@@ -9,6 +9,10 @@
   itself decodes a payload with bytes added after its last block. All 144,194 Kraken payloads of Sekiro and Elden Ring
   pass; DFLT and ZSTD envelopes are unchanged.
 - Depends on `primase-foundations` 0.2.1.
+- MTD: non-zero alignment padding after a marker is read past and recorded in `MaterialDefinition::padding`
+  (`PaddingAnomaly { offset, bytes }`) instead of refusing the file; every other check is unchanged. It is empty on
+  every MTD of Sekiro and Elden Ring but `c9757_crystal.mtd` (19 runs). Breaking: a struct literal of
+  `MaterialDefinition` needs the field.
 
 ## 0.4.0 (2026-10-27)
 
