@@ -12,8 +12,8 @@
 
 use crate::{
     Result,
-    put::Out,
     matbin::{Material, Value},
+    put::Out,
 };
 
 const FORMAT: &str = "MATBIN";

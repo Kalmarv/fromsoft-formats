@@ -18,11 +18,10 @@
 )]
 
 use crate::{
-    Result,
-    put::Out,
-    invalid,
+    Result, invalid,
     mapid::MapId,
     msb::{FlagByte, Generation, MapLayout, Part, PartKind},
+    put::Out,
 };
 
 const FORMAT: &str = "MSB";

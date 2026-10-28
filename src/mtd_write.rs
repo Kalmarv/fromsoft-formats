@@ -12,8 +12,8 @@
 
 use crate::{
     Result,
-    put::Out,
     mtd::{BlockLength, MaterialDefinition, PaddingAnomaly, Texture, Value},
+    put::Out,
 };
 
 const FORMAT: &str = "MTD";

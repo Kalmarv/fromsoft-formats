@@ -2,10 +2,6 @@
 //! order, pads and aligns with zeros and patches placeholders once their value is known, and the checked arithmetic and
 //! narrowing of the sizes and offsets a file stores. Every refusal names the format and the offset the writer had
 //! reached.
-
-//! The byte sink the writers of MTD, MATBIN, EMEVD, TAE, MSB and FLVER share ([`Out`]): little-endian puts,
-//! zero alignment, placeholders patched once their value is known, and counts and offsets that must fit the 32-bit
-//! words a file stores them in.
 use crate::{Error, Result, invalid};
 
 /// A growing output buffer of one format, little- or big-endian.
@@ -54,11 +50,6 @@ impl Out {
     /// `n` as the 32-bit word a file stores it in, or a refusal that names `what`.
     pub fn word(&self, n: usize, what: &str) -> Result<u32> {
         u32::try_from(n).map_err(|_| self.err(format!("{what} {n} does not fit a 32-bit word")))
-    }
-
-    /// `n` as a signed 32-bit word, or a refusal that names `what`.
-    pub fn signed(&self, n: usize, what: &str) -> Result<i32> {
-        i32::try_from(n).map_err(|_| self.err(format!("{what} {n} does not fit a signed 32-bit word")))
     }
 
     /// `n` as an unsigned 64-bit word, or a refusal that names `what`.
@@ -275,13 +266,13 @@ mod tests {
         o.align(4);
         o.u64(1);
         o.patch_u32(0, 0xdead_beef).unwrap();
-        assert_eq!(
-            o.as_slice(),
-            [0xef, 0xbe, 0xad, 0xde, 1, 2, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]
-        );
         assert!(o.patch_u32(13, 1).is_err());
         assert!(o.patch_u64(usize::MAX, 1).is_err());
         assert!(o.word(1usize << 33, "x").is_err());
+        assert_eq!(
+            o.into_bytes(),
+            [0xef, 0xbe, 0xad, 0xde, 1, 2, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]
+        );
     }
 
     #[test]
