@@ -194,6 +194,7 @@ fn restarts_and_degenerate_joints_preserve_reference_order() {
         flags: 0,
         strip: true,
         cull: true,
+        unknown_06: 0,
         indices: vec![0, 1, 2, 3, 3, 4, 5, 0xffff, 6, 7, 8, 9],
     };
     assert_eq!(f.triangulate(), [0, 1, 2, 3, 2, 1, 3, 4, 5, 6, 7, 8, 9, 8, 7]);
@@ -204,6 +205,7 @@ fn level_of_detail_zero_excludes_every_coarser_level_and_motion_blur() {
         flags,
         strip: false,
         cull: true,
+        unknown_06: 0,
         indices: vec![],
     };
     // Edge-compressed (bit 30) LOD0 face sets stay LOD0.
@@ -458,4 +460,83 @@ fn speedtree_layouts_are_read_strictly() {
     let mut b = speedtree_fixture();
     b[0x6a..0x6c].copy_from_slice(&[0, 0]);
     assert!(Model::read(&b).is_err());
+}
+
+#[test]
+fn a_face_set_keeps_the_word_after_its_cull_byte() {
+    let mut bytes = fixture();
+    assert_eq!(Model::read(&bytes).unwrap().meshes[0].faces[0].unknown_06, 0);
+    bytes[214..216].copy_from_slice(&371u16.to_le_bytes());
+    assert_eq!(Model::read(&bytes).unwrap().meshes[0].faces[0].unknown_06, 371);
+}
+
+/// One bone of [`bones_file`]: its parent, first child, next and previous sibling.
+type Links = (i16, i16, i16, i16);
+
+/// A file of version 0x20016 with only bones: each record states its links, the sentinel bounding box (a box that is
+/// not valid) and the flags; the names are one empty string.
+fn bones_file(bones: &[Links]) -> Vec<u8> {
+    let names = 128 + 128 * bones.len();
+    let mut b = vec![0u8; names + 2];
+    b[..8].copy_from_slice(b"FLVER\0L\0");
+    put(&mut b, 8, 0x20016);
+    let end = b.len() as u32;
+    put(&mut b, 12, end);
+    put(&mut b, 28, bones.len() as u32);
+    b[73] = 1;
+    for (i, &(parent, child, next, previous)) in bones.iter().enumerate() {
+        let o = 128 + 128 * i;
+        put(&mut b, o + 12, names as u32);
+        for (at, link) in [(28, parent), (30, child), (44, next), (46, previous)] {
+            b[o + at..o + at + 2].copy_from_slice(&link.to_le_bytes());
+        }
+        for axis in 0..3 {
+            put(&mut b, o + 48 + 4 * axis, f32::MAX.to_bits());
+            put(&mut b, o + 64 + 4 * axis, (-f32::MAX).to_bits());
+        }
+        put(&mut b, o + 60, 2 + 4 * i as u32);
+    }
+    b
+}
+
+/// A bone states its first child, its next and previous sibling, its bounding box and its flags; following the child and
+/// then the siblings visits the bones that name it as their parent, in an order that need not be the bones'.
+#[test]
+fn a_bone_keeps_its_links_bounds_and_flags_and_the_child_chains_are_checked() {
+    // 0 is the root; its children are 1, 3 and 2 in that order; 1 has the child 4
+    let tree: Vec<Links> = vec![
+        (-1, 1, -1, -1),
+        (0, 4, 3, -1),
+        (0, -1, -1, 3),
+        (0, -1, 2, 1),
+        (1, -1, -1, -1),
+    ];
+    let model = Model::read(&bones_file(&tree)).unwrap();
+    assert_eq!(model.bones.len(), 5);
+    let links: Vec<_> = model
+        .bones
+        .iter()
+        .map(|b| (b.parent, b.child, b.next_sibling, b.previous_sibling))
+        .collect();
+    assert_eq!(links, tree);
+    assert_eq!(model.bones[0].bounds_min, [f32::MAX; 3]);
+    assert_eq!(model.bones[0].bounds_max, [-f32::MAX; 3]);
+    assert_eq!(
+        model.bones.iter().map(|b| b.flags).collect::<Vec<_>>(),
+        [2, 6, 10, 14, 18]
+    );
+    // a chain that misses a child, runs past the children, goes around, names a bone of another parent, does not invert
+    // `next` or leaves the table is refused at the bone
+    let broken: [(&str, Vec<Links>); 6] = [
+        ("misses", vec![(-1, 1, -1, -1), (0, -1, -1, -1), (0, -1, -1, -1)]),
+        ("around", vec![(-1, 1, -1, -1), (0, -1, 1, -1)]),
+        ("parent", vec![(-1, 1, -1, -1), (0, -1, 2, -1), (1, -1, -1, 1)]),
+        ("inverts", vec![(-1, 1, -1, -1), (0, -1, 2, -1), (0, -1, -1, -1)]),
+        ("leaves", vec![(-1, 7, -1, -1), (0, -1, -1, -1)]),
+        ("negative", vec![(-1, -2, -1, -1)]),
+    ];
+    for (what, bones) in broken {
+        let e = Model::read(&bones_file(&bones)).unwrap_err().to_string();
+        assert!(e.starts_with("FLVER at 0x9e"), "{what}: {e}");
+    }
 }

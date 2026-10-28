@@ -124,6 +124,9 @@ pub struct FaceSet {
     pub strip: bool,
     /// Whether back faces are culled.
     pub cull: bool,
+    /// The 16-bit word at +6 of the record, as stored: 1 on 77.9% of Sekiro's face sets and 53.8% of Elden Ring's, and up
+    /// to 371 and 285 on the others. Not a pad; what it counts is not known.
+    pub unknown_06: u16,
     /// The vertex indices.
     pub indices: Vec<u32>,
 }
@@ -193,6 +196,24 @@ pub struct Bone {
     pub scale: [f32; 3],
     /// Its parent's index in [`Model::bones`], -1 for none.
     pub parent: i16,
+    /// Its first child's index, -1 for none: following `child` and then [`Bone::next_sibling`] visits exactly the bones
+    /// whose parent this is (checked when the model is read; the first child is the lowest-indexed child on all but 75
+    /// of Sekiro's bones and 37 of Elden Ring's).
+    pub child: i16,
+    /// The index of the next bone with the same parent in the chain that starts at the parent's `child`, -1 at its end.
+    pub next_sibling: i16,
+    /// The inverse of [`Bone::next_sibling`] (checked for the bones in a parent's child chain), -1 at the start.
+    pub previous_sibling: i16,
+    /// The minimum corner of the bone's bounding box, as stored: either a valid box's, or +`f32::MAX` on every axis where
+    /// the bone has none (62,785 of Sekiro's 129,270 bones and 396,492 of Elden Ring's 535,503).
+    pub bounds_min: [f32; 3],
+    /// The maximum corner: a valid box's, or -`f32::MAX` on every axis where the bone has none.
+    pub bounds_max: [f32; 3],
+    /// The word at +60: only its low four bits are used, in Sekiro's and Elden Ring's files: 1 `UNUSED` (a bone without
+    /// children that no mesh or dummy names), 2 `DUMMY` (a dummy names it: always set for the bones a dummy names in
+    /// Elden Ring's files, not for every one in Sekiro's), 4 and 8, whose use is not known (SoulsFormatsNEXT:
+    /// `cXXXX` and `MESH`).
+    pub flags: u32,
 }
 /// A dummy polygon (SoulsFormatsNEXT: "used for hit detection, particle effect locations, and much more"): a named-by-number
 /// point with a direction, in the model, that the game attaches things to (a weapon to a hand, an effect to a muzzle).
@@ -391,7 +412,7 @@ impl Model {
         let texture_count = count(&v, 88)?;
         let dummy = table(&v, &mut pos, dummy_count, 64)?;
         let mat = table(&v, &mut pos, mat_count, 32)?;
-        let bone = table(&v, &mut pos, bone_count, 128)?;
+        let bone_table = table(&v, &mut pos, bone_count, 128)?;
         let mesh = table(&v, &mut pos, mesh_count, 48)?;
         let face = table(&v, &mut pos, face_count, 32)?;
         let vb = table(&v, &mut pos, vb_count, 32)?;
@@ -438,7 +459,7 @@ impl Model {
         }
         let mut bones = Vec::new();
         for i in 0..bone_count {
-            let o = v.element(bone, i, 128)?;
+            let o = v.element(bone_table, i, 128)?;
             let name = string(&meta, count_at(&v, o, 12)?, &budget)?;
             v.expect_at(o, 76, &[0; 52])?;
             bones.push(Bone {
@@ -447,7 +468,48 @@ impl Model {
                 rotation: [float_at(&v, o, 16)?, float_at(&v, o, 20)?, float_at(&v, o, 24)?],
                 scale: [float_at(&v, o, 32)?, float_at(&v, o, 36)?, float_at(&v, o, 40)?],
                 parent: v.u16_at(o, 28)? as i16,
+                child: v.u16_at(o, 30)? as i16,
+                next_sibling: v.u16_at(o, 44)? as i16,
+                previous_sibling: v.u16_at(o, 46)? as i16,
+                bounds_min: [float_at(&v, o, 48)?, float_at(&v, o, 52)?, float_at(&v, o, 56)?],
+                bounds_max: [float_at(&v, o, 64)?, float_at(&v, o, 68)?, float_at(&v, o, 72)?],
+                flags: v.u32_at(o, 60)?,
             });
+        }
+        // each bone's children, followed from its `child` through `next_sibling`, are the bones that name it as parent
+        let mut children = vec![0usize; bones.len()];
+        for bone in &bones {
+            if let Some(count) = usize::try_from(bone.parent)
+                .ok()
+                .and_then(|p| children.get_mut(p))
+            {
+                *count = count.saturating_add(1);
+            }
+        }
+        for (i, bone) in bones.iter().enumerate() {
+            let at = v.element(bone_table, i, 128)?;
+            let mut next = bone.child;
+            let mut previous = -1i16;
+            let mut visited = 0usize;
+            let wanted = children.get(i).copied().unwrap_or(0);
+            while next != -1 {
+                let child = usize::try_from(next)
+                    .ok()
+                    .and_then(|c| bones.get(c))
+                    .ok_or_else(|| v.err(at.saturating_add(30), "child or sibling index out of range"))?;
+                visited = visited.saturating_add(1);
+                if visited > wanted || usize::try_from(child.parent).ok() != Some(i) {
+                    return Err(v.err(at.saturating_add(30), "child chain leaves the bone's children"));
+                }
+                if child.previous_sibling != previous {
+                    return Err(v.err(at.saturating_add(30), "previous sibling does not invert next"));
+                }
+                previous = next;
+                next = child.next_sibling;
+            }
+            if visited != wanted {
+                return Err(v.err(at.saturating_add(30), "child chain misses a child"));
+            }
         }
         let speedtree = is_speedtree(data);
         let mut layouts = Vec::new();
@@ -630,6 +692,7 @@ impl Model {
                 flags,
                 strip: v.boolean_at(o, 4)?,
                 cull: v.boolean_at(o, 5)?,
+                unknown_06: v.u16_at(o, 6)?,
                 indices,
             }));
         }

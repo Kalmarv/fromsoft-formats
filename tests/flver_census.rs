@@ -8,7 +8,7 @@ mod inputs;
 use fromsoft_formats::{Binder, Game, NameDictionary, bhd::PathHash, dcx::Decoder, flver::Model};
 
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 mod common;
 #[allow(unsafe_code)]
@@ -38,6 +38,77 @@ struct Counts {
     agreed_rejections: usize,
     /// SpeedTree FLVERs the reference refuses and ours reads.
     speedtree_read: usize,
+    /// What the bones and face sets of every model read hold, by name (see [`tally`]).
+    tallies: BTreeMap<&'static str, u64>,
+}
+/// Counts the fields of `model`'s bones and face sets that the reference census does not compare: the links, the bounding
+/// box and the flags of the bones, and the word at +6 of the face sets.
+fn tally(model: &Model, counts: &mut Counts) {
+    let mut add = |key: &'static str, n: bool| {
+        *counts.tallies.entry(key).or_default() += u64::from(n);
+    };
+    let mesh_nodes: BTreeSet<usize> = model
+        .meshes
+        .iter()
+        .filter_map(|m| usize::try_from(m.node).ok())
+        .collect();
+    let dummy_nodes: BTreeSet<usize> = model
+        .dummies
+        .iter()
+        .flat_map(|d| [d.parent_bone, d.attach_bone])
+        .filter_map(|b| usize::try_from(b).ok())
+        .collect();
+    for (i, bone) in model.bones.iter().enumerate() {
+        add("bones", true);
+        let valid = bone.bounds_min.iter().zip(&bone.bounds_max).all(|(a, b)| a <= b);
+        let sentinel = bone.bounds_min == [f32::MAX; 3] && bone.bounds_max == [-f32::MAX; 3];
+        add("box valid", valid);
+        add("box sentinel", sentinel);
+        add("box neither", !valid && !sentinel);
+        let children: Vec<usize> = model
+            .bones
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| usize::try_from(b.parent) == Ok(i))
+            .map(|(j, _)| j)
+            .collect();
+        add("bones with children", !children.is_empty());
+        add(
+            "first child is not the lowest-indexed child",
+            children
+                .first()
+                .is_some_and(|&lowest| usize::try_from(bone.child) != Ok(lowest)),
+        );
+        add("flags above the low four bits", bone.flags & !0xf != 0);
+        let (unused, dummy) = (bone.flags & 1 != 0, bone.flags & 2 != 0);
+        let (named_by_mesh, named_by_dummy) = (mesh_nodes.contains(&i), dummy_nodes.contains(&i));
+        let leaf_unnamed = children.is_empty() && !named_by_mesh && !named_by_dummy;
+        add("bit 1 set", unused);
+        add(
+            "bit 1 set on a bone that has children or is named",
+            unused && !leaf_unnamed,
+        );
+        add("childless unnamed bones", leaf_unnamed);
+        add("childless unnamed bones without bit 1", leaf_unnamed && !unused);
+        add("bit 2 set", dummy);
+        add("bit 2 set on a bone no dummy names", dummy && !named_by_dummy);
+        add("bones a dummy names", named_by_dummy);
+        add("bones a dummy names without bit 2", named_by_dummy && !dummy);
+        add("bit 4 set", bone.flags & 4 != 0);
+        add("bit 8 set", bone.flags & 8 != 0);
+        add("bit 8 set on a mesh's node", bone.flags & 8 != 0 && named_by_mesh);
+    }
+    let mut maximum = 0;
+    for mesh in &model.meshes {
+        for face in &mesh.faces {
+            add("face sets", true);
+            add("face set word +6 is 1", face.unknown_06 == 1);
+            add("face set word +6 is not 0", face.unknown_06 != 0);
+            maximum = maximum.max(u64::from(face.unknown_06));
+        }
+    }
+    let seen = counts.tallies.entry("face set word +6 maximum").or_default();
+    *seen = (*seen).max(maximum);
 }
 /// Every mesh whose vertex hash differs from the reference's: collected so one run lists them all. The census visits
 /// models on several threads, so these are process-wide.
@@ -173,6 +244,7 @@ fn visit(
             return match Model::read(bytes) {
                 Ok(m) if m.speedtree => {
                     counts.speedtree_read += 1;
+                    tally(&m, counts);
                     Ok(())
                 }
                 Ok(_) => Err(format!("{id}: read, the reference refuses it: {theirs}").into()),
@@ -184,6 +256,7 @@ fn visit(
             };
         }
         let model = Model::read(bytes)?;
+        tally(&model, counts);
         assert_eq!(
             u64::from(model.version),
             want["version"].as_u64().ok_or("version")?
@@ -419,6 +492,51 @@ fn flver_models(
         expected.len(),
         failures.len()
     );
+    println!("{}: bones and face sets {:#?}", game.name(), counts.tallies);
+    // an independent census of the same models (a separate parser of the bone and face-set records): the bones' chains,
+    // boxes and flags, and the face sets' word at +6
+    let want: &[(&str, u64)] = match game {
+        Game::Sekiro => &[
+            ("bones", 129_270),
+            ("box valid", 66_485),
+            ("box sentinel", 62_785),
+            ("box neither", 0),
+            ("first child is not the lowest-indexed child", 75),
+            ("flags above the low four bits", 0),
+            ("bit 1 set", 50_370),
+            ("bit 1 set on a bone that has children or is named", 0),
+            ("bit 2 set", 10_341),
+            ("bit 2 set on a bone no dummy names", 1_964),
+            ("bones a dummy names without bit 2", 27),
+            ("face sets", 110_365),
+            ("face set word +6 is 1", 85_996),
+            ("face set word +6 maximum", 371),
+        ],
+        Game::EldenRing => &[
+            ("bones", 535_503),
+            ("box valid", 139_011),
+            ("box sentinel", 396_492),
+            ("box neither", 0),
+            ("first child is not the lowest-indexed child", 37),
+            ("flags above the low four bits", 0),
+            ("bit 1 set", 363_132),
+            ("bit 1 set on a bone that has children or is named", 0),
+            ("bit 2 set", 24_493),
+            ("bit 2 set on a bone no dummy names", 0),
+            ("bones a dummy names without bit 2", 771),
+            ("face sets", 277_113),
+            ("face set word +6 is 1", 149_048),
+            ("face set word +6 maximum", 285),
+        ],
+    };
+    for &(key, n) in want {
+        assert_eq!(
+            counts.tallies.get(key).copied().unwrap_or(0),
+            n,
+            "{}: {key}",
+            game.name()
+        );
+    }
     println!(
         "Packed normal/tangent components {}, reference-convention differences {}, maximum ULP {}",
         counts.normal_components, counts.normal_changed, counts.normal_max_ulp
