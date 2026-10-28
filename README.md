@@ -51,7 +51,7 @@ assert!(matches!(&err, Error::Invalid { format: "FLVER", offset: 0, .. }));
 println!("{err}");
 ```
 
-Add it with `cargo add fromsoft-formats` (or `fromsoft-formats = "0.8"` under `[dependencies]`). The API reference is on [docs.rs](https://docs.rs/fromsoft-formats).
+Add it with `cargo add fromsoft-formats` (or `fromsoft-formats = "0.9"` under `[dependencies]`). The API reference is on [docs.rs](https://docs.rs/fromsoft-formats).
 
 ## What it guarantees
 

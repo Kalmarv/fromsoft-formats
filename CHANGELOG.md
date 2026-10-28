@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.0 (2026-10-28)
+
+- Breaking: depends on havok-formats 0.8.0 (a breaking release: it reads the whole `hclClothData`), whose collision
+  types appear in this crate's API.
+
 ## 0.8.0 (2026-10-27)
 
 - Breaking: `msb::Region::index_in_type` (+12) and `Region::number` (+44), `msb::Event::index_in_type` (+16). The region index

@@ -164,8 +164,8 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>) -> Result<()> {
                                 let unread: BTreeSet<&str> = sims
                                     .iter()
                                     .flat_map(|s| &s.constraint_sets)
-                                    .filter_map(|s| match s {
-                                        havok_formats::cloth::ConstraintSet::Unread { class } => {
+                                    .filter_map(|s| match &s.kind {
+                                        havok_formats::cloth::ConstraintKind::Other { class } => {
                                             Some(class.as_str())
                                         }
                                         _ => None,
