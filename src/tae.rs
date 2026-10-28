@@ -1058,6 +1058,7 @@ mod tests {
             name: Some(format!("{id}.tae")),
             flags: 0,
             bytes,
+            wrap: None,
         }
     }
 
@@ -1067,6 +1068,7 @@ mod tests {
         let binder = Binder {
             version: [0; 8],
             format: 0,
+            layout: crate::binder::Layout::default(),
             files: vec![member(5_000_050, file()), member(9_999_999, Vec::new())],
         };
         let tae = Tae::read_member(&binder, &binder.files[0]).unwrap();
@@ -1078,6 +1080,7 @@ mod tests {
         let binder = Binder {
             version: [0; 8],
             format: 0,
+            layout: crate::binder::Layout::default(),
             files: vec![member(3_000_000, file()), member(5_000_050, file())],
         };
         assert_eq!(Tae::read_member(&binder, &binder.files[0]).unwrap().group, 0);

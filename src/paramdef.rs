@@ -1147,6 +1147,7 @@ mod tests {
             version: *v,
             format: 0,
             files: Vec::new(),
+            layout: crate::binder::Layout::default(),
         };
         assert_eq!(binder(b"11730034").regulation_number(), Some(11_730_034));
         assert_eq!(binder(b"07D7R6\0\0").regulation_number(), None);
