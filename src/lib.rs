@@ -76,6 +76,7 @@ pub mod archive;
 pub mod area;
 pub mod bhd;
 pub mod binder;
+pub mod blf;
 pub mod btl;
 mod bytes;
 pub mod clm2;

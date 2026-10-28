@@ -83,6 +83,30 @@ impl Binder {
                 .is_some_and(|n| crate::names::fold(n) == want)
         })
     }
+    /// The names of the binders a divided binder names as the rest of its character's: the stems (lower case) of its
+    /// `.txt` and `.blf` members whose file name starts with `prefix` (compared lower case), in the binder's order, each once.
+    /// A character's animations are kept in other binders (Sekiro's player `c0000.anibnd` holds the markers
+    /// `c0000_a000_hi.txt` ... for `c0000_a000_hi.anibnd`; Elden Ring's characters `c2010_div00.blf`, `c2010_div01.blf`
+    /// for `c2010_div00.anibnd` and `c2010_div01.anibnd`, the player's `.txt` as Sekiro's); whether a marker names a
+    /// binder the archive holds is the caller's to check (two of Elden Ring's player markers name none). The
+    /// `.blf` lists are read by [`crate::blf::LoadList`].
+    pub fn division_markers(&self, prefix: &str) -> Vec<String> {
+        let prefix = crate::names::fold(prefix);
+        let mut out: Vec<String> = Vec::new();
+        for file in &self.files {
+            let Some(name) = file.name.as_deref() else {
+                continue;
+            };
+            let leaf = crate::names::fold(name.rsplit(['/', '\\']).next().unwrap_or(name));
+            let Some(stem) = leaf.strip_suffix(".txt").or_else(|| leaf.strip_suffix(".blf")) else {
+                continue;
+            };
+            if stem.starts_with(&prefix) && !out.iter().any(|o| o == stem) {
+                out.push(stem.to_owned());
+            }
+        }
+        out
+    }
     /// Validate a split index and list names without touching its payload. Full
     /// payload bounds and decompression are checked by `read_split` when loaded.
     pub fn split_names(header: &[u8]) -> Result<Vec<String>> {
@@ -387,5 +411,46 @@ impl Binder {
             format,
             files,
         })
+    }
+}
+
+#[cfg(test)]
+mod division_tests {
+    use super::{Binder, BinderFile};
+
+    fn binder(names: &[Option<&str>]) -> Binder {
+        Binder {
+            version: *b"07D7R6\0\0",
+            format: 0x74,
+            files: names
+                .iter()
+                .map(|n| BinderFile {
+                    id: None,
+                    name: n.map(str::to_owned),
+                    flags: 0,
+                    bytes: Vec::new(),
+                })
+                .collect(),
+        }
+    }
+
+    /// Markers are the `.txt` and `.blf` members that start with the character's prefix, by stem, in order, once each; a
+    /// marker of another character, a member without a name and the other members are not.
+    #[test]
+    fn division_markers_name_the_binders_of_a_character() {
+        let b = binder(&[
+            Some(r"N:\GR\data\Model\chr\c2010\hkx\skeleton.hkx"),
+            Some(r"N:\GR\data\Model\chr\c2010\blf\c2010_div01.blf"),
+            None,
+            Some(r"N:\GR\data\Model\chr\c2010\blf\C2010_DIV00.BLF"),
+            Some("c2010_div01.txt"),
+            Some("delayload_c0000_c1020.txt"),
+            Some("c2010.tae"),
+            Some("c2010_a000_hi.hkx"),
+        ]);
+        assert_eq!(b.division_markers("c2010_"), ["c2010_div01", "c2010_div00"]);
+        assert_eq!(b.division_markers("C2010_"), ["c2010_div01", "c2010_div00"]);
+        assert!(b.division_markers("c0000_").is_empty());
+        assert!(binder(&[]).division_markers("c2010_").is_empty());
     }
 }
