@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0 (2026-10-27)
 
 - `fxr`: FXR effect files, version 5 and header minor 0, the layout of all 15,068 `.fxr` files of both installs (2,913 in
   Sekiro's 8 `sfxbnd` binders, 12,155 in Elden Ring's 220; none refused). `Fxr::read` keeps the state machine, the tree of
@@ -21,6 +21,9 @@
   refused), with the triangles and quads counted against the boxes of their leaves. `tests/bvtree_census.rs` reads
   every map `h`/`l` binder and every Sekiro object and Elden Ring asset collision binder and asserts the tree, leaf and
   box counts of both games against the census. Depends on the `havok-formats` commit that adds `mesh_trees`.
+- Breaking: depends on `havok-formats` 0.6.0 (the bounding-volume and simd trees of compressed meshes), whose
+  `CompressedMesh` and `MeshSection` gain fields; `Soup` gains `bounds` and `simd`, so a struct literal of it needs the
+  fields.
 
 ## 0.6.0 (2026-10-27)
 
