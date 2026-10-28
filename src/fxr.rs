@@ -382,6 +382,25 @@ pub struct StaticTransform {
     pub rotation_degrees: [f32; 3],
 }
 
+impl StaticTransform {
+    /// The affine map the transform makes (the images of the x, y and z axes, then the translation): the three rotations
+    /// one after the other about Z, then X, then Y (each the usual right-handed rotation by the stored degrees), then
+    /// the translation. The order is the fxr project's statement and the handedness its (unstated) convention: neither
+    /// is checked against the game.
+    pub fn matrix(&self) -> crate::affine::Matrix {
+        let [x, y, z] = self.rotation_degrees.map(|a| f64::from(a).to_radians());
+        let (sx, cx) = x.sin_cos();
+        let (sy, cy) = y.sin_cos();
+        let (sz, cz) = z.sin_cos();
+        let rz = [[cz, sz, 0.], [-sz, cz, 0.], [0., 0., 1.], [0.; 3]];
+        let rx = [[1., 0., 0.], [0., cx, sx], [0., -sx, cx], [0.; 3]];
+        let ry = [[cy, 0., -sy], [0., 1., 0.], [sy, 0., cy], [0.; 3]];
+        let mut m = crate::affine::compose(&ry, &crate::affine::compose(&rx, &rz));
+        m[3] = self.offset.map(f64::from);
+        m
+    }
+}
+
 impl Config {
     /// The config's static node transform (action 35, six float field words), if it has one; a config with more than
     /// one, or one with other counts or a non-finite word, is an error.
@@ -1077,6 +1096,51 @@ impl Fxr {
             .collect()
     }
 
+    /// Every `SFXReference` action of the tree with its place in it, in tree order (a node's own actions, then each
+    /// config's, then the children's).
+    pub fn spawns(&self) -> Result<Vec<PlacedSpawn<'_>>> {
+        fn walk<'a>(
+            node: &'a Node,
+            ancestors: &mut Vec<&'a Node>,
+            out: &mut Vec<PlacedSpawn<'a>>,
+        ) -> Result<()> {
+            ancestors.push(node);
+            let mut push =
+                |action: &'a Action, config: Option<&'a Config>, config_index: usize| -> Result<()> {
+                    if action.id == SFX_REFERENCE {
+                        let effect = action
+                            .fields1
+                            .first()
+                            .ok_or_else(|| invalid(FORMAT, 0, "an SFXReference without its effect id"))?;
+                        out.push(PlacedSpawn {
+                            effect: *effect as i32,
+                            action,
+                            ancestors: ancestors.clone(),
+                            config,
+                            config_index,
+                        });
+                    }
+                    Ok(())
+                };
+            for action in &node.actions {
+                push(action, None, 0)?;
+            }
+            for (index, config) in node.configs.iter().enumerate() {
+                for action in &config.actions {
+                    push(action, Some(config), index)?;
+                }
+            }
+            for child in &node.children {
+                walk(child, ancestors, out)?;
+            }
+            ancestors.pop();
+            Ok(())
+        }
+        let mut out = Vec::new();
+        walk(&self.root, &mut Vec::new(), &mut out)?;
+        Ok(out)
+    }
+
     /// Every point and spot light of the tree with its place in it, in tree order.
     pub fn lights(&self) -> Result<Vec<PlacedLight<'_>>> {
         fn walk<'a>(
@@ -1157,23 +1221,81 @@ impl PlacedLight<'_> {
         }
     }
 
+    /// Where the light sits in the effect's own frame: the [`StaticTransform::matrix`] of each of
+    /// [`PlacedLight::static_transforms`], the root's outermost.
+    pub fn local_matrix(&self, state: usize) -> Result<crate::affine::Matrix> {
+        Ok(chain(&self.static_transforms(state)?))
+    }
+
     /// The static transforms from the root down to the light: of the config each ancestor runs in `state`, and of the
     /// light's own config (which is the holder's, whether or not `state` chooses it). A node that runs no config in
     /// `state` (it has several and no map, or the map gives none) contributes nothing.
     pub fn static_transforms(&self, state: usize) -> Result<Vec<StaticTransform>> {
-        let mut out = Vec::new();
-        for (i, node) in self.ancestors.iter().enumerate() {
-            let last = i.saturating_add(1) == self.ancestors.len();
-            let config = if last {
-                Some(self.config)
-            } else {
-                node.config_in_state(state)
-            };
-            if let Some(t) = config.map(Config::static_transform).transpose()?.flatten() {
-                out.push(t);
-            }
+        transforms_to(&self.ancestors, Some(self.config), state)
+    }
+}
+
+/// The static transforms from the root down the `ancestors`: of the config each runs in `state`, and for the last of
+/// them the config `own` where there is one (the holder's, whether or not `state` chooses it).
+fn transforms_to(ancestors: &[&Node], own: Option<&Config>, state: usize) -> Result<Vec<StaticTransform>> {
+    let mut out = Vec::new();
+    for (i, node) in ancestors.iter().enumerate() {
+        let last = i.saturating_add(1) == ancestors.len();
+        let config = match (last, own) {
+            (true, Some(config)) => Some(config),
+            _ => node.config_in_state(state),
+        };
+        if let Some(t) = config.map(Config::static_transform).transpose()?.flatten() {
+            out.push(t);
         }
-        Ok(out)
+    }
+    Ok(out)
+}
+
+/// The map of the effect's frame into the frame of the last of `transforms`' nodes: their matrices, the root's outermost.
+fn chain(transforms: &[StaticTransform]) -> crate::affine::Matrix {
+    transforms
+        .iter()
+        .fold([[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], [0.; 3]], |m, t| {
+            crate::affine::compose(&m, &t.matrix())
+        })
+}
+
+/// An `SFXReference` action (the spawn of another effect) and where it sits.
+#[derive(Clone, Debug)]
+pub struct PlacedSpawn<'a> {
+    /// The id of the effect it spawns (the action's first field word).
+    pub effect: i32,
+    /// The action as stored.
+    pub action: &'a Action,
+    /// The nodes from the root down to the one that holds the action.
+    pub ancestors: Vec<&'a Node>,
+    /// The config that holds the action; `None` for one of the node's own actions.
+    pub config: Option<&'a Config>,
+    /// The config's index in its node (0 for an own action).
+    pub config_index: usize,
+}
+
+impl PlacedSpawn<'_> {
+    /// Whether the node runs the action in `state`: an own action always; one of a config when the node's state-config
+    /// map chooses that config, or the node has the one config and no map.
+    pub fn active_in_state(&self, state: usize) -> bool {
+        let Some(node) = self.ancestors.last() else {
+            return false;
+        };
+        if self.config.is_none() {
+            return true;
+        }
+        match node.state_configs() {
+            Some(map) => map.get(state).is_some_and(|&c| c as usize == self.config_index),
+            None => node.configs.len() == 1,
+        }
+    }
+
+    /// Where the spawned effect's frame stands in this effect's: the matrices of the static transforms above the action
+    /// ([`StaticTransform::matrix`]), in `state`.
+    pub fn local_matrix(&self, state: usize) -> Result<crate::affine::Matrix> {
+        Ok(chain(&transforms_to(&self.ancestors, self.config, state)?))
     }
 }
 
@@ -1844,5 +1966,34 @@ mod tests {
             children: Vec::new(),
         };
         assert_eq!(single.config_in_state(5).map(|c| c.id), Some(1));
+    }
+
+    /// The static transform turns about Z, then X, then Y, and moves after all of them.
+    #[test]
+    fn a_static_transform_turns_z_then_x_then_y() {
+        let near = |a: [f64; 3], b: [f64; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-12);
+        let t = StaticTransform {
+            offset: [1., 2., 3.],
+            rotation_degrees: [90., 0., 90.],
+        };
+        let m = t.matrix();
+        // +X turns to +Y about Z and then to +Z about X; +Z is not moved by the first and turns to -Y about X
+        assert!(near(crate::affine::affine_vector(&m, [1., 0., 0.]), [0., 0., 1.]));
+        assert!(near(
+            crate::affine::affine_vector(&m, [0., 0., 1.]),
+            [0., -1., 0.]
+        ));
+        assert!(near(crate::affine::affine_point(&m, [0.; 3]), [1., 2., 3.]));
+        // Y alone: +Z turns to +X, +X to -Z
+        let y = StaticTransform {
+            offset: [0.; 3],
+            rotation_degrees: [0., 90., 0.],
+        }
+        .matrix();
+        assert!(near(crate::affine::affine_vector(&y, [0., 0., 1.]), [1., 0., 0.]));
+        assert!(near(
+            crate::affine::affine_vector(&y, [1., 0., 0.]),
+            [0., 0., -1.]
+        ));
     }
 }

@@ -25,6 +25,10 @@
   rows: eight slots of an effect id and the id of the model's dummy polygon it attaches to; compared field by field with the
   Smithbox paramdefs' reading, `tests/model_sfx_census.rs`). `ModelSfxParam::rows_with` is plural because Sekiro's
   param stores row 1230000 twice, with different slots.
+- `fxr`: `StaticTransform::matrix` (rotations about Z, then X, then Y, then the translation: the fxr project's order,
+  not checked against the game), `PlacedLight::local_matrix`, and `Fxr::spawns` (every `SFXReference` action with
+  its place and the same `active_in_state` / `local_matrix` as a light: 543 Sekiro and 5,228 Elden Ring actions, all
+  among a node's own actions, counted by an independent walker).
 - `collision::Soup::bounds` and `Soup::simd`: the bounding-volume trees and simd trees of the compressed meshes
   `read_map` and `read_bodies` read, decoded and checked by `havok-formats` (a mesh whose trees do not hold together is
   refused), with the triangles and quads counted against the boxes of their leaves. `tests/bvtree_census.rs` reads

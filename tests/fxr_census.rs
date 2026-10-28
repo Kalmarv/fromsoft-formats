@@ -239,6 +239,10 @@ struct Totals {
     spot_files: usize,
     light_shafts: usize,
     legacy_lights: usize,
+    spawns: usize,
+    own_spawns: usize,
+    spawn_mismatches: usize,
+    spawns_not_active_in_state_zero: usize,
     refused: BTreeMap<String, usize>,
     not_in_oracle: usize,
     action_mismatches: Vec<String>,
@@ -379,6 +383,24 @@ fn every_effect_file_reads_and_its_lights_agree_with_the_fxr_library() -> Result
                 if read.references.iter().copied().collect::<BTreeSet<_>>() != read.spawned() {
                     t.reference_mismatches += 1;
                 }
+                // the spawn actions with their places: every SFXReference once, in a config or among a node's own actions
+                let spawns = read.spawns().map_err(|e| format!("{path} {name}: {e}"))?;
+                let stored = read
+                    .actions()
+                    .iter()
+                    .filter(|a| a.id == fxr::SFX_REFERENCE)
+                    .count();
+                if spawns.len() != stored
+                    || spawns.iter().map(|s| s.effect).collect::<BTreeSet<_>>() != read.spawned()
+                {
+                    t.spawn_mismatches += 1;
+                }
+                t.spawns += spawns.len();
+                t.own_spawns += spawns.iter().filter(|s| s.config.is_none()).count();
+                for s in &spawns {
+                    s.local_matrix(0).map_err(|e| format!("{path} {name}: {e}"))?;
+                    t.spawns_not_active_in_state_zero += usize::from(!s.active_in_state(0));
+                }
                 tally(&mut t, &read);
                 tally_nodes(&mut t, &read.root).map_err(|e| format!("{path} {name}: {e}"))?;
                 let lights = read.lights().map_err(|e| format!("{path} {name}: {e}"))?;
@@ -516,6 +538,26 @@ fn every_effect_file_reads_and_its_lights_agree_with_the_fxr_library() -> Result
             t.transforms,
             t.unmapped_multi_config_nodes,
             t.rotated_lights,
+        );
+        println!(
+            "{}: {} SFXReference actions ({} among a node's own actions, {} not run in state 0), mismatches {}",
+            game.name(),
+            t.spawns,
+            t.own_spawns,
+            t.spawns_not_active_in_state_zero,
+            t.spawn_mismatches
+        );
+        // the independent walker (fxrpy) counts 543 and 5,228 SFXReference actions, none in a config
+        assert_eq!(t.spawn_mismatches, 0, "{}: spawns", game.name());
+        assert_eq!(
+            (t.spawns, t.own_spawns, t.spawns_not_active_in_state_zero),
+            if game == Game::Sekiro {
+                (543, 543, 0)
+            } else {
+                (5_228, 5_228, 0)
+            },
+            "{}: SFXReference actions",
+            game.name()
         );
         println!(
             "layouts (properties1, properties2, fields1, fields2): {:?}",
