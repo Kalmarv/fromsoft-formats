@@ -19,17 +19,27 @@
 //! string count. In version 2 the size field is the file's length and the groups' table ends where the string offsets
 //! begin. The layout is SoulsFormats' `FMG` (as SoulsFormatsNEXT states it); a file that departs from it is refused,
 //! naming the byte.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{Result, invalid};
 
 const FORMAT: &str = "FromSoftware FMG";
 
-/// The strings of one FMG by id. An id with no string (offset 0) is not in the map.
+/// The strings of one FMG by id. An id with no string (offset 0) is not in the map; it is in [`Fmg::blank`].
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Fmg {
     /// The strings by ID.
     pub entries: BTreeMap<i32, String>,
+    /// The ids the file lists inside a group with no string (offset 0). They keep the group's ids consecutive, which is
+    /// what [`Fmg::write`] groups by: 3,050 of the 4,472 FMGs of both installs have some (the games' tools leave an id
+    /// blank rather than ending the group).
+    pub blank: BTreeSet<i32>,
+    /// The file uses 32-bit offsets and 12-byte groups (version 1, the Dark Souls family); `false` for the 64-bit
+    /// layout (version 2) every Sekiro and Elden Ring FMG has.
+    pub narrow: bool,
+    /// Zero bytes after the last string beyond the padding of the file to a multiple of 4 bytes. Most files have none
+    /// (the tools pad to 4 only); 43 of Sekiro's 504 and 119 of Elden Ring's 3,968 end in more.
+    pub extra_padding: usize,
 }
 
 impl Fmg {
@@ -128,6 +138,9 @@ impl Fmg {
             }
         }
         let mut entries = BTreeMap::new();
+        let mut blank = BTreeSet::new();
+        // where the last string ends, or the offset table when there is none
+        let mut strings_end = offset_plus(offsets, strings.saturating_mul(slot))?;
         let mut counted = 0usize;
         let mut previous_last: Option<i32> = None;
         for g in 0..groups {
@@ -178,14 +191,23 @@ impl Fmg {
                 } else {
                     u32_at(slot_at)? as usize
                 };
-                if offset == 0 {
-                    continue;
-                }
                 let id = i32::try_from(j)
                     .ok()
                     .and_then(|j| first.checked_add(j))
                     .ok_or_else(|| invalid(FORMAT, at, format!("a group of ids {first} to {last}")))?;
-                entries.insert(id, utf16_at(data, offset)?);
+                if offset == 0 {
+                    blank.insert(id);
+                    continue;
+                }
+                let text = utf16_at(data, offset)?;
+                let end = text
+                    .encode_utf16()
+                    .count()
+                    .saturating_add(1)
+                    .saturating_mul(2)
+                    .saturating_add(offset);
+                strings_end = strings_end.max(end);
+                entries.insert(id, text);
             }
         }
         if counted != strings {
@@ -202,7 +224,13 @@ impl Fmg {
                 format!("a size of {} for a file of {} bytes", u32_at(0x04)?, data.len()),
             ));
         }
-        Ok(Fmg { entries })
+        let aligned = strings_end.saturating_add(strings_end.wrapping_neg() & 3);
+        Ok(Fmg {
+            entries,
+            blank,
+            narrow: !wide,
+            extra_padding: data.len().saturating_sub(aligned),
+        })
     }
 }
 

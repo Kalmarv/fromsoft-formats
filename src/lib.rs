@@ -91,6 +91,7 @@ mod emit;
 pub mod equipment;
 pub mod flver;
 pub mod fmg;
+mod fmg_write;
 pub mod fxr;
 pub mod game;
 pub mod game_params;
