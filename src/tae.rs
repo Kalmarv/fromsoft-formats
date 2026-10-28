@@ -6,8 +6,10 @@
 //!
 //! Read: the 64-bit little-endian layout of version `0x1000D`, Sekiro's and Elden Ring's (SoulsFormatsNEXT's `TAE` reads
 //! it as format `SDT`); the other versions (Demon's Souls, Dark Souls, Bloodborne, Dark Souls III) are refused by their
-//! version. Not read: the animation groups table (an index over the animations), and the event groups (which events the
-//! file ties together).
+//! version. The header's constants, the animation groups table (the runs of consecutive animation numbers, an index over
+//! the animations) and each animation's times table (the distinct start and end times of its events, ascending) are
+//! checked against the rest of the file; the event groups (which events of an animation the file ties together) are
+//! kept as [`Animation::event_groups`].
 //!
 //! The parameter bytes of an event run to the start of the next event's record; the last event's to the animation's
 //! event groups, else to the next animation's header block, else to the end of the file, so they include the zero padding
@@ -90,6 +92,18 @@ impl Event {
     }
 }
 
+/// A group of events of one animation that the file ties together: the events, and a number of the group's own.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct EventGroup {
+    /// The number stored in the group's type slot, as stored. It is not always the type of the group's events (they are
+    /// of one type in the groups that have any, but the number differs on 74,920 of 247,075 groups in Sekiro's files and
+    /// 289,341 of 943,080 in Elden Ring's).
+    pub group_type: u64,
+    /// The indices of the group's events in [`Animation::events`], in the order the group lists them. A group may be
+    /// empty (2,509 of Sekiro's and 49,359 of Elden Ring's are).
+    pub events: Vec<usize>,
+}
+
 /// One animation's record.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Animation {
@@ -101,6 +115,8 @@ pub struct Animation {
     pub file_name: Option<String>,
     /// The timed events, in file order.
     pub events: Vec<Event>,
+    /// The event groups, in file order (none in 3,422 of Sekiro's 15,769 animations and 6,050 of Elden Ring's 51,151).
+    pub event_groups: Vec<EventGroup>,
 }
 
 /// A TAE file.
@@ -129,6 +145,111 @@ impl AsRef<Tae> for Tae {
 
 fn size(v: &View<'_>, o: usize) -> Result<usize> {
     v.size(o)
+}
+
+/// The header words that hold the same value in every file: Sekiro's and Elden Ring's (all 326 and 1,071 event files of
+/// the installs). The words that vary are read where they are used: the bank (0x30), the file number (0x50, repeated at
+/// 0x90 and 0x94), the animation count (0x54, repeated at 0x70), the tables' offsets (0x58, 0x60), the offset of the first
+/// animation's body (0x78, 0 where there is none) and the two name offsets (0xb0, 0xb8).
+fn header_constants(v: &View<'_>, id: i32, count: usize, first_body: Option<usize>) -> Result<()> {
+    let words = |at: usize, want: &[u64]| -> Result<()> {
+        for (i, &want) in want.iter().enumerate() {
+            let o = v.element(at, i, 8)?;
+            let got = v.u64(o)?;
+            if got != want {
+                return Err(v.err(o, format!("header word {got:#x}, the format holds {want:#x}")));
+            }
+        }
+        Ok(())
+    };
+    if v.u32(0x0c)? as usize != v.data.len() {
+        return Err(v.err(0x0c, "the file size the header states is not the file's"));
+    }
+    words(0x10, &[0x40, 1, 0x50, 0x80])?;
+    words(0x38, &[0])?;
+    v.expect(0x40, &[1, 0, 1, 2, 2, 1, 1, 1])?;
+    words(0x48, &[1])?;
+    words(
+        0x68,
+        &[
+            0xa0,
+            count as u64,
+            first_body.map_or(0, |body| body as u64),
+            1,
+            0x90,
+        ],
+    )?;
+    words(
+        0x90,
+        &[u64::from(id as u32) | u64::from(id as u32) << 32, 0x50, 0, 0xb0],
+    )?;
+    words(0xc0, &[0, 0])
+}
+
+/// The animation groups table (the group header at the offset at 0x60: the number of groups and the offset of the
+/// entries, which follow the header at +16 unless the file has no animations) holds one entry (the first and last number, and the offset of the table record
+/// of the first) for each maximal run of consecutive animation numbers; the numbers rise strictly through the file's table.
+fn animation_runs(v: &View<'_>, table: usize, bodies: &[(i64, usize)]) -> Result<()> {
+    let mut runs: Vec<(i64, i64, usize)> = Vec::new();
+    for (i, &(id, _)) in bodies.iter().enumerate() {
+        // the last run ends at the number before this one
+        if let Some((_, last, _)) = runs.last_mut() {
+            if id <= *last {
+                return Err(v.err(
+                    v.element(table, i, 16)?,
+                    format!("animation {id} does not rise above the one before it"),
+                ));
+            }
+            if Some(id) == last.checked_add(1) {
+                *last = id;
+                continue;
+            }
+        }
+        runs.push((id, id, i));
+    }
+    let header = size(v, 0x60)?;
+    let entries = size(v, v.at(header, 8)?)?;
+    // a file without animations states no entries, and its offset is not the entries' place
+    if !runs.is_empty() && entries != v.at(header, 16)? {
+        return Err(v.err(
+            v.at(header, 8)?,
+            "the group entries do not follow the group header",
+        ));
+    }
+    if size(v, header)? != runs.len() {
+        return Err(v.err(
+            header,
+            format!(
+                "{} animation groups, {} runs of consecutive animations",
+                size(v, header)?,
+                runs.len()
+            ),
+        ));
+    }
+    for (k, &(first, last, record)) in runs.iter().enumerate() {
+        let at = v.element(entries, k, 16)?;
+        let stored = (
+            v.u32(at)? as i32,
+            v.u32(v.at(at, 4)?)? as i32,
+            size(v, v.at(at, 8)?)?,
+        );
+        if i64::from(stored.0) != first
+            || i64::from(stored.1) != last
+            || stored.2 != v.element(table, record, 16)?
+        {
+            return Err(v.err(
+                at,
+                format!(
+                    "animation group {k} is {}..{} at {:#x}, the run is {first}..{last} at {:#x}",
+                    stored.0,
+                    stored.1,
+                    stored.2,
+                    v.element(table, record, 16)?
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn float(v: &View<'_>, o: usize) -> Result<f32> {
@@ -189,6 +310,8 @@ impl Tae {
         let name = |at: usize| -> Result<Option<String>> {
             match size(&v, at)? {
                 0 => Ok(None),
+                // 15 of Sekiro's weapon-part files (table at 0xd0) point both names at the table: no name
+                offset if offset == table => Ok(None),
                 offset => Ok(Some(v.utf16z(offset, &budget)?.0)),
             }
         };
@@ -216,6 +339,8 @@ impl Tae {
             }
             bodies.push((v.u64(at)? as i64, body));
         }
+        header_constants(&v, id, count, bodies.first().map(|&(_, body)| body))?;
+        animation_runs(&v, table, &bodies)?;
         let mut animations = Vec::with_capacity(count);
         for (i, &(animation_id, body)) in bodies.iter().enumerate() {
             // where this animation's event parameters stop at the latest: the next animation's header block
@@ -381,13 +506,114 @@ fn read_animation(
             parameters: v.slice(parameters, length)?.to_vec(),
         });
     }
+    check_times(v, id, body, times, &events)?;
+    let event_groups = read_event_groups(v, budget, id, body, groups, headers, events.len())?;
     let (header, file_name) = read_block(v, budget, block, times);
     Ok(Animation {
         id,
         header,
         file_name,
         events,
+        event_groups,
     })
+}
+
+/// The times table (the offset at body +16, its length the u64 at body +40) holds the distinct start and end times of the
+/// animation's events, by bit pattern, in ascending order.
+fn check_times(v: &View<'_>, id: i64, body: usize, times: usize, events: &[Event]) -> Result<()> {
+    let mut expected: Vec<f32> = events.iter().flat_map(|e| [e.start, e.end]).collect();
+    expected.sort_by(f32::total_cmp);
+    expected.dedup_by(|a, b| a.to_bits() == b.to_bits());
+    let count_at = v.at(body, 40)?;
+    if size(v, count_at)? != expected.len() {
+        return Err(invalid(
+            FORMAT,
+            count_at,
+            format!(
+                "animation {id}: {} times stored, its events have {} distinct start and end times",
+                size(v, count_at)?,
+                expected.len()
+            ),
+        ));
+    }
+    for (i, time) in expected.iter().enumerate() {
+        let at = v.element(times, i, 4)?;
+        if v.u32(at)? != time.to_bits() {
+            return Err(invalid(
+                FORMAT,
+                at,
+                format!(
+                    "animation {id}: time {i} of the times table is not the animation's next distinct event time"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The event groups of the animation whose body is at `body` (the group array at `array`, its length the u32 at body
+/// +36): each group is 32 bytes, a member count, the offset of that many u32 offsets of event headers of the animation,
+/// the offset of the group's type number (a u64) and a zero word.
+fn read_event_groups(
+    v: &View<'_>,
+    budget: &Budget,
+    id: i64,
+    body: usize,
+    array: usize,
+    headers: usize,
+    events: usize,
+) -> Result<Vec<EventGroup>> {
+    let count_at = v.at(body, 36)?;
+    let n = v.u32(count_at)? as usize;
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+    if array == 0 {
+        return Err(invalid(
+            FORMAT,
+            v.at(body, 8)?,
+            format!("animation {id}: {n} event groups and no group array"),
+        ));
+    }
+    let bytes = n
+        .checked_mul(32)
+        .ok_or_else(|| invalid(FORMAT, count_at, "size overflow"))?;
+    v.slice(array, bytes)?;
+    budget.charge(array, bytes)?;
+    let mut groups = Vec::with_capacity(n);
+    for k in 0..n {
+        let at = v.element(array, k, 32)?;
+        let members = size(v, at)?;
+        let values = size(v, v.at(at, 8)?)?;
+        let kind = size(v, v.at(at, 16)?)?;
+        v.expect_at(at, 24, &[0; 8])?;
+        let bytes = members
+            .checked_mul(4)
+            .ok_or_else(|| invalid(FORMAT, at, "size overflow"))?;
+        v.slice(values, bytes)?;
+        budget.charge(values, bytes)?;
+        let mut list = Vec::with_capacity(members);
+        for j in 0..members {
+            let word_at = v.element(values, j, 4)?;
+            let event = (v.u32(word_at)? as usize)
+                .checked_sub(headers)
+                .filter(|delta| delta % 24 == 0 && delta / 24 < events)
+                .map(|delta| delta / 24)
+                .ok_or_else(|| {
+                    invalid(
+                        FORMAT,
+                        word_at,
+                        format!("animation {id}: event group {k} names a place that is not one of its event headers"),
+                    )
+                })?;
+            list.push(event);
+        }
+        groups.push(EventGroup {
+            group_type: v.u64(kind)?,
+            events: list,
+        });
+    }
+    Ok(groups)
 }
 
 /// The mini header block at `block` and the file name it names: `Header::None` and no name where the block states
@@ -449,60 +675,134 @@ mod tests {
         put(buf, at, &n.to_le_bytes());
     }
 
-    /// A one-animation file: animation 3000, two events (type 0 from 0 to 0.5 s and type 5 from 0.5 s to the end), the
-    /// mini header naming `a000_003000.hkt`.
-    fn file() -> Vec<u8> {
-        let mut b = vec![0u8; 0xd0];
+    /// Where the parts of [`file_of`] sit: the body of the animations (all share one), the mini header block, its record
+    /// and the name, the times table, the event headers, the two events, the event group array with its values and type,
+    /// and the group header.
+    const BODY: usize = 0xd0;
+    const BLOCK: usize = 0x100;
+    const RECORD: usize = 0x110;
+    const NAME: usize = 0x120;
+    const TIMES: usize = 0x140;
+    const HEADERS: usize = 0x150;
+    const EVENT0: usize = 0x180;
+    const EVENT1: usize = 0x1a0;
+    const GROUPS: usize = 0x1c0;
+    const GROUP_VALUES: usize = 0x1e0;
+    const GROUP_TYPE: usize = 0x1e8;
+    const GROUP_HEADER: usize = 0x1f0;
+
+    /// A file whose animations have the numbers `ids`, all with the one body: two events (type 0 from 0 to 0.5 s and
+    /// type 5 from 0.5 s to the end) tied by one event group of type number 7, the mini header naming `a000_003000.hkt`.
+    /// The animation groups table has an entry for each maximal run of consecutive numbers, and the file is as long as its
+    /// header says. With `event_groups` false the body has none and the last event's parameters run to the table.
+    fn file_of(ids: &[i64], event_groups: bool) -> Vec<u8> {
+        let mut runs: Vec<(i64, i64, usize)> = Vec::new();
+        for (i, &id) in ids.iter().enumerate() {
+            match runs.last_mut() {
+                Some((_, last, _)) if id == *last + 1 => *last = id,
+                _ => runs.push((id, id, i)),
+            }
+        }
+        let entries = GROUP_HEADER + 16;
+        let table = entries + 16 * runs.len();
+        let mut b = vec![0u8; table + 16 * ids.len()];
         put(&mut b, 0, b"TAE ");
         b[7] = 0xff;
         u32le(&mut b, 8, VERSION);
-        u64le(&mut b, 48, 7); // event bank
-        u32le(&mut b, 80, 1010); // the file's number
-        u32le(&mut b, 84, 1); // one animation
-        u64le(&mut b, 88, 0xd0); // the table
-        // the table: animation 3000, its body at 0xe0
-        u64le(&mut b, 0xd0, 3000);
-        u64le(&mut b, 0xd8, 0xe0);
-        // the body: events at 0x170, no groups, times at 0x160, the block at 0x110
-        u64le(&mut b, 0xe0, 0x170);
-        u64le(&mut b, 0xe0 + 8, 0);
-        u64le(&mut b, 0xe0 + 16, 0x160);
-        u64le(&mut b, 0xe0 + 24, 0x110);
-        u32le(&mut b, 0xe0 + 32, 2);
-        u32le(&mut b, 0xe0 + 40, 3);
-        // the block: standard type, its record at 0x120
-        u32le(&mut b, 0x110, 0);
-        u32le(&mut b, 0x118, 0x120);
-        // the record: the name at 0x140, loops, no import, source -1
-        u32le(&mut b, 0x120, 0x140);
-        put(&mut b, 0x128, &[1]);
-        u32le(&mut b, 0x12c, u32::MAX);
+        for (at, word) in [
+            (0x10, 0x40),
+            (0x18, 1),
+            (0x20, 0x50),
+            (0x28, 0x80),
+            (0x30, 7), // the event bank
+            (0x48, 1),
+            (0x58, table as u64),
+            (0x60, GROUP_HEADER as u64),
+            (0x68, 0xa0),
+            (0x70, ids.len() as u64),
+            (0x78, if ids.is_empty() { 0 } else { BODY as u64 }),
+            (0x80, 1),
+            (0x88, 0x90),
+            (0x90, 1010 | 1010 << 32), // the file's number, twice
+            (0x98, 0x50),
+            (0xa8, 0xb0),
+        ] {
+            u64le(&mut b, at, word);
+        }
+        put(&mut b, 0x40, &[1, 0, 1, 2, 2, 1, 1, 1]);
+        u32le(&mut b, 0x50, 1010);
+        u32le(&mut b, 0x54, ids.len() as u32);
+        // the group header and its entries, the table
+        u64le(&mut b, GROUP_HEADER, runs.len() as u64);
+        u64le(&mut b, GROUP_HEADER + 8, entries as u64);
+        for (k, &(first, last, record)) in runs.iter().enumerate() {
+            put(&mut b, entries + 16 * k, &(first as i32).to_le_bytes());
+            put(&mut b, entries + 16 * k + 4, &(last as i32).to_le_bytes());
+            u64le(&mut b, entries + 16 * k + 8, (table + 16 * record) as u64);
+        }
+        for (i, &id) in ids.iter().enumerate() {
+            u64le(&mut b, table + 16 * i, id as u64);
+            u64le(&mut b, table + 16 * i + 8, BODY as u64);
+        }
+        // the body: events at HEADERS, the groups, times, the block, two events, one group, three distinct times
+        u64le(&mut b, BODY, HEADERS as u64);
+        u64le(&mut b, BODY + 8, if event_groups { GROUPS as u64 } else { 0 });
+        u64le(&mut b, BODY + 16, TIMES as u64);
+        u64le(&mut b, BODY + 24, BLOCK as u64);
+        u32le(&mut b, BODY + 32, 2);
+        u32le(&mut b, BODY + 36, u32::from(event_groups));
+        u64le(&mut b, BODY + 40, 3);
+        // the block: standard type, its record
+        u32le(&mut b, BLOCK, 0);
+        u64le(&mut b, BLOCK + 8, RECORD as u64);
+        // the record: the name, loops, no import, source -1
+        u32le(&mut b, RECORD, NAME as u32);
+        put(&mut b, RECORD + 8, &[1]);
+        u32le(&mut b, RECORD + 12, u32::MAX);
         let name: Vec<u8> = "a000_003000.hkt\0"
             .encode_utf16()
             .flat_map(u16::to_le_bytes)
             .collect();
-        put(&mut b, 0x140, &name);
+        put(&mut b, NAME, &name);
         // the times: 0, 0.5 and the placeholder for no end
-        f32le(&mut b, 0x160, 0.0);
-        f32le(&mut b, 0x164, 0.5);
-        f32le(&mut b, 0x168, f32::MAX);
+        f32le(&mut b, TIMES, 0.0);
+        f32le(&mut b, TIMES + 4, 0.5);
+        f32le(&mut b, TIMES + 8, f32::MAX);
         // the headers: (start, end, data) of each event
-        for (i, (start, end, data)) in [(0x160u64, 0x164u64, 0x1a0u64), (0x164, 0x168, 0x1c0)]
+        for (i, (start, end, data)) in [(TIMES, TIMES + 4, EVENT0), (TIMES + 4, TIMES + 8, EVENT1)]
             .into_iter()
             .enumerate()
         {
-            u64le(&mut b, 0x170 + i * 24, start);
-            u64le(&mut b, 0x170 + i * 24 + 8, end);
-            u64le(&mut b, 0x170 + i * 24 + 16, data);
+            u64le(&mut b, HEADERS + i * 24, start as u64);
+            u64le(&mut b, HEADERS + i * 24 + 8, end as u64);
+            u64le(&mut b, HEADERS + i * 24 + 16, data as u64);
         }
         // the events: type, word, parameters offset, 16 parameter bytes
-        for (data, kind, fill) in [(0x1a0usize, 0u32, 0xaau8), (0x1c0, 5, 0xbb)] {
+        for (data, kind, fill) in [(EVENT0, 0u32, 0xaau8), (EVENT1, 5, 0xbb)] {
             u32le(&mut b, data, kind);
             u32le(&mut b, data + 4, 9);
             u64le(&mut b, data + 8, data as u64 + 16);
             put(&mut b, data + 16, &[fill; 16]);
         }
+        // the event group: both events (by the offsets of their headers), its type number
+        u64le(&mut b, GROUPS, 2);
+        u64le(&mut b, GROUPS + 8, GROUP_VALUES as u64);
+        u64le(&mut b, GROUPS + 16, GROUP_TYPE as u64);
+        u32le(&mut b, GROUP_VALUES, HEADERS as u32);
+        u32le(&mut b, GROUP_VALUES + 4, HEADERS as u32 + 24);
+        u64le(&mut b, GROUP_TYPE, 7);
+        let len = b.len() as u32;
+        u32le(&mut b, 0x0c, len);
         b
+    }
+
+    fn file() -> Vec<u8> {
+        file_of(&[3000], true)
+    }
+
+    /// The offset of the table record of animation `i` of a file whose numbers are one run.
+    fn record(i: usize) -> usize {
+        GROUP_HEADER + 32 + 16 * i
     }
 
     #[test]
@@ -530,8 +830,45 @@ mod tests {
         assert_eq!(a.events[1].unk04, 9);
         assert!(a.events[1].open_ended());
         assert!(!a.events[0].open_ended());
-        // the last event's parameters run to the end of the file
+        // the last event's parameters run to the event group array
         assert_eq!(a.events[1].parameters, vec![0xbb; 16]);
+        assert_eq!(
+            a.event_groups,
+            [EventGroup {
+                group_type: 7,
+                events: vec![0, 1]
+            }]
+        );
+        // without the array the last event's parameters run to the end of the animation's data
+        let tae = Tae::read(&file_of(&[3000], false)).unwrap();
+        assert!(tae.animations[0].event_groups.is_empty());
+        let data = file_of(&[3000], false);
+        assert_eq!(
+            tae.animations[0].events[1].parameters.len(),
+            data.len() - (EVENT1 + 16)
+        );
+    }
+
+    /// A name offset that is the animation table's offset names nothing (15 of Sekiro's weapon-part files state both so).
+    #[test]
+    fn a_name_that_points_at_the_animation_table_is_no_name() {
+        let mut b = file();
+        assert_eq!(
+            (
+                Tae::read(&b).unwrap().skeleton_name,
+                Tae::read(&b).unwrap().sib_name
+            ),
+            (None, None)
+        );
+        let name: Vec<u8> = "skeleton ".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        put(&mut b, NAME, &name);
+        u64le(&mut b, 0xb0, NAME as u64);
+        assert_eq!(Tae::read(&b).unwrap().skeleton_name.as_deref(), Some("skeleton"));
+        let table = record(0);
+        u64le(&mut b, 0xb0, table as u64);
+        u64le(&mut b, 0xb8, table as u64);
+        let tae = Tae::read(&b).unwrap();
+        assert_eq!((tae.skeleton_name, tae.sib_name), (None, None));
     }
 
     #[test]
@@ -548,12 +885,168 @@ mod tests {
         assert!(Tae::read(&file()[..0x100]).is_err());
     }
 
+    /// Every header word that holds one value in all of Sekiro's and Elden Ring's files is checked, and a file with
+    /// none is a file without animations.
+    #[test]
+    fn a_header_word_that_differs_from_the_formats_constant_is_refused() {
+        for (at, edit) in [
+            (0x0c, 1u8),
+            (0x10, 1),
+            (0x18, 2),
+            (0x20, 3),
+            (0x28, 4),
+            (0x38, 5),
+            (0x40, 0),
+            (0x47, 9),
+            (0x48, 7),
+            (0x49, 1),
+            (0x68, 1),
+            (0x70, 5),
+            (0x78, 5),
+            (0x80, 0),
+            (0x88, 2),
+            (0x90, 3),
+            (0x94, 4),
+            (0x98, 7),
+            (0xa0, 1),
+            (0xa8, 1),
+            (0xc0, 1),
+            (0xc8, 1),
+        ] {
+            let mut b = file();
+            b[at] ^= edit.max(1);
+            let e = Tae::read(&b).unwrap_err().to_string();
+            // the error names the word or run of bytes the edit falls in
+            let word = match at {
+                0x40..=0x47 => 0x40,
+                0x48..=0x4f => 0x48,
+                0x94 => 0x90,
+                at => at,
+            };
+            assert!(e.starts_with(&format!("TAE at {word:#x}")), "{at:#x}: {e}");
+        }
+        // a file without animations: no group entries, no first body
+        let mut empty = file_of(&[], false);
+        assert!(Tae::read(&empty).unwrap().animations.is_empty());
+        // its group header's entries offset is not the place after the header
+        u64le(&mut empty, GROUP_HEADER + 8, 0x118);
+        assert!(Tae::read(&empty).unwrap().animations.is_empty());
+    }
+
+    /// The animation groups table has an entry for each maximal run of consecutive animation numbers, and the numbers rise.
+    #[test]
+    fn the_animation_groups_table_is_the_runs_of_consecutive_numbers() {
+        let ids = [3000, 3001, 3002, 3010, 3011, 20_000];
+        let b = file_of(&ids, true);
+        assert_eq!(Tae::read(&b).unwrap().animations.len(), 6);
+        let entries = GROUP_HEADER + 16;
+        // one entry too few, a run end moved, an offset moved, entries not after the header
+        let mut few = b.clone();
+        few[GROUP_HEADER] = 2;
+        assert!(
+            Tae::read(&few)
+                .unwrap_err()
+                .to_string()
+                .contains("2 animation groups, 3 runs")
+        );
+        let mut last = b.clone();
+        last[entries + 4] = 0xb9;
+        assert!(
+            Tae::read(&last)
+                .unwrap_err()
+                .to_string()
+                .contains("animation group 0")
+        );
+        let mut offset = b.clone();
+        offset[entries + 16 + 8] ^= 0x10;
+        assert!(
+            Tae::read(&offset)
+                .unwrap_err()
+                .to_string()
+                .contains("animation group 1")
+        );
+        let mut moved = b.clone();
+        moved[GROUP_HEADER + 8] ^= 0x10;
+        assert!(
+            Tae::read(&moved)
+                .unwrap_err()
+                .to_string()
+                .contains("do not follow")
+        );
+        // the numbers rise strictly
+        for ids in [[3001, 3000], [3000, 3000]] {
+            let e = Tae::read(&file_of(&ids, true)).unwrap_err().to_string();
+            assert!(e.contains("does not rise above"), "{e}");
+        }
+    }
+
+    /// The event groups name events of their animation by the offsets of their headers, and are 32 bytes with a zero last
+    /// word; a count with no array is refused.
+    #[test]
+    fn a_damaged_event_group_is_refused() {
+        let mut outside = file();
+        u32le(&mut outside, GROUP_VALUES + 4, HEADERS as u32 + 48);
+        assert!(
+            Tae::read(&outside)
+                .unwrap_err()
+                .to_string()
+                .contains("not one of its event headers")
+        );
+        let mut between = file();
+        u32le(&mut between, GROUP_VALUES, HEADERS as u32 + 4);
+        assert!(Tae::read(&between).is_err());
+        let mut fourth = file();
+        fourth[GROUPS + 24] = 1;
+        assert!(Tae::read(&fourth).is_err());
+        let mut missing = file();
+        u64le(&mut missing, BODY + 8, 0);
+        assert!(
+            Tae::read(&missing)
+                .unwrap_err()
+                .to_string()
+                .contains("no group array")
+        );
+        let mut beyond = file();
+        u64le(&mut beyond, GROUPS, 1 << 40);
+        assert!(Tae::read(&beyond).is_err());
+        // an empty group is read
+        let mut empty = file();
+        u64le(&mut empty, GROUPS, 0);
+        assert!(
+            Tae::read(&empty).unwrap().animations[0].event_groups[0]
+                .events
+                .is_empty()
+        );
+    }
+
+    /// The times table is the animation's distinct event times, ascending: its length is the u64 at body +40.
+    #[test]
+    fn the_times_table_is_the_distinct_event_times() {
+        let mut count = file();
+        u64le(&mut count, BODY + 40, 2);
+        assert!(
+            Tae::read(&count)
+                .unwrap_err()
+                .to_string()
+                .contains("2 times stored")
+        );
+        // the second event ends at a time the table does not hold
+        let mut value = file();
+        f32le(&mut value, TIMES + 12, 0.75);
+        u64le(&mut value, HEADERS + 24 + 8, TIMES as u64 + 12);
+        let e = Tae::read(&value).unwrap_err().to_string();
+        assert!(e.starts_with("TAE at 0x148") && e.contains("time 2"), "{e}");
+        let mut order = file();
+        f32le(&mut order, TIMES, 0.5);
+        f32le(&mut order, TIMES + 4, 0.0);
+        assert!(Tae::read(&order).is_err());
+    }
+
     #[test]
     fn events_out_of_file_order_are_refused() {
         let mut b = file();
-        // the second event's record before the first's parameters
-        u64le(&mut b, 0x170 + 24 + 16, 0x190);
-        put(&mut b, 0x190 + 8, &(0x190u64 + 16).to_le_bytes());
+        // the second event's record where the first's is, so before the first's parameters
+        u64le(&mut b, HEADERS + 24 + 16, EVENT0 as u64);
         assert!(Tae::read(&b).is_err());
     }
 
@@ -604,6 +1097,7 @@ mod tests {
             header,
             file_name: None,
             events: Vec::new(),
+            event_groups: Vec::new(),
         };
         let tae = |group, animations| Tae {
             id: 0,
@@ -654,24 +1148,17 @@ mod tests {
     #[test]
     fn an_animation_body_beyond_the_file_is_an_error_at_the_table_slot() {
         for body in [u64::MAX - 3, u64::MAX - 40, 1 << 50] {
-            let mut b = file();
-            u64le(&mut b, 0xd8, body);
-            let e = Tae::read(&b).unwrap_err().to_string();
-            assert!(
-                e.starts_with("TAE at 0xd8: animation body at ") && e.contains("is beyond the"),
-                "{e}"
-            );
-            // a later animation's body is read for the end of the one before it
-            for body in [u64::MAX - 3, u64::MAX - 40] {
-                let mut b = file();
-                u32le(&mut b, 84, 2);
-                u64le(&mut b, 88, 0x200);
-                u64le(&mut b, 0x200, 3000);
-                u64le(&mut b, 0x208, 0xe0);
-                u64le(&mut b, 0x210, 3001);
-                u64le(&mut b, 0x218, body);
+            // the first animation's body, then the second's (which the first's end is read from)
+            for index in [0, 1] {
+                let mut b = file_of(&[3000, 3001], true);
+                let slot = record(index) + 8;
+                u64le(&mut b, slot, body);
                 let e = Tae::read(&b).unwrap_err().to_string();
-                assert!(e.starts_with("TAE at 0x218: animation body at "), "{e}");
+                assert!(
+                    e.starts_with(&format!("TAE at {slot:#x}: animation body at "))
+                        && e.contains("is beyond the"),
+                    "{e}"
+                );
             }
         }
     }
