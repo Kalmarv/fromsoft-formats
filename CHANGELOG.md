@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 (2026-10-27)
 
 - `collision::read_map` reads extern mesh bodies (`hknpExternMeshShape`, every body of the map collision `f`
   binders) as posed triangles with no HitMtrl ID (-1), counted in `Soup::extern_triangles`, instead of listing them in
@@ -29,6 +29,9 @@
   puts them (`m12_07_00_00` 11.2 m, `m34_14_00_00` 2.0 m; the first is exact against the connecting collision of
   `m12_02_00_00`). 100 maps are placed, 79 of them in the base game's install; 15 maps the param names (areas 37, 38, 39
   and 70) have no rule. `MapId::from_name` reads a map name (`m14_00_00_00`) as the identity `MapId::name` writes.
+- Breaking: depends on `havok-formats` 0.5.0 (float tracks read in spline animations, rotation control points that are
+  not finite kept as stored data, `extern_mesh`), whose `SplineAnimation` and `Unreadable` gain fields. `Soup` gains
+  `extern_triangles`, so a struct literal of it needs the field.
 
 ## 0.5.0 (2026-10-27)
 
