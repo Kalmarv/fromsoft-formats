@@ -1,4 +1,4 @@
-//! Strict, read-only readers of FromSoftware's data (Sekiro: Shadows Die Twice and Elden Ring): the installed BHD5/BDT archives
+//! Strict readers (and for DCX, BND4, TPF, FMG, PARAM and `regulation.bin` writers) of FromSoftware's data (Sekiro: Shadows Die Twice and Elden Ring): the installed BHD5/BDT archives
 //! ([`Archive`], with keys the caller supplies), DCX envelopes ([`dcx`]), BND4 binders ([`Binder`]) and the formats
 //! they hold: FLVER models, map layouts (MSB), light banks (BTL), hang edges (EDGE), event scripts (EMEVD), text
 //! (FMG), draw params (GPARAM), material definitions (MTD, MATBIN), shader metaparams, params (PARAM), animation
@@ -85,6 +85,7 @@ pub mod dcx;
 pub mod edge;
 mod elden;
 pub mod emevd;
+mod emit;
 pub mod equipment;
 pub mod flver;
 pub mod fmg;

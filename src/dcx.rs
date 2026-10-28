@@ -1,9 +1,15 @@
 //! DCX envelopes with DFLT (zlib), KRAK (Oodle Kraken) and ZSTD payloads. Only the header variants listed at
 //! [`Envelope::parse`] are accepted; any other is an error naming the field.
-use crate::{Result, bytes::View, invalid};
-use primase_foundations::compress::{
-    Decompressor, Error as CompressError, Zlib, Zstd, oodle::Oodle, oodle_framing,
+use crate::{
+    Result,
+    bytes::View,
+    emit::{Out, narrow},
+    invalid,
 };
+use primase_foundations::compress::{
+    Compressor, Decompressor, Error as CompressError, Zlib, Zstd, oodle::Oodle, oodle_framing,
+};
+use std::io::Write;
 /// Where the payload starts in an envelope: after the 76-byte header every variant [`Envelope::parse`] accepts shares.
 const PAYLOAD_START: usize = 76;
 /// The four-character compression tag a DCX envelope names at offset 40 (`KRAK`, `DFLT`, `ZSTD`), or `None` for bytes
@@ -25,11 +31,109 @@ pub enum Compression {
     Zstd,
 }
 
+/// What an envelope's header says besides the two sizes: everything a writer needs to frame a payload the way the
+/// game's tools did. The variants that occur are the associated constants; [`Envelope::parse`] lists those accepted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Format {
+    /// How the payload is compressed.
+    pub compression: Compression,
+    /// The version word at offset 4: `0x10000` or `0x11000`.
+    pub version: u32,
+    /// The word at offset 16, the size of the `DCP` section: `0x24` (only DFLT at version `0x10000`) or `0x44`.
+    pub dcp_size: u32,
+    /// The compression level byte at offset 48: 6 on every shipped Kraken envelope, 9 on every shipped zlib one, 21 on
+    /// Elden Ring's current `regulation.bin`.
+    pub level: u8,
+    /// The byte at offset 56: 0, or 15 on the zlib envelopes of Elden Ring's older `regulation.bin` files.
+    pub flag: u8,
+}
+
+impl Format {
+    /// Kraken at level 6: every Kraken envelope of both games (27,074 in Sekiro's archives, 117,121 in Elden Ring's).
+    pub const KRAKEN: Format = Format {
+        compression: Compression::Kraken,
+        version: 0x11000,
+        dcp_size: 0x44,
+        level: 6,
+        flag: 0,
+    };
+    /// zlib at level 9 in the framing of the older tool output: version `0x10000` and a `DCP` section of 0x24 bytes
+    /// (12 envelopes of Sekiro's archives and 19 of Elden Ring's).
+    pub const DEFLATE_V1: Format = Format {
+        compression: Compression::Deflate,
+        version: 0x10000,
+        dcp_size: 0x24,
+        level: 9,
+        flag: 0,
+    };
+    /// zlib at level 9 in the newer framing, version `0x11000` (one envelope of Sekiro's archives).
+    pub const DEFLATE: Format = Format {
+        compression: Compression::Deflate,
+        version: 0x11000,
+        dcp_size: 0x44,
+        level: 9,
+        flag: 0,
+    };
+    /// zlib as the Elden Ring `regulation.bin` files 1.00.0 to 1.10 frame it: level 9 and the flag byte 15.
+    pub const DEFLATE_REGULATION: Format = Format {
+        compression: Compression::Deflate,
+        version: 0x11000,
+        dcp_size: 0x44,
+        level: 9,
+        flag: 15,
+    };
+    /// zstd at level 21, as Elden Ring's `regulation.bin` from 1.12.1 on is framed.
+    pub const ZSTD: Format = Format {
+        compression: Compression::Zstd,
+        version: 0x11000,
+        dcp_size: 0x44,
+        level: 21,
+        flag: 0,
+    };
+
+    /// The four-character tag the header names the codec with.
+    fn tag(&self) -> &'static [u8; 4] {
+        match self.compression {
+            Compression::Kraken => b"KRAK",
+            Compression::Deflate => b"DFLT",
+            Compression::Zstd => b"ZSTD",
+        }
+    }
+
+    /// Refuses a combination [`Envelope::parse`] would refuse: a writer produces only what the reader reads.
+    pub fn validate(&self) -> Result<()> {
+        let ok = match self.compression {
+            Compression::Kraken => {
+                self.version == 0x11000
+                    && self.dcp_size == 0x44
+                    && [6, 9].contains(&self.level)
+                    && self.flag == 0
+            }
+            Compression::Deflate => matches!(
+                (self.version, self.dcp_size, self.level, self.flag),
+                (0x10000, 0x24 | 0x44, 9, 0) | (0x11000, 0x44, 8 | 9, 0) | (0x11000, 0x44, 9, 15)
+            ),
+            Compression::Zstd => self.version == 0x11000 && self.dcp_size == 0x44 && self.flag == 0,
+        };
+        if ok {
+            Ok(())
+        } else {
+            Err(invalid(
+                "DCX",
+                4,
+                format!("unsupported envelope variant {self:?}"),
+            ))
+        }
+    }
+}
+
 /// A validated DCX envelope: how its payload is compressed, the payload as stored and the size it decodes to.
 #[derive(Debug, Clone, Copy)]
 pub struct Envelope<'a> {
     /// How the payload is compressed.
     pub compression: Compression,
+    /// The header's other variant fields, so that the same envelope can be written again ([`frame`], [`encode`]).
+    pub format: Format,
     /// The compressed payload, borrowed from the input.
     pub payload: &'a [u8],
     /// The size it decodes to, as the header states it.
@@ -120,10 +224,91 @@ impl<'a> Envelope<'a> {
         };
         Ok(Self {
             compression,
+            format: Format {
+                compression,
+                version,
+                dcp_size: a,
+                level,
+                flag,
+            },
             payload,
             decoded_size,
         })
     }
+}
+
+/// An envelope of `format` around `payload`, which decodes to `decoded_size` bytes: the 76-byte header and the payload
+/// as given, nothing compressed and no padding after it. The header of every envelope [`Envelope::parse`] reads from the
+/// installs is exactly what this writes from the fields the reader returns.
+pub fn frame(format: &Format, decoded_size: usize, payload: &[u8]) -> Result<Vec<u8>> {
+    format.validate()?;
+    let mut out = Out::new("DCX", true);
+    out.bytes(b"DCX\0");
+    out.u32(format.version);
+    out.u32(0x18);
+    out.u32(0x24);
+    out.u32(format.dcp_size);
+    out.u32(if format.dcp_size == 0x24 { 0x2c } else { 0x4c });
+    out.bytes(b"DCS\0");
+    out.u32(narrow("DCX", "the decoded size", decoded_size)?);
+    out.u32(narrow("DCX", "the payload size", payload.len())?);
+    out.bytes(b"DCP\0");
+    out.bytes(format.tag());
+    out.u32(0x20);
+    out.u8(format.level);
+    out.zeros(3);
+    out.u32(0);
+    out.u8(format.flag);
+    out.zeros(3);
+    out.u32(0);
+    out.u32(0x10100);
+    out.bytes(b"DCA\0");
+    out.u32(8);
+    debug_assert_eq!(out.len(), PAYLOAD_START);
+    out.bytes(payload);
+    Ok(out.finish())
+}
+
+/// What compresses a payload: the Oodle library, needed for Kraken envelopes only. zlib and zstd need nothing from the
+/// caller.
+#[derive(Debug, Clone, Copy)]
+pub struct Encoder<'a> {
+    /// The Oodle codec the caller opened; `None` makes a Kraken envelope an error.
+    pub oodle: Option<&'a Oodle>,
+}
+
+/// `decoded` compressed as `format` says and framed ([`frame`]).
+///
+/// The compressors are not the ones that made the shipped files, so the payload differs from theirs while decoding to
+/// the same bytes (and the header equals theirs): Kraken goes through the game's library at the level the crate's
+/// Oodle binding uses (4, where the shipped files say 6; the sizes come out within about 3 per cent of the shipped ones); zlib
+/// is flate2's pure-Rust deflate at `format.level` (the real zlib at level 9 reproduces 48 of the 58 shipped zlib
+/// payloads, this implementation none); zstd is libzstd's streaming encoder at `format.level` with the frame
+/// parameters of the shipped `regulation.bin` (no content size, no checksum, the 64 MiB window of level 21).
+pub fn encode(format: &Format, decoded: &[u8], encoder: &Encoder<'_>) -> Result<Vec<u8>> {
+    format.validate()?;
+    let payload = match format.compression {
+        Compression::Kraken => encoder
+            .oodle
+            .ok_or_else(|| invalid("DCX", 40, "Oodle required"))?
+            .compress(decoded)?,
+        Compression::Deflate => {
+            let mut z = flate2::write::ZlibEncoder::new(
+                Vec::new(),
+                flate2::Compression::new(u32::from(format.level)),
+            );
+            z.write_all(decoded)?;
+            z.finish()?
+        }
+        Compression::Zstd => {
+            let mut z = zstd::stream::write::Encoder::new(Vec::new(), i32::from(format.level))?;
+            z.include_checksum(false)?;
+            z.include_contentsize(false)?;
+            z.write_all(decoded)?;
+            z.finish()?
+        }
+    };
+    frame(format, decoded.len(), &payload)
 }
 
 /// What decodes an envelope: the optional Oodle decoder (needed for Kraken envelopes only) and the largest decoded size
@@ -177,7 +362,7 @@ impl Decoder<'_> {
 }
 #[cfg(test)]
 mod compression_tests {
-    use super::{Compression, Decoder, Envelope};
+    use super::{Compression, Decoder, Encoder, Envelope, Format, encode, frame};
 
     /// A KRAK envelope (the layout of a 0x11000 `DCX` with the 0x44 `DCP` block, level 9) around `payload`.
     fn krak(decoded: u32, payload: &[u8]) -> Vec<u8> {
@@ -313,5 +498,157 @@ mod compression_tests {
         assert_eq!(super::compression(&krak), Some(*b"KRAK"));
         assert_eq!(super::compression(&krak[..42]), None);
         assert_eq!(super::compression(b"BND4"), None);
+    }
+
+    #[test]
+    fn frame_writes_the_header_the_reader_reads_for_every_variant() {
+        let kraken9 = Format {
+            level: 9,
+            ..Format::KRAKEN
+        };
+        for format in [
+            Format::KRAKEN,
+            kraken9,
+            Format::DEFLATE_V1,
+            Format {
+                dcp_size: 0x44,
+                ..Format::DEFLATE_V1
+            },
+            Format::DEFLATE,
+            Format {
+                level: 8,
+                ..Format::DEFLATE
+            },
+            Format::DEFLATE_REGULATION,
+            Format::ZSTD,
+        ] {
+            let bytes = frame(&format, 1000, &[1, 2, 3]).unwrap();
+            let e = Envelope::parse(&bytes, usize::MAX).unwrap();
+            assert_eq!(
+                (e.format, e.decoded_size, e.payload),
+                (format, 1000, &[1, 2, 3][..])
+            );
+            assert_eq!(e.compression, format.compression);
+            assert_eq!(bytes.len(), 79);
+        }
+        // the envelope this module's tests build by hand is what `frame` writes
+        assert_eq!(frame(&kraken9, 1000, &[1, 2, 3]).unwrap(), krak(1000, &[1, 2, 3]));
+        // a variant the reader refuses is not written
+        for bad in [
+            Format {
+                level: 7,
+                ..Format::KRAKEN
+            },
+            Format {
+                version: 0x12000,
+                ..Format::ZSTD
+            },
+            Format {
+                flag: 1,
+                ..Format::DEFLATE
+            },
+            Format {
+                dcp_size: 0x24,
+                ..Format::KRAKEN
+            },
+        ] {
+            assert!(frame(&bad, 1, &[]).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn encoded_zlib_and_zstd_envelopes_decode_to_their_input() {
+        let decoded: Vec<u8> = (0..20_000u32).flat_map(|i| (i % 251).to_le_bytes()).collect();
+        let decoder = Decoder {
+            oodle: None,
+            max_output: 1 << 20,
+        };
+        for format in [
+            Format::DEFLATE_V1,
+            Format::DEFLATE,
+            Format::DEFLATE_REGULATION,
+            Format::ZSTD,
+        ] {
+            let bytes = encode(&format, &decoded, &Encoder { oodle: None }).unwrap();
+            let e = Envelope::parse(&bytes, usize::MAX).unwrap();
+            assert_eq!((e.format, e.decoded_size), (format, decoded.len()));
+            assert!(
+                e.payload.len() < decoded.len() / 2,
+                "{format:?} compresses this input"
+            );
+            assert_eq!(decoder.decode(&bytes).unwrap(), decoded, "{format:?}");
+        }
+        // the zstd frame states no content size, no checksum and no dictionary, as the shipped regulation frames
+        let z = encode(&Format::ZSTD, &decoded, &Encoder { oodle: None }).unwrap();
+        assert_eq!(&z[76..80], &[0x28, 0xb5, 0x2f, 0xfd]);
+        assert_eq!(
+            z[80] & 0xe7,
+            0,
+            "frame header descriptor: no size, checksum or dictionary id"
+        );
+        // Kraken needs the library
+        let e = encode(&Format::KRAKEN, &decoded, &Encoder { oodle: None }).unwrap_err();
+        assert_eq!(e.to_string(), "DCX at 0x28: Oodle required");
+    }
+
+    /// The error a decode gives, or `None` where it succeeds; a Kraken envelope whose framing passes ends at the missing
+    /// library, which is "success" for this test.
+    fn refusal(decoder: &Decoder<'_>, bytes: &[u8]) -> Option<String> {
+        match decoder.decode(bytes) {
+            Ok(_) => None,
+            Err(e) if e.to_string() == "DCX at 0x28: Oodle required" => None,
+            Err(e) => Some(e.to_string()),
+        }
+    }
+
+    /// Each size word one more and one less, a payload one byte short and one byte over: refused, for every codec.
+    #[test]
+    fn a_size_word_one_off_or_a_payload_one_byte_off_is_refused() {
+        let decoded: Vec<u8> = (0..1000u32).map(|i| (i * 7 % 251) as u8).collect();
+        let decoder = Decoder {
+            oodle: None,
+            max_output: 1 << 20,
+        };
+        // Kraken: one stored block (`CC 06`, raw bytes), which the framing walk checks without the library
+        let mut stored = vec![0xCC, 0x06];
+        stored.extend(&decoded);
+        let cases = [
+            (
+                Format::DEFLATE,
+                encode(&Format::DEFLATE, &decoded, &Encoder { oodle: None }).unwrap(),
+            ),
+            (
+                Format::ZSTD,
+                encode(&Format::ZSTD, &decoded, &Encoder { oodle: None }).unwrap(),
+            ),
+            (
+                Format::KRAKEN,
+                frame(&Format::KRAKEN, decoded.len(), &stored).unwrap(),
+            ),
+        ];
+        for (format, mut good) in cases {
+            // a zero byte after the payload is alignment, so a payload size one over takes it
+            good.push(0);
+            assert_eq!(refusal(&decoder, &good), None, "{format:?} as framed");
+            let word = |bytes: &[u8], at: usize| u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap());
+            let (dsize, csize) = (word(&good, 28), word(&good, 32));
+            for (at, was) in [(28, dsize), (32, csize)] {
+                for now in [was - 1, was + 1] {
+                    let mut bad = good.clone();
+                    bad[at..at + 4].copy_from_slice(&now.to_be_bytes());
+                    assert!(
+                        refusal(&decoder, &bad).is_some(),
+                        "{format:?}: the word at {at} is {now}, not {was}"
+                    );
+                }
+            }
+            // the payload cut by one byte (its size word kept, so the envelope ends early), and one byte over
+            let mut short = good.clone();
+            short.truncate(short.len() - 2);
+            assert!(refusal(&decoder, &short).is_some(), "{format:?} short");
+            let mut over = good.clone();
+            over.push(1);
+            assert!(refusal(&decoder, &over).is_some(), "{format:?} over");
+        }
     }
 }

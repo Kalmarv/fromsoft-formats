@@ -1,6 +1,6 @@
 [package]
 name = "fromsoft-formats"
-description = "Checked readers for Sekiro and Elden Ring data: BHD5 archives, DCX, BND4, FLVER, MSB, TPF, MTD/MATBIN, params and more"
+description = "Checked readers for Sekiro and Elden Ring data (BHD5 archives, DCX, BND4, FLVER, MSB, TPF, MTD/MATBIN, params and more), and writers for DCX, BND4, TPF, FMG, PARAM and regulation.bin"
 keywords = ["fromsoftware", "sekiro", "elden-ring", "flver", "modding"]
 categories = ["parser-implementations", "game-development"]
 readme = "README.md"
@@ -20,8 +20,10 @@ serde.workspace = true
 encoding_rs.workspace = true
 half.workspace = true
 aes.workspace = true
+flate2.workspace = true
 num-bigint.workspace = true
 sha2.workspace = true
+zstd.workspace = true
 
 [dev-dependencies]
 primase-testdata.workspace = true
@@ -46,6 +48,7 @@ publish = true
 aes = { version = "=0.9.3", default-features = false }
 dxcontainer = { version = "0.3.0", git = "https://github.com/Kalmarv/dx", rev = "6b3595b70afc1cf906f047e74102ce5967c822c3" }
 encoding_rs = { version = "=0.8.42", default-features = false, features = ["alloc"] }
+flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
 half = { version = "=2.7.1", default-features = false }
 havok-formats = { version = "0.8.1", git = "https://github.com/Kalmarv/havok-formats", rev = "252cec530cae8563abe865571ce2899a93458af9" }
 num-bigint = { version = "=0.5.1", default-features = false, features = ["std"] }
@@ -55,6 +58,7 @@ serde = { version = "1", default-features = false, features = ["std", "derive"] 
 serde_json = { version = "=1.0.154", default-features = false, features = ["std", "preserve_order", "float_roundtrip"] }
 sha2 = { version = "=0.11.1", default-features = false }
 thiserror = { version = "=2.0.21", default-features = false, features = ["std"] }
+zstd = { version = "=0.13.3", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "deny"
