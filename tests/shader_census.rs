@@ -1,6 +1,6 @@
 //! Elden Ring's shader names and sampler names over every material binary of the install (`shader`), soulstruct's
-//! per-shader tables of the texture coordinate sets against the models that use the shaders, and Sekiro's shader names
-//! through the same grammar.
+//! per-shader tables of the texture coordinate sets against the models that use the shaders and against the shaders' own
+//! pixel programs, and Sekiro's shader names through the same grammar.
 //!
 //! The expected numbers are a census made with an independent Python reader of the same files (a MATBIN walker, the
 //! documented grammar and map table written again, a FLVER layout walker over the same archive entries); the second test's
@@ -385,5 +385,164 @@ fn sekiros_shader_stems() -> Result<()> {
         BTreeMap::from([("C".to_owned(), 8), ("M".to_owned(), 1_069)])
     );
     assert_eq!(families.len(), 23);
+    Ok(())
+}
+
+/// The number `n` of the first `Texture2D_<n>` in a sampler or texture name.
+fn texture_number(name: &str) -> Option<String> {
+    name.match_indices("Texture2D_").find_map(|(at, tag)| {
+        let digits: String = name
+            .get(at + tag.len()..)?
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        (!digits.is_empty()).then_some(digits)
+    })
+}
+
+/// The program-derived half of the same question: which texture coordinates the shaders' own pixel programs read. For each
+/// stem `oracles.dxc.elden/shader-uv-programs.json` (tools/gen_shader_uv_programs.py: DXC's disassembly of the Gbuf pixel and
+/// vertex programs, each sampled texture's coordinate walked back to the vertex inputs it depends on) gives the UV slots a
+/// `Texture2D_<n>` reads and the UV slots the vertex program declares; the game's own metaparam
+/// (`oracles.soulsformats.elden/format/metaparam.jsonl`) gives the group of each texture, and soulstruct's tables the UV the
+/// group is said to read and the tuple of UVs the shader is said to take. The expected numbers are the census of an
+/// independent Python reading of the same three files.
+#[test]
+fn soulstructs_uv_tables_against_the_shader_programs() -> Result<()> {
+    let (Some(programs), Some(table), Some(format)) = (
+        oracle(OracleSet::Dxc, inputs::Game::Elden, "shader-uv-programs.json"),
+        oracle(OracleSet::Soulstruct, inputs::Game::Elden, "shader-uv-slots.json"),
+        oracle(OracleSet::SoulsFormats, inputs::Game::Elden, "format"),
+    ) else {
+        return Ok(());
+    };
+    let programs: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(programs)?)?;
+    let programs = programs["stems"].as_object().ok_or("stems")?;
+    let table: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(table)?)?;
+    let slots = table["slots"].as_object().ok_or("slots")?;
+    let claims = table["groups"].as_object().ok_or("groups")?;
+    // the group of each texture of each shader, as the game's metaparam states it
+    let mut group_of: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+    for line in std::fs::read_to_string(format.join("metaparam.jsonl"))?.lines() {
+        let record: serde_json::Value = serde_json::from_str(line)?;
+        let name = record["name"].as_str().ok_or("metaparam name")?;
+        let mut groups = BTreeMap::new();
+        for texture in record["textures"].as_array().ok_or("textures")? {
+            if let Some(n) = texture_number(texture["name"].as_str().ok_or("texture name")?) {
+                groups.insert(n, texture["uv_group"].as_str().ok_or("uv_group")?.to_owned());
+            }
+        }
+        group_of.insert(name.strip_suffix(".metaparam").unwrap_or(name).to_owned(), groups);
+    }
+
+    let norm = |s: &str| s.strip_suffix("_cloth").unwrap_or(s).to_owned();
+    let (mut gbuf, mut in_table, mut length_equal) = (0usize, 0usize, 0usize);
+    let mut length_differs = Vec::new();
+    let (mut textures, mut via, mut no_texcoord, mut compared, mut beyond) =
+        (0usize, 0usize, 0usize, 0usize, 0usize);
+    let mut also: BTreeMap<String, usize> = BTreeMap::new();
+    let mut by_category: BTreeMap<String, [usize; 2]> = BTreeMap::new();
+    let mut disagreeing_stems = BTreeSet::new();
+    for (stem, program) in programs {
+        let base = norm(stem);
+        gbuf += usize::from(program["pair"] == "Gbuf");
+        let declared = program["uv_slots"].as_u64().ok_or("uv_slots")?;
+        let tuple = slots.get(&base).and_then(|t| t.as_array());
+        if let Some(tuple) = tuple {
+            in_table += 1;
+            if declared == u64::try_from(tuple.len())? {
+                length_equal += 1;
+            } else {
+                length_differs.push((stem.as_str(), declared, tuple.len()));
+            }
+        }
+        let groups = group_of.get(stem).or_else(|| group_of.get(&base));
+        let by_group = claims.get(&base).and_then(|g| g.as_object());
+        for (n, texture) in program["textures"].as_object().ok_or("textures")? {
+            textures += 1;
+            via += usize::from(texture["via"] == true);
+            let mut read = Vec::new();
+            for u in texture["slots"].as_array().ok_or("slots")? {
+                read.push(usize::try_from(u.as_u64().ok_or("slot")?)?);
+            }
+            let names: Vec<&str> = texture["also"]
+                .as_array()
+                .ok_or("also")?
+                .iter()
+                .filter_map(|a| a.as_str())
+                .collect();
+            if !names.is_empty() {
+                *also.entry(names.join("+")).or_default() += 1;
+            }
+            no_texcoord += usize::from(read.is_empty());
+            let (Some(tuple), Some(by_group), Some(groups)) = (tuple, by_group, groups) else {
+                continue;
+            };
+            let Some(group) = groups.get(n) else {
+                continue;
+            };
+            let Some(claimed) = by_group.get(group).and_then(|c| c.as_str()) else {
+                continue;
+            };
+            if read.is_empty() {
+                continue;
+            }
+            compared += 1;
+            let category = Profile::parse(&base).map_or_else(|| "-".to_owned(), |p| p.category);
+            let tuple: Vec<&str> = tuple.iter().filter_map(|u| u.as_str()).collect();
+            if read.iter().any(|&u| u >= tuple.len()) {
+                beyond += 1;
+            } else if read.iter().all(|&u| tuple.get(u) == Some(&claimed)) {
+                by_category.entry(category).or_default()[0] += 1;
+            } else {
+                by_category.entry(category).or_default()[1] += 1;
+                disagreeing_stems.insert(base.clone());
+            }
+        }
+    }
+    println!(
+        "{} programs ({gbuf} Gbuf), {in_table} of a stem in the slot table: the tuple's length is the declared UV slot count \
+         for {length_equal}, not for {length_differs:?}; {textures} textures sampled, {via} through another texture's value, \
+         {no_texcoord} with no TEXCOORD in the coordinate, also reading {also:?}; {compared} compared with the table's group UV \
+         ({beyond} beyond the tuple), by category [agreeing, disagreeing] {by_category:?}; stems with a disagreement: \
+         {disagreeing_stems:?}",
+        programs.len()
+    );
+    assert_eq!((programs.len(), gbuf), (688, 688));
+    assert_eq!((in_table, length_equal), (177, 172));
+    assert_eq!(
+        length_differs,
+        [
+            ("CS[c8901][VA_Frame]_Burn", 6, 8),
+            ("CS[c8901][VA_Frame]_Burn_cloth", 6, 8),
+            ("C[AMSN][VA_Loop]", 4, 6),
+            ("C[c3320]_VA_Frame", 3, 5),
+            ("M[AMSN_V][Mb3][3Mask][Ov_N]", 1, 2),
+        ]
+    );
+    assert_eq!((textures, via, no_texcoord), (3_698, 392, 63));
+    assert_eq!(
+        also,
+        BTreeMap::from([
+            ("BINORMAL+NORMAL+POSITION+TANGENT".to_owned(), 29),
+            ("COLOR".to_owned(), 4),
+            ("NORMAL+POSITION".to_owned(), 12),
+            ("NORMAL+POSITION+TANGENT".to_owned(), 100),
+            ("NORMAL+TANGENT".to_owned(), 18),
+            ("POSITION".to_owned(), 41),
+        ])
+    );
+    assert_eq!((compared, beyond), (980, 0));
+    assert_eq!(
+        by_category,
+        BTreeMap::from([
+            ("-".to_owned(), [88, 6]),
+            ("C".to_owned(), [552, 110]),
+            ("CS".to_owned(), [16, 44]),
+            ("M".to_owned(), [144, 2]),
+            ("P".to_owned(), [11, 7]),
+        ])
+    );
+    assert_eq!(disagreeing_stems.len(), 24);
     Ok(())
 }

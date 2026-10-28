@@ -20,7 +20,10 @@
   `C[DetailBlend][S2]_cloth`-style stems (category, family brackets, tags, suffixes; the family, the multi-blend
   count of `[MbN]`, the overlay of `[Ov_*]`), `sampler_map` folds a sampler's map spelling (`AlbedoMap`, `AlbedoMap_0`,
   `GSBlendMap_AlbedoMap_0`) into a `MapType`. Held to all 20,619 material binaries of the install (975 stems, 692 of them
-  in the grammar; 152,138 samplers) and soulstruct's per-shader UV-slot table to the UV attributes of 75,826 meshes.
+  in the grammar; 152,138 samplers) and soulstruct's per-shader UV-slot table to the UV attributes of 75,826 meshes and
+  to the shaders' own pixel programs (`tools/gen_shader_uv_programs.py`: the vertex-input texture coordinates 3,698
+  sampled textures of 688 programs read; 172 of the 177 tuple lengths equal the programs' declared UV slots, 811 of the
+  980 compared textures read the UV the table names, the 169 that do not are all of 24 character, hair, eye, grass and test shaders).
 - `flver::gx`: the community's names for the words of the GX items the installs store (`GxItem::fields`,
   `Material::{emissive_intensity, translucency_scale, albedo_colour, parallax, water}`).
 - Breaking: `btl::Light` gains `flicker_interval`, `flicker_brightness`, `event_id`, `near_clip`,

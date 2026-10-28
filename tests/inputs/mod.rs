@@ -66,6 +66,10 @@ primase_testdata::inputs! {
             about: "tables of soulstruct, converted to JSON by a script (the tables are Python literals in its sources)",
             source: "third-party: soulstruct 12b6918 (GPL-3.0-or-later per its pyproject.toml), read as data and never copied into a repository",
         },
+        Dxc = "dxc" {
+            about: "Microsoft DXC's disassembly of the games' DXIL shader programs, reduced to a census by a script",
+            source: "independent: DXC 10.0.26100.0's `dxc -dumpbin` over the programs of the user's install, read by tools/gen_shader_uv_programs.py",
+        },
     }
     declared {
         Query::Oracle(OracleSet::Corpus, Game::Sekiro, "havok") => {
@@ -181,6 +185,12 @@ primase_testdata::inputs! {
             gate: false,
             about: r#"soulstruct's per-shader tables of the texture coordinate sets (`SHADER_UV_SLOTS`: the stem of each of 176 shaders to a tuple of UV names, `SHADER_GROUP_UV`: 168 stems to the UV each sampler group reads) as `{"source", "slots", "groups"}`; tests/shader_census.rs"#,
             source: r#"third-party: soulstruct 12b6918's `eldenring/models/shaders.py`, the two dictionary literals evaluated by a script that executes none of its code and written as JSON; the tables are the author's inference (HIGH, MEDIUM and LOW comments), used as an oracle and not as a source"#,
+        },
+        Query::Oracle(OracleSet::Dxc, Game::Elden, "shader-uv-programs.json") => {
+            status: Live,
+            gate: false,
+            about: r#"which vertex-input texture-coordinate lanes the sampled textures of each Elden Ring surface shader's pixel program take their coordinates from (`stems`: per stem its program `pair`, its declared `uv_slots` and per `Texture2D_<n>` the UV `slots` it reads, the `also` vertex semantics and whether it goes `via` another texture); tests/shader_census.rs"#,
+            source: r#"independent: the Gbuf (or Fwd) pixel and vertex programs of the 688 stems of the install's shader bundles that have a pair, disassembled by DXC 10.0.26100.0 and walked by tools/gen_shader_uv_programs.py"#,
         },
         Query::Oracle(OracleSet::Smithbox, Game::Elden, "gx-item-descriptors.json") => {
             status: Live,
