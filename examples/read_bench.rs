@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! cargo run --release --example read_bench -- <sekiro|elden> <game folder> <keys folder> <oodle library | -> \
-//!     [--threads N] [--sample K] [--max-bytes N] [--no-parse]
+//!     [--threads N] [--sample K] [--max-bytes N] [--no-parse] [--only HASH]
 //! ```
 //!
 //! Every `K`th entry (hash order, default 1: all of them) whose stored size is at most `--max-bytes` (default 256 MiB) is
@@ -151,11 +151,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("usage: read_bench <sekiro|elden> <game folder> <keys folder> <oodle library | -> [--threads N] [--sample K] [--max-bytes N] [--no-parse]".into());
     };
     let (mut threads, mut sample, mut max_bytes, mut parse) = (1usize, 1usize, 256usize << 20, true);
+    let mut only: Option<u64> = None;
     while let Some(a) = args.next() {
         let mut value = || args.next().ok_or_else(|| format!("{a} needs a value"));
         match a.as_str() {
             "--threads" => threads = value()?.parse()?,
             "--sample" => sample = value()?.parse::<usize>()?.max(1),
+            "--only" => only = Some(u64::from_str_radix(value()?.trim_start_matches("0x"), 16)?),
             "--max-bytes" => max_bytes = value()?.parse()?,
             "--no-parse" => parse = false,
             other => return Err(format!("unknown option {other}").into()),
@@ -188,8 +190,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut census = Census::default();
     let (mut refused_decode, mut refused_split, mut refused_flver) = (0u64, 0u64, 0u64);
     let started = Instant::now();
+    let mut biggest: Vec<(usize, u64)> = Vec::new();
     for (&hash, indexed) in archive.entries.iter().step_by(sample) {
-        if indexed.entry.padded_size > max_bytes {
+        if indexed.entry.padded_size > max_bytes || only.is_some_and(|h| h != hash) {
             continue;
         }
         let t = Instant::now();
@@ -229,6 +232,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     {
                                         fold_model(&mut hasher, &model);
                                         census.add(&model);
+                                        biggest.push((
+                                            model.meshes.iter().map(|m| m.vertices.len()).sum(),
+                                            hash,
+                                        ));
                                     }
                                 }
                                 Err(_) => refused_flver += 1,
@@ -246,6 +253,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     {
                         fold_model(&mut hasher, &model);
                         census.add(&model);
+                        biggest.push((model.meshes.iter().map(|m| m.vertices.len()).sum(), hash));
                     }
                 }
                 Err(_) => refused_flver += 1,
@@ -263,6 +271,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     split.show("binder split (+nested decode)");
     flver.show("FLVER parse");
     println!("{:<28} {:9.3} s", "entries loop total", total.as_secs_f64());
+    biggest.sort_unstable_by(|a, b| b.cmp(a));
+    biggest.truncate(3);
+    for (vertices, hash) in &biggest {
+        println!("a model of {vertices} vertices in the entry {hash:#x} (--only {hash:x})");
+    }
     census.show();
     println!("refused: decode {refused_decode}, binder {refused_split}, flver {refused_flver}");
     println!(
