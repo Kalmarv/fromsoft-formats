@@ -250,6 +250,8 @@ struct Totals {
     max_depth: usize,
     properties: usize,
     bounds_not_extremes: usize,
+    /// type 0 actions that hold a field word, a property or a field list
+    placeholders_with_content: usize,
 }
 
 fn tally(totals: &mut Totals, fxr: &Fxr) {
@@ -259,6 +261,15 @@ fn tally(totals: &mut Totals, fxr: &Fxr) {
     totals.max_depth = totals.max_depth.max(depth(&fxr.root));
     for a in fxr.actions() {
         *totals.actions.entry(a.id).or_default() += 1;
+        if a.id == 0
+            && !(a.fields1.is_empty()
+                && a.fields2.is_empty()
+                && a.properties1.is_empty()
+                && a.properties2.is_empty()
+                && a.field_lists.is_empty())
+        {
+            totals.placeholders_with_content += 1;
+        }
         for p in a.properties1.iter().chain(&a.properties2) {
             totals.properties += 1;
             if let Some(k) = p.keyframes() {
@@ -519,6 +530,12 @@ fn every_effect_file_reads_and_its_lights_agree_with_the_fxr_library() -> Result
             game.name()
         );
         assert_eq!(t.not_in_oracle, 0, "{}", game.name());
+        assert_eq!(
+            t.placeholders_with_content,
+            0,
+            "{}: type 0 actions with content",
+            game.name()
+        );
         assert_eq!(
             t.actions.values().sum::<usize>(),
             expect.actions,
