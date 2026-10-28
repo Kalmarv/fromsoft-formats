@@ -46,3 +46,47 @@ pub fn bits3(v: &serde_json::Value) -> Result<[u32; 3], Box<dyn std::error::Erro
     let a = v.as_array().ok_or("vector")?;
     Ok([bits(&a[0])?, bits(&a[1])?, bits(&a[2])?])
 }
+
+/// Calls `f(label, bytes)` for each leaf file of the archive entries whose dictionary name ends with one of `suffixes`:
+/// a BND4 is entered (its members decoded, at any depth up to eight) and anything else is a leaf. `label` is the entry's
+/// name, then `|` and the member names down to the leaf. Entries are visited in path-hash order. Returns how many entries
+/// were visited.
+pub fn each_leaf(
+    archive: &fromsoft_formats::Archive,
+    names: &fromsoft_formats::NameDictionary,
+    suffixes: &[&str],
+    decoder: &fromsoft_formats::dcx::Decoder<'_>,
+    mut f: impl FnMut(&str, &[u8]) -> Result<(), Box<dyn std::error::Error>>,
+) -> Result<usize, Box<dyn std::error::Error>> {
+    fn leaves(
+        bytes: &[u8],
+        label: &str,
+        decoder: &fromsoft_formats::dcx::Decoder<'_>,
+        f: &mut impl FnMut(&str, &[u8]) -> Result<(), Box<dyn std::error::Error>>,
+        depth: usize,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if bytes.starts_with(b"BND4") && depth < 8 {
+            let binder = fromsoft_formats::Binder::read(bytes, decoder)?;
+            for (i, file) in binder.files.iter().enumerate() {
+                let name = file.name.clone().unwrap_or_else(|| format!("#{i}"));
+                leaves(&file.bytes, &format!("{label}|{name}"), decoder, f, depth + 1)?;
+            }
+            Ok(())
+        } else {
+            f(label, bytes)
+        }
+    }
+    let mut visited = 0;
+    for (hash, paths) in &names.names {
+        if !archive.entries.contains_key(hash) {
+            continue;
+        }
+        let Some(path) = paths.iter().find(|p| suffixes.iter().any(|s| p.ends_with(s))) else {
+            continue;
+        };
+        let bytes = archive.read_hash(*hash, decoder)?;
+        visited += 1;
+        leaves(&bytes, path, decoder, &mut f, 0)?;
+    }
+    Ok(visited)
+}

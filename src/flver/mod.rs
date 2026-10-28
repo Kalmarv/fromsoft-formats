@@ -2,6 +2,8 @@
 //! polygons, materials with their texture bindings, vertex layouts and the meshes' decoded vertices and face sets,
 //! kept in the file's coordinates. Edge-compressed indices and the legacy text encoding are refused.
 mod channel;
+pub mod gx;
+mod gx_items;
 mod vertex;
 use crate::{
     Result,

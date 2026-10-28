@@ -62,6 +62,10 @@ primase_testdata::inputs! {
             about: "UXM's path dictionaries (`dictionary.txt`, UTF-8, one archive path per line)",
             source: "third-party: UXM-Selective-Unpack 9501be8's dictionaries",
         },
+        Soulstruct = "soulstruct" {
+            about: "tables of soulstruct, converted to JSON by a script (the tables are Python literals in its sources)",
+            source: "third-party: soulstruct 12b6918 (GPL-3.0-or-later per its pyproject.toml), read as data and never copied into a repository",
+        },
     }
     declared {
         Query::Oracle(OracleSet::Corpus, Game::Sekiro, "havok") => {
@@ -171,6 +175,18 @@ primase_testdata::inputs! {
             gate: true,
             about: r#"caller-provided UTF-8 Sekiro path dictionary"#,
             source: r#"third-party: UXM's Sekiro path dictionary"#,
+        },
+        Query::Oracle(OracleSet::Soulstruct, Game::Elden, "shader-uv-slots.json") => {
+            status: Live,
+            gate: false,
+            about: r#"soulstruct's per-shader tables of the texture coordinate sets (`SHADER_UV_SLOTS`: the stem of each of 176 shaders to a tuple of UV names, `SHADER_GROUP_UV`: 168 stems to the UV each sampler group reads) as `{"source", "slots", "groups"}`; tests/shader_census.rs"#,
+            source: r#"third-party: soulstruct 12b6918's `eldenring/models/shaders.py`, the two dictionary literals evaluated by a script that executes none of its code and written as JSON; the tables are the author's inference (HIGH, MEDIUM and LOW comments), used as an oracle and not as a source"#,
+        },
+        Query::Oracle(OracleSet::Smithbox, Game::Elden, "gx-item-descriptors.json") => {
+            status: Live,
+            gate: false,
+            about: r#"the community's names and types for the words of the FLVER material extension items (`GX_Item_Descriptors.json`: a `list` of items with an `ID`, a version `Unk04`, a `Category` and `Items`, each a `Name` and a `Type` code); tests/gx_census.rs"#,
+            source: r#"third-party: Smithbox fdde3225's `Smithbox.Data/Assets/FLVER/GX_Item_Descriptors.json` (MIT repository; the file carries no licence of its own), read in place"#,
         },
     }
     debug {}

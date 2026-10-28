@@ -103,6 +103,7 @@ pub mod overworld;
 pub mod param;
 pub mod paramdef;
 mod sekiro;
+pub mod shader;
 pub mod states;
 pub mod tae;
 pub mod tpf;
