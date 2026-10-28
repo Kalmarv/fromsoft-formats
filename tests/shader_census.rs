@@ -1,5 +1,6 @@
-//! Elden Ring's shader names and sampler names over every material binary of the install (`shader`), and soulstruct's
-//! per-shader tables of the texture coordinate sets against the models that use the shaders.
+//! Elden Ring's shader names and sampler names over every material binary of the install (`shader`), soulstruct's
+//! per-shader tables of the texture coordinate sets against the models that use the shaders, and Sekiro's shader names
+//! through the same grammar.
 //!
 //! The expected numbers are a census made with an independent Python reader of the same files (a MATBIN walker, the
 //! documented grammar and map table written again, a FLVER layout walker over the same archive entries); the second test's
@@ -330,5 +331,59 @@ fn soulstructs_uv_slot_table_against_the_models() -> Result<()> {
     // 168 of the table's 176 stems are in the grammar; the eight that are not are legacy and test shaders
     let outside: Vec<&String> = slots.keys().filter(|s| Profile::parse(s).is_none()).collect();
     assert_eq!(outside.len(), 8, "{outside:?}");
+    Ok(())
+}
+
+/// Sekiro's material definitions (`/mtd/allmaterialbnd.mtdbnd.dcx`) through the same grammar: its map shaders (`M[Multiple]`,
+/// `M[Translucency]`, `M[Sky]`) fit it, its character and generic shaders (`Character_AMSN_[DetailBlend]`, `GXFlver_*`, `Fur_NTC`)
+/// do not.
+#[test]
+fn sekiros_shader_stems() -> Result<()> {
+    let (Some(archive), Some(dll)) = (common::archive(Game::Sekiro)?, oodle(Tool::Oodle6)) else {
+        return Ok(());
+    };
+    let dll = common::oodle(dll)?;
+    let decoder = Decoder {
+        oodle: Some(&dll),
+        max_output: 1 << 30,
+    };
+    let binder = Binder::read(
+        &archive.read("/mtd/allmaterialbnd.mtdbnd.dcx", &decoder)?,
+        &decoder,
+    )?;
+    let (mut materials, mut parsed_materials) = (0usize, 0usize);
+    let (mut stems, mut parsed_stems) = (BTreeSet::new(), BTreeSet::new());
+    let mut categories: BTreeMap<String, usize> = BTreeMap::new();
+    let mut families = BTreeSet::new();
+    for file in binder.files.iter().filter(|f| {
+        f.name
+            .as_deref()
+            .is_some_and(|n| n.to_ascii_lowercase().ends_with(".mtd"))
+    }) {
+        let definition = fromsoft_formats::mtd::MaterialDefinition::read(&file.bytes)
+            .map_err(|e| format!("{:?}: {e}", file.name))?;
+        materials += 1;
+        let name = stem(&definition.shader);
+        stems.insert(name.to_owned());
+        if let Some(p) = Profile::parse(name) {
+            assert_eq!(p.stem(), name);
+            parsed_materials += 1;
+            parsed_stems.insert(name.to_owned());
+            *categories.entry(p.category.clone()).or_default() += 1;
+            families.insert(p.family().to_owned());
+        }
+    }
+    expect_found(
+        Query::Install(inputs::Game::Sekiro, None),
+        "material definitions",
+        materials,
+    );
+    assert_eq!((materials, stems.len()), (3_170, 257));
+    assert_eq!((parsed_stems.len(), parsed_materials), (56, 1_077));
+    assert_eq!(
+        categories,
+        BTreeMap::from([("C".to_owned(), 8), ("M".to_owned(), 1_069)])
+    );
+    assert_eq!(families.len(), 23);
     Ok(())
 }
