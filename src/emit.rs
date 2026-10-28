@@ -73,6 +73,11 @@ impl Out {
         self.buf.extend_from_slice(&b);
     }
 
+    /// Appends a signed 16-bit word.
+    pub fn i16(&mut self, v: i16) {
+        self.u16(u16::from_ne_bytes(v.to_ne_bytes()));
+    }
+
     /// Appends a 32-bit word.
     pub fn u32(&mut self, v: u32) {
         let b = self.word_bytes(v);

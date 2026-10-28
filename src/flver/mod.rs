@@ -4,7 +4,10 @@
 mod channel;
 pub mod gx;
 mod gx_items;
+
+mod encode;
 mod vertex;
+mod write;
 use crate::{
     Result,
     bytes::{Budget, View},
@@ -12,6 +15,7 @@ use crate::{
 };
 pub use channel::Channel;
 pub use vertex::Vertex;
+pub use write::{GxArea, Layout, SkeletonBone, SkeletonSet};
 
 /// One member of a vertex layout: an attribute a vertex stores, and where.
 #[derive(Clone, Debug)]
