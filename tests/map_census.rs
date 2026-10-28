@@ -342,10 +342,12 @@ fn draw_blocks_and_the_numbers_of_regions_and_events() -> Result<()> {
     let (mut regions, mut region_counter, mut events, mut event_counter) = (0, 0, 0, 0);
     let (mut event_is_index, mut event_ids_unique, mut event_ids_dense) = (0, 0, 0);
     let (mut numbers_unique, mut numbers_dense, mut files) = (0, 0, 0);
+    let mut games_read = 0;
     for (game, table) in expected {
         let Some((_, layouts)) = layouts(game)? else {
             continue;
         };
+        games_read += 1;
         let mut kinds = BTreeMap::<String, [usize; 7]>::new();
         let (mut tails, mut conditions) = (BTreeMap::<[u8; 4], usize>::new(), BTreeSet::new());
         let mut display_tails = BTreeMap::<[u8; 4], usize>::new();
@@ -439,6 +441,10 @@ fn draw_blocks_and_the_numbers_of_regions_and_events() -> Result<()> {
                 3
             );
         }
+    }
+    // the totals below are over both games: only when both installs are configured
+    if games_read < 2 {
+        return Ok(());
     }
     // 945 maps: the region index within the type is the per-type counter on all 45,121 regions; the number at +44 is
     // unique in every map and is 0 to n-1 in 419; the event number at +8 equals the record index on 367 of 9,211 events,
