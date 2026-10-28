@@ -1,6 +1,7 @@
 //! FLVER2 models (versions `0x20013`, `0x20014`, `0x20016` and `0x2001a`: Sekiro's and Elden Ring's): bones, dummy
 //! polygons, materials with their texture bindings, vertex layouts and the meshes' decoded vertices and face sets,
-//! kept in the file's coordinates. Edge-compressed indices and the legacy text encoding are refused.
+//! kept in the file's coordinates. Edge-compressed indices and the legacy text encoding are refused. [`Model::write`] writes a
+//! model back with the [`Layout`] of the file it came from (or one made for it).
 mod channel;
 pub mod gx;
 mod gx_items;
