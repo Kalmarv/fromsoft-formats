@@ -48,9 +48,10 @@ pub fn bits3(v: &serde_json::Value) -> Result<[u32; 3], Box<dyn std::error::Erro
 }
 
 /// Calls `f(label, bytes)` for each leaf file of the archive entries whose dictionary name ends with one of `suffixes`:
-/// a BND4 is entered (its members decoded, at any depth up to eight) and anything else is a leaf. `label` is the entry's
-/// name, then `|` and the member names down to the leaf. Entries are visited in path-hash order. Returns how many entries
-/// were visited.
+/// a BND4 is entered (its members decoded, at any depth up to eight), a split binder (a BHF4 index named `...bhd`, its
+/// payload the entry named `...bdt`) is opened and entered, and anything else is a leaf. `label` is the entry's name,
+/// then `|` and the member names down to the leaf. Entries are visited in path-hash order. Returns how many entries were
+/// visited.
 pub fn each_leaf(
     archive: &fromsoft_formats::Archive,
     names: &fromsoft_formats::NameDictionary,
@@ -58,20 +59,36 @@ pub fn each_leaf(
     decoder: &fromsoft_formats::dcx::Decoder<'_>,
     mut f: impl FnMut(&str, &[u8]) -> Result<(), Box<dyn std::error::Error>>,
 ) -> Result<usize, Box<dyn std::error::Error>> {
+    type Visit<'a> = &'a mut dyn FnMut(&str, &[u8]) -> Result<(), Box<dyn std::error::Error>>;
+    fn members(
+        binder: &fromsoft_formats::Binder,
+        label: &str,
+        decoder: &fromsoft_formats::dcx::Decoder<'_>,
+        f: Visit<'_>,
+        depth: usize,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        for (i, file) in binder.files.iter().enumerate() {
+            let name = file.name.clone().unwrap_or_else(|| format!("#{i}"));
+            leaves(
+                &file.bytes,
+                &format!("{label}|{name}"),
+                decoder,
+                &mut *f,
+                depth + 1,
+            )?;
+        }
+        Ok(())
+    }
     fn leaves(
         bytes: &[u8],
         label: &str,
         decoder: &fromsoft_formats::dcx::Decoder<'_>,
-        f: &mut impl FnMut(&str, &[u8]) -> Result<(), Box<dyn std::error::Error>>,
+        f: Visit<'_>,
         depth: usize,
     ) -> Result<(), Box<dyn std::error::Error>> {
         if bytes.starts_with(b"BND4") && depth < 8 {
             let binder = fromsoft_formats::Binder::read(bytes, decoder)?;
-            for (i, file) in binder.files.iter().enumerate() {
-                let name = file.name.clone().unwrap_or_else(|| format!("#{i}"));
-                leaves(&file.bytes, &format!("{label}|{name}"), decoder, f, depth + 1)?;
-            }
-            Ok(())
+            members(&binder, label, decoder, f, depth)
         } else {
             f(label, bytes)
         }
@@ -86,7 +103,16 @@ pub fn each_leaf(
         };
         let bytes = archive.read_hash(*hash, decoder)?;
         visited += 1;
-        leaves(&bytes, path, decoder, &mut f, 0)?;
+        if bytes.starts_with(b"BHF4") {
+            let stem = path
+                .strip_suffix("bhd")
+                .ok_or("a split binder not named ...bhd")?;
+            let payload = archive.read(&format!("{stem}bdt"), decoder)?;
+            let binder = fromsoft_formats::Binder::read_split(&bytes, &payload, decoder)?;
+            members(&binder, path, decoder, &mut f, 0)?;
+        } else {
+            leaves(&bytes, path, decoder, &mut f, 0)?;
+        }
     }
     Ok(visited)
 }

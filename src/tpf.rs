@@ -5,6 +5,66 @@ use crate::{
     bytes::{Budget, View, coverage},
     invalid,
 };
+/// The pixel layout a texture's stored format code stands for. The DDS file inside the texture states the layout itself
+/// (a DXGI format in its extended header, a FourCC or channel masks); the code is the packager's, and a layout may be
+/// stored under several codes (`DXT1` as 0, 1 and 108) and in more than one DDS dialect (code 0 is a DXGI BC1 sRGB header
+/// in 12,647 Elden Ring textures and a plain `DXT1` FourCC, which cannot say sRGB, in 3,389).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum PixelFamily {
+    /// BC1 (`DXT1`): codes 0, 1 and 108.
+    Bc1,
+    /// BC3 (`DXT5`): codes 5 and 110.
+    Bc3,
+    /// BC4 (`ATI1`, one channel): code 103.
+    Bc4,
+    /// BC5 (`ATI2`, two channels): code 104.
+    Bc5,
+    /// BC6H (high dynamic range, unsigned): code 115.
+    Bc6h,
+    /// BC7: codes 102, 106, 107 and 112.
+    Bc7,
+    /// Sixteen bits, one of alpha over five each of red, green and blue (`A1R5G5B5`; the DDS masks `0x7c00`, `0x3e0`,
+    /// `0x1f`, `0x8000`): code 6.
+    A1R5G5B5,
+    /// Four bytes in the order blue, green, red, alpha (masks `0xff0000`, `0xff00`, `0xff`, `0xff000000`): code 9.
+    B8G8R8A8,
+    /// Four bytes in the order red, green, blue, alpha (masks `0xff`, `0xff00`, `0xff0000`, `0xff000000`): code 105.
+    R8G8B8A8,
+    /// Four bytes in the order blue, green, red and one unused (masks `0xff0000`, `0xff00`, `0xff`): code 10.
+    B8G8R8X8,
+    /// Four half-float channels (Direct3D 9's format 113, a FourCC of that number): code 22.
+    Rgba16Float,
+}
+
+impl PixelFamily {
+    /// The family a stored format code stands for, `None` for a code no texture of the two games' installs stores
+    /// (the community's tables list 3, 8, 23 to 25, 29, 33, 36, 100 and 113 as well; none occurs in either install).
+    pub const fn of_code(code: u8) -> Option<Self> {
+        Some(match code {
+            0 | 1 | 108 => Self::Bc1,
+            5 | 110 => Self::Bc3,
+            103 => Self::Bc4,
+            104 => Self::Bc5,
+            115 => Self::Bc6h,
+            102 | 106 | 107 | 112 => Self::Bc7,
+            6 => Self::A1R5G5B5,
+            9 => Self::B8G8R8A8,
+            105 => Self::R8G8B8A8,
+            10 => Self::B8G8R8X8,
+            22 => Self::Rgba16Float,
+            _ => return None,
+        })
+    }
+
+    /// Whether the layout is block-compressed.
+    pub const fn is_compressed(self) -> bool {
+        matches!(
+            self,
+            Self::Bc1 | Self::Bc3 | Self::Bc4 | Self::Bc5 | Self::Bc6h | Self::Bc7
+        )
+    }
+}
+
 /// What a texture is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextureKind {
@@ -41,6 +101,12 @@ pub struct Texture {
     pub extra: Option<Extra>,
     /// The DDS file, complete, starting with `DDS `.
     pub dds: Vec<u8>,
+}
+impl Texture {
+    /// The pixel layout of the stored format code ([`PixelFamily::of_code`]).
+    pub fn pixel_family(&self) -> Option<PixelFamily> {
+        PixelFamily::of_code(self.format)
+    }
 }
 /// A read texture package.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -185,7 +251,22 @@ impl Package {
 
 #[cfg(test)]
 mod tests {
-    use super::Package;
+    use super::{Package, PixelFamily};
+
+    #[test]
+    fn the_codes_the_installs_store_have_a_family() {
+        let stored = [
+            0u8, 1, 5, 6, 9, 10, 22, 102, 103, 104, 105, 106, 107, 108, 110, 112, 115,
+        ];
+        assert!(stored.iter().all(|c| PixelFamily::of_code(*c).is_some()));
+        for absent in [2u8, 3, 8, 23, 24, 25, 29, 33, 36, 100, 113, 255] {
+            assert_eq!(PixelFamily::of_code(absent), None, "{absent}");
+        }
+        assert_eq!(PixelFamily::of_code(108), Some(PixelFamily::Bc1));
+        assert_eq!(PixelFamily::of_code(9), Some(PixelFamily::B8G8R8A8));
+        assert_eq!(PixelFamily::of_code(105), Some(PixelFamily::R8G8B8A8));
+        assert!(PixelFamily::Bc7.is_compressed() && !PixelFamily::R8G8B8A8.is_compressed());
+    }
 
     /// A package of one ASCII-named texture whose descriptor carries `texture_flags`; its "DDS" is a stub, since only the
     /// magic is checked.
