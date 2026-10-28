@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- `collision::read_map` reads extern mesh bodies (`hknpExternMeshShape`, every body of the map collision `f`
+  binders) as posed triangles with no HitMtrl ID (-1), counted in `Soup::extern_triangles`, instead of listing them in
+  `unread_bodies`; a triangle that stores a material other than -1 is refused. Every `f` binder of both installs
+  reads: 1,145 Sekiro files (12,688 bodies, 537,436 triangles) and 1,850 Elden Ring files (264,858 bodies,
+  1,707,650 triangles), `tests/extern_mesh_census.rs`. Depends on `havok-formats` at the commit that adds
+  `extern_mesh`.
+
 ## 0.5.0 (2026-10-27)
 
 - DCX: a Kraken envelope's Oodle payload is walked block by block before it is decoded

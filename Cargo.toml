@@ -47,7 +47,7 @@ aes = { version = "=0.9.3", default-features = false }
 dxcontainer = { version = "0.2.0", git = "https://github.com/Kalmarv/dx", rev = "f5b2af5b55ae06537cfce386102ee63c99b5a641" }
 encoding_rs = { version = "=0.8.42", default-features = false, features = ["alloc"] }
 half = { version = "=2.7.1", default-features = false }
-havok-formats = { version = "0.4.0", git = "https://github.com/Kalmarv/havok-formats", rev = "e1d130e1addc44864dc1fee71ea44a20d3a6d91d" }
+havok-formats = { version = "0.4.0", git = "https://github.com/Kalmarv/havok-formats", rev = "573900527b2c89cfab69d730c5dd87a2bca18c35" }
 num-bigint = { version = "=0.5.1", default-features = false, features = ["std"] }
 primase-foundations = { version = "0.2.1", git = "https://github.com/Kalmarv/primase-foundations", rev = "e895f966130651bd78c47505b53322cc3f58083a" }
 primase-testdata = { version = "0.1.0", git = "https://github.com/Kalmarv/primase-testdata", rev = "d0258530ca9ca0ca74e957716ae8683e7facc8a7" }

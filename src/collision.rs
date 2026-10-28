@@ -1,6 +1,6 @@
 //! Collision as FromSoftware stores it in Havok tagfiles: map compressed meshes with the fsnp material table that maps
-//! their shape keys to HitMtrlParam IDs ([`read_map`]), and object bodies as meshes and convex shapes
-//! ([`read_bodies`]). The tagfile, compressed mesh and convex shape readers are `havok-formats`'.
+//! their shape keys to HitMtrlParam IDs, and the extern triangle meshes of the `f` binders ([`read_map`]), and object
+//! bodies as meshes and convex shapes ([`read_bodies`]). The tagfile, compressed mesh and convex shape readers are `havok-formats`'.
 use crate::affine::{compose, pose, pose_columns};
 use crate::{Result, invalid};
 use havok_formats::convex::ConvexShape;
@@ -17,6 +17,9 @@ pub struct Soup {
     pub materials: Vec<i32>,
     /// Triangles whose shape key the material table does not map (their material is -1).
     pub unmapped: usize,
+    /// Triangles of extern mesh bodies (`hknpExternMeshShape`, the `f` binders'): stored whole, with no shape key and
+    /// no HitMtrlParam ID (their material is -1, and they are not among `unmapped`).
+    pub extern_triangles: usize,
     /// Primitives the compressed mesh marks dead (indices `0xde, 0xad, 0xde, 0xad`); they contribute no triangles.
     pub dead_primitives: usize,
     /// Entries of the shape-key table that are the invalid all-ones key.
@@ -149,8 +152,10 @@ fn material_keys(shape: Value<'_, '_>, has_triangles: bool) -> Result<KeyMateria
 }
 
 /// Decode a map collision tagfile (with the compendium it shares, if any): every compressed mesh body as posed
-/// triangles with HitMtrlParam IDs. A body of another shape class is not read: its
-/// class is listed in [`Soup::unread_bodies`], never taken for an empty body.
+/// triangles with HitMtrlParam IDs, and every extern mesh body (`hknpExternMeshShape`, the shape of every body of the
+/// `f` binders' files: 12,688 in Sekiro's, 264,858 in Elden Ring's) as posed triangles with no HitMtrlParam ID
+/// (-1; counted in [`Soup::extern_triangles`]). A body of another shape class is not read: its class is listed in
+/// [`Soup::unread_bodies`], never taken for an empty body.
 pub fn read_map(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Soup> {
     let tag = Tagfile::read(bytes, compendium)?;
     let variants = tag.root()?.field("namedVariants")?.array()?;
@@ -172,6 +177,10 @@ pub fn read_map(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Soup> {
                     return Err(invalid("collision", body.offset, "nonfinite body transform"));
                 }
                 let shape = body.field("shape")?.dereference()?;
+                if shape.type_name() == "hknpExternMeshShape" {
+                    extern_mesh_triangles(&mut soup, shape, body.offset, p, q)?;
+                    continue;
+                }
                 if shape.type_name() != "fsnpCustomParamCompressedMeshShape" {
                     soup.unread_bodies.push(shape.type_name().to_owned());
                     continue;
@@ -212,6 +221,48 @@ pub fn read_map(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Soup> {
     }
     Ok(soup)
 }
+/// An extern mesh body's triangles ([`havok_formats::extern_mesh`]), posed by the body, added to `soup` with no
+/// HitMtrlParam ID. A triangle that stores a material other than -1 is refused: the files bind none (every triangle of
+/// both installs' `f` binders stores -1), so another value would be a binding this reader does not understand.
+fn extern_mesh_triangles(
+    soup: &mut Soup,
+    shape: Value<'_, '_>,
+    body_offset: usize,
+    p: [f32; 4],
+    q: [f32; 4],
+) -> Result<()> {
+    let mesh = havok_formats::extern_mesh(shape)?;
+    if let Some(&material) = mesh.materials.iter().find(|&&m| m != -1) {
+        return Err(invalid(
+            "collision",
+            shape.offset,
+            format!("an extern mesh triangle stores material {material}, not -1"),
+        ));
+    }
+    let posed: Vec<[f32; 3]> = mesh.vertices.iter().map(|&v| pose(v, p, q)).collect();
+    if posed.iter().flatten().any(|f| !f.is_finite()) {
+        return Err(invalid(
+            "collision",
+            body_offset,
+            "nonfinite transformed position",
+        ));
+    }
+    for corners in &mesh.triangles {
+        let mut triangle = [[0.0; 3]; 3];
+        for (out, &i) in triangle.iter_mut().zip(corners) {
+            // `extern_mesh` checked every index against the vertices
+            *out = *usize::try_from(i)
+                .ok()
+                .and_then(|i| posed.get(i))
+                .ok_or_else(|| invalid("collision", shape.offset, "extern mesh index out of range"))?;
+        }
+        soup.triangles.push(triangle);
+        soup.materials.push(-1);
+    }
+    soup.extern_triangles = soup.extern_triangles.saturating_add(mesh.triangles.len());
+    Ok(())
+}
+
 /// A body's geometry as its file stores it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum BodyGeometry {
