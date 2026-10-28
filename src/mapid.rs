@@ -46,6 +46,28 @@ impl MapId {
             || self.variant == Self::WILDCARD
     }
 
+    /// The identity of a map name `m60_44_36_10`, the inverse of [`MapId::name`]: `m`, then four groups of two decimal
+    /// digits joined by `_`. `None` for anything else.
+    pub fn from_name(name: &str) -> Option<MapId> {
+        let mut groups = name.strip_prefix('m')?.split('_');
+        let mut next = || -> Option<&str> {
+            groups
+                .next()
+                .filter(|g| g.len() == 2 && g.bytes().all(|b| b.is_ascii_digit()))
+        };
+        let (area, x, z, variant) = (next()?, next()?, next()?, next()?);
+        if groups.next().is_some() {
+            return None;
+        }
+        Some(MapId {
+            area: area.parse().ok()?,
+            x: x.parse().ok()?,
+            z: z.parse().ok()?,
+            // the variant byte holds the two digits as hexadecimal digits
+            variant: u8::from_str_radix(variant, 16).ok()?,
+        })
+    }
+
     /// The map's name, `m60_44_36_10`: `None` for an identity with a wildcard, or one whose numbers or variant digits
     /// are not the two decimal digits a name holds.
     pub fn name(self) -> Option<String> {
@@ -100,6 +122,39 @@ mod tests {
             MapId::from_bytes(argument.to_le_bytes()).name().as_deref(),
             Some("m60_44_36_10")
         );
+    }
+
+    #[test]
+    fn a_name_reads_back_as_the_identity_it_names() {
+        for name in [
+            "m60_44_36_10",
+            "m10_00_00_00",
+            "m14_00_00_99",
+            "m61_51_43_00",
+            "m99_99_99_99",
+        ] {
+            let id = MapId::from_name(name).unwrap();
+            assert_eq!(id.name().as_deref(), Some(name));
+        }
+        assert_eq!(
+            MapId::from_name("m60_44_36_10"),
+            Some(MapId::from_bytes([60, 44, 36, 0x10]))
+        );
+        for bad in [
+            "",
+            "m",
+            "60_44_36_10",
+            "m60_44_36",
+            "m60_44_36_10_00",
+            "m60_4_36_10",
+            "m60_44_36_1a",
+            "m60_-4_36_10",
+            "m60_44_36_100",
+            "M60_44_36_10",
+            "m60_44_36_\u{ff11}0",
+        ] {
+            assert_eq!(MapId::from_name(bad), None, "{bad:?}");
+        }
     }
 
     #[test]
