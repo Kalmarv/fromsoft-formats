@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 (2026-10-27)
 
 - Breaking: `msb::Region::index_in_type` (+12) and `Region::number` (+44), `msb::Event::index_in_type` (+16). The region index
   is the per-type counter in all 45,121 regions; the region number is unique within its map in all 945 maps (0 to n-1 in
@@ -34,6 +34,8 @@
   not checked against the game), `PlacedLight::local_matrix`, and `Fxr::spawns` (every `SFXReference` action with
   its place and the same `active_in_state` / `local_matrix` as a light: 543 Sekiro and 5,228 Elden Ring actions, all
   among a node's own actions, counted by an independent walker).
+- Breaking: depends on `havok-formats` 0.7.0 (the SHRED packfile and tagfile checks, the tagfile writer), whose
+  physics views gain fields, and on `dx` 0.3.0.
 
 ## 0.7.0 (2026-10-27)
 

@@ -184,8 +184,8 @@ dependencies = [
 
 [[package]]
 name = "dxcontainer"
-version = "0.2.0"
-source = "git+https://github.com/Kalmarv/dx?rev=f5b2af5b55ae06537cfce386102ee63c99b5a641#f5b2af5b55ae06537cfce386102ee63c99b5a641"
+version = "0.3.0"
+source = "git+https://github.com/Kalmarv/dx?rev=e42b5ff7559e364c1c8a8977ece6460cd8797205#e42b5ff7559e364c1c8a8977ece6460cd8797205"
 dependencies = [
  "primase-foundations",
  "thiserror",
@@ -251,7 +251,7 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "fromsoft-formats"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "aes",
  "dxcontainer",
@@ -374,8 +374,8 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
 name = "havok-formats"
-version = "0.6.0"
-source = "git+https://github.com/Kalmarv/havok-formats?rev=0ed2102b025fee97555011a1783c1e12d9925e3c#0ed2102b025fee97555011a1783c1e12d9925e3c"
+version = "0.7.0"
+source = "git+https://github.com/Kalmarv/havok-formats?rev=093b01c6ecbfb23e3840b1aae4f4e1ab5cb2a4f5#093b01c6ecbfb23e3840b1aae4f4e1ab5cb2a4f5"
 dependencies = [
  "primase-foundations",
  "thiserror",
