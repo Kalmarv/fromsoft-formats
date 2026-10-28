@@ -123,6 +123,7 @@ mod sekiro;
 pub mod shader;
 pub mod states;
 pub mod tae;
+mod tae_write;
 pub mod tpf;
 pub mod weather_assets;
 
