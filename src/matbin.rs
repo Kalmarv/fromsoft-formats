@@ -79,8 +79,10 @@ pub struct Material {
     pub params: Vec<Param>,
     /// Its samplers, in file order.
     pub samplers: Vec<Sampler>,
-    /// Bytes after the last item the file references, as stored (empty in most files; some end with strings of
-    /// an earlier revision of the material that nothing points at).
+    /// Every byte after the last item the file references, as stored (empty in most files; some end with strings of
+    /// an earlier revision of the material that nothing points at, and in 722 of Elden Ring's 20,619 materials
+    /// the tail starts with one zero byte after an item that ends at an odd offset). The writer puts these bytes back
+    /// where they were, so the zero byte is part of the tail.
     pub unreferenced_tail: Vec<u8>,
 }
 /// A NUL-terminated UTF-16 string and the bytes it occupies including the terminator.
@@ -231,17 +233,14 @@ impl Material {
             param_list.push(Param { name, key, value });
         }
         let referenced = spans.iter().map(|&(o, n)| o.saturating_add(n)).max().unwrap_or(0);
-        let tail_start = referenced.saturating_add(usize::from(
-            !referenced.is_multiple_of(2) && data.get(referenced) == Some(&0),
-        ));
-        coverage(&v, spans, tail_start.min(data.len()), 1)?;
+        coverage(&v, spans, referenced.min(data.len()), 1)?;
         Ok(Self {
             shader,
             source,
             key: v.u32(0x18)?,
             params: param_list,
             samplers: sampler_list,
-            unreferenced_tail: data.get(tail_start..).unwrap_or_default().to_vec(),
+            unreferenced_tail: data.get(referenced..).unwrap_or_default().to_vec(),
         })
     }
     /// The parameter called `name`, if the material stores it.

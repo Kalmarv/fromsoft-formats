@@ -35,6 +35,10 @@ pub struct Texture {
     pub path: String,
     /// The extra floats the newer block version stores after the path.
     pub extra: Vec<f32>,
+    /// The texture block's version: 5, or 3 for the older form that stores neither a path nor floats. The rest of the
+    /// slot does not imply it: Sekiro's definitions hold version-5 blocks with an empty path and no floats, which a
+    /// version-3 block also reads as.
+    pub version: u32,
 }
 /// A block's declared length against the bytes it was read to consume.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -274,6 +278,7 @@ impl MaterialDefinition {
                 shader_data_index,
                 path,
                 extra,
+                version,
             });
         }
         c.marker(4)?;

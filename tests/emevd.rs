@@ -264,3 +264,92 @@ fn structural_faults_are_errors() {
     d[0x10 + 2 * 8..0x10 + 3 * 8].copy_from_slice(&5u64.to_le_bytes());
     assert!(Script::read(&d).is_err(), "instruction count");
 }
+
+/// `build`'s output with the offset of each empty instruction or parameter list set to -1, as the writer stores it
+/// (`build` stores the running offset there, as 6 events of 4 of Sekiro's files do).
+fn canonical(mut data: Vec<u8>, events: &[Event]) -> Vec<u8> {
+    for (i, e) in events.iter().enumerate() {
+        let at = 0x90 + 0x30 * i;
+        if e.instructions.is_empty() {
+            data[at + 16..at + 24].copy_from_slice(&(-1i64).to_le_bytes());
+        }
+        if e.parameters.is_empty() {
+            data[at + 32..at + 40].copy_from_slice(&(-1i64).to_le_bytes());
+        }
+    }
+    data
+}
+
+#[test]
+fn a_script_writes_back_to_the_bytes_it_was_read_from() {
+    // one layer, arguments of 0, 10 and 8 bytes, a substitution, a linked file and a string
+    let events = sample();
+    let data = canonical(build(&events, &[7], &[0x40], b"N:\0\0"), &events);
+    assert_eq!(Script::read(&data).unwrap().write().unwrap(), data);
+    // no events at all
+    let empty = canonical(build(&[], &[], &[], &[]), &[]);
+    assert_eq!(Script::read(&empty).unwrap().write().unwrap(), empty);
+    // two layers, numbered in the order the instructions first name them
+    let mut two = sample();
+    two[0].instructions[0].layer = Some(3);
+    let data = canonical(build(&two, &[3, 7], &[], &[]), &two);
+    let script = Script::read(&data).unwrap();
+    assert_eq!(script.events, two);
+    assert_eq!(script.write().unwrap(), data);
+    // an event with an instruction list and no parameters, one with parameters and no instructions
+    let mut odd = sample();
+    odd[1].instructions.clear();
+    odd[1].parameters.clear();
+    odd[0].parameters.push(Parameter {
+        instruction: 0,
+        target: 4,
+        source: 8,
+        bytes: 4,
+        unk: -1,
+    });
+    let data = canonical(build(&odd, &[], &[], &[]), &odd);
+    assert_eq!(Script::read(&data).unwrap().write().unwrap(), data);
+}
+
+#[test]
+fn an_empty_parameter_list_is_written_with_the_offset_minus_one() {
+    // event 50 has no parameters; `build` stores 0 where the writer stores -1 (some of Sekiro's files store the running offset)
+    let events = sample();
+    let stored = build(&events, &[7], &[], &[]);
+    assert_ne!(stored, canonical(stored.clone(), &events));
+    let script = Script::read(&stored).unwrap();
+    assert_eq!(script.write().unwrap(), canonical(stored, &events));
+}
+
+#[test]
+fn a_script_built_here_reads_back_equal() {
+    let script = Script {
+        events: sample(),
+        linked_files: vec![0x40, 0x80],
+        strings: b"N:\0\0x\0\0".to_vec(),
+    };
+    let again = Script::read(&script.write().unwrap()).unwrap();
+    assert_eq!(again, script);
+}
+
+#[test]
+fn what_the_reader_refuses_the_writer_refuses() {
+    let base = Script {
+        events: sample(),
+        linked_files: vec![],
+        strings: vec![],
+    };
+    let mut rest = base.clone();
+    rest.events[0].rest = 3;
+    assert!(rest.write().is_err());
+    let mut none = base.clone();
+    none.events[1].parameters[0].bytes = 0;
+    assert!(none.write().is_err());
+    let mut past = base.clone();
+    // the first instruction of event 20004110 has 8 argument bytes
+    past.events[1].parameters[0].target = 6;
+    assert!(past.write().is_err());
+    let mut unknown = base;
+    unknown.events[1].parameters[0].instruction = 3;
+    assert!(unknown.write().is_err());
+}
