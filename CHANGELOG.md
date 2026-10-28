@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- `fxr`: FXR effect files, version 5 and header minor 0, the layout of all 15,068 `.fxr` files of both installs (2,913 in
+  Sekiro's 8 `sfxbnd` binders, 12,155 in Elden Ring's 220; none refused). `Fxr::read` keeps the state machine, the tree of
+  nodes with their configs and actions, the actions' field words, properties (zero, one, constant, stepped, linear,
+  Bezier and Hermite functions, with `Property::constant`, `keyframes` and `settled`), modifiers and field lists as stored,
+  and requires the layout every file has: the sections tile the file and the records of the tiled sections are named by
+  their parents exactly once. `Fxr::lights` types the 834 + 4,999 point lights (action 609, three layouts by the stored
+  counts: Dark Souls III's in five Sekiro files, Sekiro's and Elden Ring's) and 13 + 17 spot lights (action 11000)
+  with their tree position and the config their node chooses in state 0. Light shafts (action 10003) have no instance
+  in either install and are read as plain actions. Version 4 (Dark Souls III) and minor 1 (Nightreign) are refused by
+  their header. Every file's action counts and every light's parameters agree with the fxr library
+  (EvenTorset/fxr 2b6b52f, Unlicense, from which the parameter names and types are taken), and the totals agree with
+  an independent walker (`tests/fxr_census.rs`).
+
 ## 0.6.0 (2026-10-27)
 
 - `collision::read_map` reads extern mesh bodies (`hknpExternMeshShape`, every body of the map collision `f`

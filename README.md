@@ -9,6 +9,7 @@ It was written and checked against the Steam builds of Sekiro 1.06 (`sekiro.exe`
 - **Models and textures.** FLVER2 models (versions `0x20013`, `0x20014`, `0x20016`, `0x2001a`, including Elden Ring's SpeedTree layouts), TPF texture packages (PC, DDS payloads kept whole), CLM2 cloth companions.
 - **Materials and shaders.** Sekiro's MTD material definitions, Elden Ring's MATBIN materials, shader METAPARAM files (version 6).
 - **Maps.** MSB map layouts (Sekiro's MSBS and Elden Ring's MSBE: models, parts, regions, events), BTL light banks (versions 16 and 18), EDGE hang edges (Sekiro), GPARAM draw parameters (versions 3, 5 and 6), EMEVD event scripts (the 64-bit layout of both games) and the part-state rules they set in Sekiro. Elden Ring's legacy maps (dungeons, catacombs, the sky map, the colosseums) are placed among the open-world tiles from the regulation's `WorldMapLegacyConvParam` (`overworld`).
+- **Effects.** FXR effect files (version 5, the layout of every file in both installs): the state machine, the tree of nodes, configs and actions with their properties and fields as stored, and the point and spot lights typed (`fxr`).
 - **Game data.** PARAM files (the NPC and grass params, and both games' part-built NPC outfits through the equipment params), FMG text and the NPC names built from it, TAE animation events (version `0x1000D`), and map and object collision in Havok tagfiles (through [`havok-formats`](https://github.com/Kalmarv/havok-formats)).
 
 It needs a few things from you, because it ships none of them: the archive keys of your own install (one RSA public key per archive, and for Elden Ring the key of `regulation.bin`), which you keep as files in a folder and load with `Keys::from_folder`; the crate keeps them only in the `Keys` value you pass, the game's Oodle library (or, off Windows, a portable decoder) for Kraken-compressed files, and, to turn path hashes back into paths, a path list of your choosing. The crate holds no key material, no digests of it, no dictionary, no native library and no game file, and this repository does not contain or link to any.
@@ -101,7 +102,7 @@ require = 'gate'                         # a missing gate input fails the test i
 gate = 'smoke'                           # or 'full': how much the heavy tests cover
 ```
 
-[tests/inputs/README.md](tests/inputs/README.md) lists every input the tests read, what it is and where it comes from. Besides the installs, keys and Oodle library, some tests compare this crate's reading with the output of independent readers (SoulsFormats, SoulsFormatsNEXT, UXM's path lists) kept under `oracles.root`; those files are made by the user from their own installs and are not part of this repository. The file layout comes from [primase-testdata](https://github.com/Kalmarv/primase-testdata), which also has a sample.
+[tests/inputs/README.md](tests/inputs/README.md) lists every input the tests read, what it is and where it comes from. Besides the installs, keys and Oodle library, some tests compare this crate's reading with the output of independent readers (SoulsFormats, SoulsFormatsNEXT, the fxr library, UXM's path lists) kept under `oracles.root`; those files are made by the user from their own installs and are not part of this repository. The file layout comes from [primase-testdata](https://github.com/Kalmarv/primase-testdata), which also has a sample.
 
 ## Contributing
 
@@ -109,7 +110,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md), including how to report a file this crat
 
 ## Related work
 
-The layouts follow the community's documentation of these formats, chiefly SoulsFormats and SoulsFormatsNEXT (names of unknown fields follow them), Paramdex and Smithbox (param layouts), and UXM (archive lists and path hashes); the tests check this crate's readings against theirs. Used by [primase](https://github.com/Kalmarv/primase), a game-asset conversion library.
+The layouts follow the community's documentation of these formats, chiefly SoulsFormats and SoulsFormatsNEXT (names of unknown fields follow them), Paramdex and Smithbox (param layouts), the fxr project (the names, types and defaults of the effect actions' parameters; Unlicense), and UXM (archive lists and path hashes); the tests check this crate's readings against theirs. Used by [primase](https://github.com/Kalmarv/primase), a game-asset conversion library.
 
 ## Licence
 

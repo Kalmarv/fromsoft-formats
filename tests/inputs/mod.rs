@@ -54,6 +54,10 @@ primase_testdata::inputs! {
             about: "Smithbox's Paramdex-derived paramdefs (`defs`, XML, with `FirstVersion`/`RemovedVersion`) and the `regulation.bin` of each Elden Ring release it ships",
             source: "third-party: Smithbox fdde3225's `Smithbox.Data/Assets/PARAM` (MIT repository; the defs and regulations carry no licence of their own, so they are read in place and never copied into a repository)",
         },
+        Fxr = "fxr" {
+            about: "the fxr library's readings of the games' effect files (one JSON line per `.fxr`: action counts and every light's parameters)",
+            source: "independent: EvenTorset/fxr 2b6b52f (Unlicense), `FXR.read` with `Game.Sekiro` / `Game.EldenRing`, through a small harness that is not part of this repository",
+        },
         Uxm = "uxm" {
             about: "UXM's path dictionaries (`dictionary.txt`, UTF-8, one archive path per line)",
             source: "third-party: UXM-Selective-Unpack 9501be8's dictionaries",
@@ -119,6 +123,18 @@ primase_testdata::inputs! {
             gate: true,
             about: r#"the Sekiro paramdefs (`SDT/Defs`: 160 XML files, none version-gated); tests/paramdef_census.rs"#,
             source: r#"third-party: Smithbox fdde3225's `Smithbox.Data/Assets/PARAM/SDT/Defs`, read in place"#,
+        },
+        Query::Oracle(OracleSet::Fxr, Game::Elden, "lights.jsonl") => {
+            status: Live,
+            gate: false,
+            about: r#"the fxr library's reading of Elden Ring's 12,155 effect files: per file the id, the count of each action type and every PointLight and SpotLight with the parameters the library names (a property as a number, an array or a function with keyframes); tests/fxr_census.rs"#,
+            source: r#"independent: EvenTorset/fxr 2b6b52f (Unlicense, version 32.1.3) built privately, its `FXR.read(bytes, Game.EldenRing)` over the `.fxr` members of the install's `/sfx/*.ffxbnd.dcx` binders (the harness is not part of this repository)"#,
+        },
+        Query::Oracle(OracleSet::Fxr, Game::Sekiro, "lights.jsonl") => {
+            status: Live,
+            gate: true,
+            about: r#"the fxr library's reading of Sekiro's 2,913 effect files (as for Elden Ring; it refuses three, `f000800042` to `f000800044`, by an action-603 field it types as a boolean); tests/fxr_census.rs"#,
+            source: r#"independent: EvenTorset/fxr 2b6b52f (Unlicense, version 32.1.3) built privately, its `FXR.read(bytes, Game.Sekiro)` over the `.fxr` members of the install's `/sfx/*.ffxbnd.dcx` binders (the harness is not part of this repository)"#,
         },
         Query::Oracle(OracleSet::Uxm, Game::Elden, "dictionary.txt") => {
             status: Live,

@@ -2,7 +2,7 @@
 //! ([`Archive`], with keys the caller supplies), DCX envelopes ([`dcx`]), BND4 binders ([`Binder`]) and the formats
 //! they hold: FLVER models, map layouts (MSB), light banks (BTL), hang edges (EDGE), event scripts (EMEVD), text
 //! (FMG), draw params (GPARAM), material definitions (MTD, MATBIN), shader metaparams, params (PARAM), animation
-//! events (TAE), texture packages (TPF), collision (Havok, CLM2).
+//! events (TAE), texture packages (TPF), collision (Havok, CLM2), effects and their lights (FXR).
 //!
 //! Every read is checked: data that is shorter than it says, refers outside itself or holds a value the reader does
 //! not know is an [`Error`] naming the format and the offset, rather than a panic or a silently skipped field. What a
@@ -86,6 +86,7 @@ mod elden;
 pub mod emevd;
 pub mod equipment;
 pub mod flver;
+pub mod fxr;
 pub mod fmg;
 pub mod game;
 pub mod game_params;
