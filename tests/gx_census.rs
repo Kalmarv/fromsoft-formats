@@ -21,7 +21,13 @@ use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 mod common;
 
-const SUFFIXES: [&str; 5] = [".geombnd.dcx", ".mapbnd.dcx", ".partsbnd.dcx", ".chrbnd.dcx", ".objbnd.dcx"];
+const SUFFIXES: [&str; 5] = [
+    ".geombnd.dcx",
+    ".mapbnd.dcx",
+    ".partsbnd.dcx",
+    ".chrbnd.dcx",
+    ".objbnd.dcx",
+];
 
 /// The type code of the descriptor a word kind stands for.
 fn code(kind: WordKind) -> u64 {
@@ -36,7 +42,11 @@ fn code(kind: WordKind) -> u64 {
 
 #[test]
 fn the_table_is_the_descriptors() -> Result<()> {
-    let Some(path) = oracle(OracleSet::Smithbox, inputs::Game::Elden, "gx-item-descriptors.json") else {
+    let Some(path) = oracle(
+        OracleSet::Smithbox,
+        inputs::Game::Elden,
+        "gx-item-descriptors.json",
+    ) else {
         return Ok(());
     };
     let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path)?)?;
@@ -58,7 +68,11 @@ fn the_table_is_the_descriptors() -> Result<()> {
         compared += 1;
     }
     expect_found(
-        Query::Oracle(OracleSet::Smithbox, inputs::Game::Elden, "gx-item-descriptors.json"),
+        Query::Oracle(
+            OracleSet::Smithbox,
+            inputs::Game::Elden,
+            "gx-item-descriptors.json",
+        ),
         "items compared with the descriptors",
         compared,
     );
@@ -147,7 +161,10 @@ fn census(game: Game, data: inputs::Game) -> Result<Option<Totals>> {
                 assert!(c.rgb.iter().all(|x| (0.0..=1.0).contains(x)), "{label}: {c:?}");
             }
             if let Some(p) = m.parallax()? {
-                assert!(p.iter().all(|l| (l.offset, l.middle_height) == (0., 0.5)), "{label}: {p:?}");
+                assert!(
+                    p.iter().all(|l| (l.offset, l.middle_height) == (0., 0.5)),
+                    "{label}: {p:?}"
+                );
                 t.parallax += 1;
             }
             if let Some(w) = m.water()? {
@@ -173,11 +190,7 @@ fn sekiros_gx_items() -> Result<()> {
         "{} models, {} materials, {} items; emissive {:?}, translucency {:?}, albedo {:?}, parallax {}, water {}",
         t.models, t.materials, t.items, t.emissive, t.translucency, t.albedo, t.parallax, t.water
     );
-    expect_found(
-        Query::Install(inputs::Game::Sekiro, None),
-        "models",
-        t.models,
-    );
+    expect_found(Query::Install(inputs::Game::Sekiro, None), "models", t.models);
     assert_eq!((t.models, t.materials, t.items), (14_310, 43_252, 70_948));
     assert_eq!(
         t.by_item,
@@ -211,7 +224,10 @@ fn sekiros_gx_items() -> Result<()> {
     // the items the table does not name are the material parameter records
     assert_eq!(t.unnamed, counts(&[("GXMD", 14_909)]));
     assert_eq!((t.emissive.0, t.emissive.1, t.emissive.2), (251, 0.7, 3.32));
-    assert_eq!((t.translucency.0, t.translucency.1, t.translucency.2), (2_062, 1., 10.));
+    assert_eq!(
+        (t.translucency.0, t.translucency.1, t.translucency.2),
+        (2_062, 1., 10.)
+    );
     assert_eq!((t.albedo.0, t.albedo.1, t.albedo.2), (193, 0.8, 1.));
     assert_eq!((t.parallax, t.water), (2, 2));
     Ok(())
@@ -251,9 +267,16 @@ fn elden_rings_gx_items() -> Result<()> {
         counts(&[("GX18", 565), ("GXMD", 19_232), ("GXUD", 119)])
     );
     assert_eq!((t.emissive.0, t.emissive.1, t.emissive.2), (1, 0.6, 0.6));
-    assert_eq!((t.translucency.0, t.translucency.1, t.translucency.2), (5_128, 1., 1.));
+    assert_eq!(
+        (t.translucency.0, t.translucency.1, t.translucency.2),
+        (5_128, 1., 1.)
+    );
     assert_eq!(t.albedo.0, 688);
-    assert!((t.albedo.1 - 0.79311).abs() < 1e-5 && (t.albedo.2 - 1.359988).abs() < 1e-5, "{:?}", t.albedo);
+    assert!(
+        (t.albedo.1 - 0.79311).abs() < 1e-5 && (t.albedo.2 - 1.359988).abs() < 1e-5,
+        "{:?}",
+        t.albedo
+    );
     assert_eq!((t.parallax, t.water), (0, 0));
     Ok(())
 }

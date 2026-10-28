@@ -124,7 +124,11 @@ fn census(game: Game, data: Data) -> Result<Option<(Totals, Templates)>> {
                                         *t.unlisted.entry((event.kind, a.index)).or_default() += 1;
                                     }
                                 }
-                                Value::Bool(_) | Value::Int(_) | Value::Unsigned(_) | Value::Float(_) | Value::Bytes(_) => {}
+                                Value::Bool(_)
+                                | Value::Int(_)
+                                | Value::Unsigned(_)
+                                | Value::Float(_)
+                                | Value::Bytes(_) => {}
                             }
                         }
                     }
@@ -143,7 +147,14 @@ fn sekiros_events_through_the_community_templates() -> Result<()> {
     println!(
         "{} event files, {} events, {} with a template; asserted fields {}; short {} ({} lacking a named field); \
          unlisted values {:?} of {} listed",
-        t.files, t.events, t.with_template, t.asserted, t.short, t.short_with_a_named_field_missing, t.unlisted, t.listed
+        t.files,
+        t.events,
+        t.with_template,
+        t.asserted,
+        t.short,
+        t.short_with_a_named_field_missing,
+        t.unlisted,
+        t.listed
     );
     expect_found(Query::Install(Data::Sekiro, None), "event files", t.files);
     assert_eq!((t.files, t.events, t.with_template), (326, 337_924, 337_847));
@@ -198,10 +209,20 @@ fn elden_rings_events_through_the_community_templates() -> Result<()> {
     println!(
         "{} event files, {} events, {} with a template; asserted fields {}; short {} ({} lacking a named field); \
          unlisted values {:?} of {} listed",
-        t.files, t.events, t.with_template, t.asserted, t.short, t.short_with_a_named_field_missing, t.unlisted, t.listed
+        t.files,
+        t.events,
+        t.with_template,
+        t.asserted,
+        t.short,
+        t.short_with_a_named_field_missing,
+        t.unlisted,
+        t.listed
     );
     expect_found(Query::Install(Data::Elden, None), "event files", t.files);
-    assert_eq!((t.files, t.events, t.with_template), (1_071, 1_313_057, 1_313_057));
+    assert_eq!(
+        (t.files, t.events, t.with_template),
+        (1_071, 1_313_057, 1_313_057)
+    );
     assert!(t.without_template.is_empty());
     assert_eq!(t.kinds_in_data.len(), 124);
     assert_eq!(templates.len(), 156);
