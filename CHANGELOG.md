@@ -43,6 +43,25 @@
 - `grass::Grass` reads `.grass` meshes.
 - Tests: Smithbox's file dictionaries as a census input (`tests/dictionary_census.rs`), the shared walker
   `each_leaf` opens split binders.
+- Writers for DCX, BND4/BHF4, TPF, FMG, PARAM and `regulation.bin`, each rebuilt from its parsed fields over every stock
+  file of both installs (and the 29 `regulation.bin` files we hold): `dcx::frame`, `dcx::encode` (with `dcx::Encoder`),
+  `Binder::write`, `write_stored`, `write_split`, `write_split_stored`, `Package::write`, `Fmg::write`, `Param::write`
+  (with `param::Stored`), `Param::write_derived`, and the `regulation` module (`decrypt`, `encrypt`, `iv`, `pack`). The
+  structure is byte-equal wherever the bytes are the format's own: DCX headers and payloads framed again, binders written
+  from their members as stored, TPFs, PARAMs, FMGs (all but 3 of Elden Ring's 3,968, which hold unreferenced zero bytes
+  between their strings), and regulations encrypted again. What a compressor decides is not: a Kraken, zlib or zstd
+  payload compressed again decodes to the same bytes under the same header but is not the shipped payload (the real zlib
+  at level 9 reproduces 48 of 58 shipped zlib payloads, this crate's pure-Rust deflate none).
+- Breaking: `BinderFile` has `wrap: Option<dcx::Format>` (how a member that held a DCX envelope was framed), `Binder` has
+  `layout: binder::Layout` (byte orders, name encoding, the format byte as stored, the hash-table flag and two unknown
+  header bytes), `dcx::Envelope` has `format: dcx::Format` (the header's variant fields), `tpf::Package` has
+  `names_padding`, and `fmg::Fmg` has `blank` (the ids a group lists with no string), `narrow` and `extra_padding`.
+  `Param::read_stored` returns the two header facts the rows do not say (`param::Stored`).
+- `Binder::read_stored` and `Binder::read_split_stored`: a read that keeps each member's bytes as stored (nested
+  envelopes and compressed members untouched), which needs no decoder.
+- Depends on `flate2` and `zstd` (libzstd) for the compressors.
+- Tests: `tests/writers_census.rs` runs the writers over both installs and the regulations; `dcx` unit tests refuse each
+  size word one more and one less and a payload one byte short and one byte over.
 
 ## 0.10.0 (2026-10-28)
 
