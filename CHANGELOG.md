@@ -16,6 +16,28 @@
 - `game_params::read_weather_assets`, `read_weather_asset_creates` and `read_weather_asset_limits` read them from an
   install. `tests/weather_assets_census.rs` covers every row of the install: every field matches the paramdef reading,
   and every asset a replace row names is placed by its sky map's layout (the 18 sky maps the base game holds).
+- `shader`: Elden Ring's shader stems and sampler names split into their parts. `Profile::parse` reads
+  `C[DetailBlend][S2]_cloth`-style stems (category, family brackets, tags, suffixes; the family, the multi-blend
+  count of `[MbN]`, the overlay of `[Ov_*]`), `sampler_map` folds a sampler's map spelling (`AlbedoMap`, `AlbedoMap_0`,
+  `GSBlendMap_AlbedoMap_0`) into a `MapType`. Held to all 20,619 material binaries of the install (975 stems, 692 of them
+  in the grammar; 152,138 samplers) and soulstruct's per-shader UV-slot table to the UV attributes of 75,826 meshes.
+- `flver::gx`: the community's names for the words of the GX items the installs store (`GxItem::fields`,
+  `Material::{emissive_intensity, translucency_scale, albedo_colour, parallax, water}`).
+- Breaking: `btl::Light` gains `flicker_interval`, `flicker_brightness`, `event_id`, `near_clip`,
+  `shadow_model_cull_flip`, `sharpness`, `horizontal_angle`, `near_distance`, `enable_distance`, `volume_density` and
+  `exposure_weight`; the `auxiliary` map no longer holds those words. `cone_angle` is documented as a spot's full vertical
+  angle in degrees, `horizontal_angle` (offset 184) as the horizontal one and `near_distance` (offset 188) as the near plane,
+  from a running Sekiro.
+- `tae::template`: the community's event templates (DSAnimStudio's XML, supplied by the caller) read and applied:
+  `Templates::parse`, `EventTemplate::decode`.
+- `tpf::PixelFamily`: the layout a stored format code stands for (`Texture::pixel_family`). Codes 9 and 105 are the same
+  four bytes in the opposite channel order.
+- `collision::hit_class_name`: the community's names of the HitMtrlParam classes.
+- `blf::LoadList` reads the `.blf` load lists of divided binders; `Binder::division_markers` is the rule that names a
+  character's division binders.
+- `grass::Grass` reads `.grass` meshes.
+- Tests: Smithbox's file dictionaries as a census input (`tests/dictionary_census.rs`), the shared walker
+  `each_leaf` opens split binders.
 
 ## 0.10.0 (2026-10-28)
 
