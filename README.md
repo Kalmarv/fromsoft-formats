@@ -12,6 +12,8 @@ It was written and checked against the Steam builds of Sekiro 1.06 (`sekiro.exe`
 - **Effects.** FXR effect files (version 5, the layout of every file in both installs): the state machine, the tree of nodes, configs and actions with their properties and fields as stored; every action of the 72 types the installs hold typed (emitters, shapes, movement, billboards, sprites, mesh and trail particles, distortion, GPU particles, forces, lights; `fxr::actions`, `Fxr::typed`), the property functions evaluated and their modifiers decoded, the value sets named (`fxr::enums`), and the files an effect refers to (`fxr::resources`).
 - **Game data.** PARAM files (the NPC and grass params, and both games' part-built NPC outfits through the equipment params), FMG text and the NPC names built from it, TAE animation events (version `0x1000D`) and, from a template file you supply, their event names and typed parameters (`tae::template`), the `.blf` load lists of divided animation binders, the names of the hit-material classes, and map and object collision in Havok tagfiles (through [`havok-formats`](https://github.com/Kalmarv/havok-formats)).
 
+It also writes some of them back, each proven by rebuilding every stock file of both installs from its parsed fields (and the 29 `regulation.bin` files held): DCX envelopes (`dcx::frame`, `dcx::encode`), BND4 and BHF4/BDF4 binders with their name hash tables (`Binder::write`), TPF packages (`Package::write`), FMG text files (`Fmg::write`), PARAM files (`Param::write`) and the AES layer of `regulation.bin` (`regulation`). The structure comes back byte for byte; the compressed payloads of an envelope that is compressed again do not.
+
 It needs a few things from you, because it ships none of them: the archive keys of your own install (one RSA public key per archive, and for Elden Ring the key of `regulation.bin`), which you keep as files in a folder and load with `Keys::from_folder`; the crate keeps them only in the `Keys` value you pass, the game's Oodle library (or, off Windows, a portable decoder) for Kraken-compressed files, and, to turn path hashes back into paths, a path list of your choosing. The crate holds no key material, no digests of it, no dictionary, no native library and no game file, and this repository does not contain or link to any.
 
 ## Example
@@ -65,7 +67,7 @@ Add it with `cargo add fromsoft-formats` (or `fromsoft-formats = "0.10"` under `
 
 ## What it does not do
 
-- It does not write or repack anything: every reader is read-only.
+- It writes only DCX envelopes, BND4/BHF4 binders, TPF packages, FMG text files, PARAM files and `regulation.bin` (see below); it does not repack the BHD5/BDT archives or write any other format. A file it writes is not the original's bytes where a compressor decides them: the zlib, Kraken and zstd payloads it makes decode to the same data under the same header but are not the shipped payloads.
 - It does not decode pixels, convert models, meshes or animations to other formats, or interpret scripts and flags. It is a reader of the formats, not a converter.
 - It does not supply keys, dictionaries or the Oodle library, and it does not authenticate the SHA digests an archive index states (they are parsed and kept).
 - It does not enumerate archive paths: the indexes store hashes only, so you pass a path list (`NameDictionary`) for the names you want to find.
