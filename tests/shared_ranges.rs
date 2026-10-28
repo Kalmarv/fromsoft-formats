@@ -99,6 +99,10 @@ fn flver_bones(bones: usize, name: usize) -> Vec<u8> {
     u32le(&mut b, 28, bones as u32);
     for i in 0..bones {
         u32le(&mut b, 128 + i * 128 + 12, name_at as u32);
+        // every bone a root with no children or siblings (links -1: the reader checks the child chains)
+        for link in [28, 30, 44, 46] {
+            b[128 + i * 128 + link..][..2].copy_from_slice(&[0xff; 2]);
+        }
     }
     for i in 0..name {
         b[name_at + 2 * i] = b'a';
