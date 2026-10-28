@@ -24,6 +24,7 @@ impl<'a> View<'a> {
         })
     }
     /// Its byte order: big-endian where the file says so (`be`), else little.
+    #[inline]
     fn endian(&self) -> Endian {
         if self.be { Endian::Big } else { Endian::Little }
     }
@@ -41,18 +42,21 @@ impl<'a> View<'a> {
         }
     }
     /// The offset `delta` bytes after `base`, or an error at `base` when the sum does not fit an offset.
+    #[inline]
     pub fn at(&self, base: usize, delta: usize) -> Result<usize> {
         base.checked_add(delta)
             .ok_or_else(|| self.err(base, "offset overflow"))
     }
     /// The offset of element `i` of a table of `size`-byte elements at `base`, or an error at `base` when it does not
     /// fit an offset.
+    #[inline]
     pub fn element(&self, base: usize, i: usize, size: usize) -> Result<usize> {
         i.checked_mul(size)
             .and_then(|delta| base.checked_add(delta))
             .ok_or_else(|| self.err(base, "offset overflow"))
     }
     /// [`View::u16`] at `delta` bytes after `base`.
+    #[inline]
     pub fn u16_at(&self, base: usize, delta: usize) -> Result<u16> {
         self.u16(self.at(base, delta)?)
     }
@@ -65,38 +69,46 @@ impl<'a> View<'a> {
         self.expect(self.at(base, delta)?, b)
     }
     /// [`View::u8`] at `delta` bytes after `base`.
+    #[inline]
     pub fn u8_at(&self, base: usize, delta: usize) -> Result<u8> {
         self.u8(self.at(base, delta)?)
     }
     /// [`View::u32`] at `delta` bytes after `base`.
+    #[inline]
     pub fn u32_at(&self, base: usize, delta: usize) -> Result<u32> {
         self.u32(self.at(base, delta)?)
     }
+    #[inline]
     pub fn slice(&self, o: usize, n: usize) -> Result<&'a [u8]> {
         primase_foundations::bytes::View::new(self.data)
             .slice(o, n)
             .map_err(|e| self.short(o, n, e))
     }
+    #[inline]
     pub fn u8(&self, o: usize) -> Result<u8> {
         primase_foundations::bytes::View::new(self.data)
             .u8(o)
             .map_err(|e| self.short(o, 1, e))
     }
+    #[inline]
     pub fn u16(&self, o: usize) -> Result<u16> {
         primase_foundations::bytes::View::new(self.data)
             .u16(o, self.endian())
             .map_err(|e| self.short(o, 2, e))
     }
+    #[inline]
     pub fn u32(&self, o: usize) -> Result<u32> {
         primase_foundations::bytes::View::new(self.data)
             .u32(o, self.endian())
             .map_err(|e| self.short(o, 4, e))
     }
+    #[inline]
     pub fn u64(&self, o: usize) -> Result<u64> {
         primase_foundations::bytes::View::new(self.data)
             .u64(o, self.endian())
             .map_err(|e| self.short(o, 8, e))
     }
+    #[inline]
     pub fn size(&self, o: usize) -> Result<usize> {
         usize::try_from(self.u64(o)?).map_err(|_| self.err(o, "size overflow"))
     }
@@ -107,6 +119,7 @@ impl<'a> View<'a> {
             Ok(())
         }
     }
+    #[inline]
     pub fn boolean(&self, o: usize) -> Result<bool> {
         match self.u8(o)? {
             0 => Ok(false),
