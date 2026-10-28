@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.0 (2026-10-28)
 
 - Breaking: the variable-length lists of `flver::Vertex` (`uvs`, `layer_bytes`, `tangents`, `tangent_indices`, `colors`)
   are `flver::Channel`s, not `Vec`s: a list keeps its first few values in the vertex (`uvs` two, `tangents`, `colors` and
@@ -48,6 +48,7 @@
 - `fxr::resources`: the file names of an effect's textures (`s00001_a.tpf` in Elden Ring; Sekiro's carry no suffix),
   models and animations, an index of a binder's members by number (`Resources::index`) and Elden Ring's resource lists
   (`read_resource_list`, the text of `.ffxreslist` members).
+- Depends on havok-formats 0.8.1.
 
 ## 0.9.0 (2026-10-28)
 
