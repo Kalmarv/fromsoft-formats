@@ -1,5 +1,5 @@
-//! The output side the writers share: a byte buffer that appends integers and strings in either byte order, pads to an
-//! alignment and patches words already written, and the checked narrowing of a length into the width a file stores.
+//! The output side the writers share: a byte buffer that appends integers and strings in either byte order and pads
+//! with zeros, and the checked arithmetic and narrowing of the sizes and offsets a file stores.
 use crate::{Result, invalid};
 
 /// A growing output buffer of one format, little- or big-endian.
@@ -76,14 +76,6 @@ impl Out {
         self.buf.resize(self.buf.len().saturating_add(n), 0);
     }
 
-    /// Appends zero bytes up to the next multiple of `to` (nothing where the length already is one).
-    pub fn align(&mut self, to: usize) {
-        let rem = self.buf.len().checked_rem(to).unwrap_or(0);
-        if rem != 0 {
-            self.zeros(to.saturating_sub(rem));
-        }
-    }
-
     /// Appends `text` as UTF-16 (in the buffer's byte order) and a 16-bit NUL.
     pub fn utf16z(&mut self, text: &str) {
         for unit in text.encode_utf16() {
@@ -104,43 +96,6 @@ impl Out {
         self.buf.extend_from_slice(text.as_bytes());
         self.buf.push(0);
         Ok(())
-    }
-
-    /// Overwrites the 32-bit word at `at`, which must already be written.
-    pub fn patch_u32(&mut self, at: usize, v: u32) -> Result<()> {
-        let bytes = if self.big {
-            v.to_be_bytes()
-        } else {
-            v.to_le_bytes()
-        };
-        self.patch(at, &bytes)
-    }
-
-    /// Overwrites the 64-bit word at `at`, which must already be written.
-    pub fn patch_u64(&mut self, at: usize, v: u64) -> Result<()> {
-        let bytes = if self.big {
-            v.to_be_bytes()
-        } else {
-            v.to_le_bytes()
-        };
-        self.patch(at, &bytes)
-    }
-
-    fn patch(&mut self, at: usize, bytes: &[u8]) -> Result<()> {
-        let format = self.format;
-        let end = at.checked_add(bytes.len());
-        let slot = end.and_then(|end| self.buf.get_mut(at..end));
-        match slot {
-            Some(slot) => {
-                slot.copy_from_slice(bytes);
-                Ok(())
-            }
-            None => Err(invalid(
-                format,
-                at,
-                "a word to patch lies beyond what was written",
-            )),
-        }
     }
 
     /// The finished bytes.
@@ -186,20 +141,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn words_pad_and_patches_follow_the_buffers_byte_order() {
+    fn words_and_padding_follow_the_buffers_byte_order() {
         for big in [false, true] {
             let mut out = Out::new("TEST", big);
             out.u8(1);
             out.u16(0x0203);
-            out.align(4);
+            out.zeros(1);
             out.u32(0x0405_0607);
             out.u64(0x0809_0a0b_0c0d_0e0f);
             out.i32(-2);
             out.utf16z("a");
             out.asciiz("b").unwrap();
-            out.align(8);
-            out.patch_u32(4, 0x1112_1314).unwrap();
-            out.patch_u64(8, 7).unwrap();
+            out.zeros(6);
             let b = out.finish();
             let word = |at: usize| {
                 let w: [u8; 4] = b[at..at + 4].try_into().unwrap();
@@ -211,7 +164,7 @@ mod tests {
             };
             assert_eq!(b[0], 1);
             assert_eq!(b[3], 0, "alignment pads with zeros");
-            assert_eq!(word(4), 0x1112_1314);
+            assert_eq!(word(4), 0x0405_0607);
             assert_eq!(word(16), (-2i32) as u32);
             assert_eq!(b.len() % 8, 0);
             let wide: [u8; 8] = b[8..16].try_into().unwrap();
@@ -221,17 +174,15 @@ mod tests {
                 } else {
                     u64::from_le_bytes(wide)
                 },
-                7
+                0x0809_0a0b_0c0d_0e0f
             );
         }
     }
 
     #[test]
-    fn a_patch_past_the_end_and_a_non_ascii_name_are_refused() {
+    fn a_non_ascii_name_and_an_overflowing_size_are_refused() {
         let mut out = Out::new("TEST", false);
         out.u32(0);
-        assert!(out.patch_u32(2, 1).is_err());
-        assert!(out.patch_u64(0, 1).is_err());
         assert!(out.asciiz("caf\u{e9}").is_err());
         assert_eq!(align_up("TEST", 17, 16).unwrap(), 32);
         assert_eq!(align_up("TEST", 32, 16).unwrap(), 32);
