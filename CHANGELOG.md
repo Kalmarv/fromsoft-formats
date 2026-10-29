@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.1 (2026-10-29)
 
 - `msb`: the running game does not draw a part by its draw groups against the collisions' display groups alone (the
   term `DrawInfo::draws_under` tests, whose documentation now says what was seen against it): a part's own display
