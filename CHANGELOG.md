@@ -146,7 +146,7 @@
   field lists, the flag bytes). `Typed::read(action, game)` reads any of them, `params()` names every parameter and
   `resources()` the files it refers to; `Fxr::typed(game)` is the whole node tree typed (`TypedNode`, `TypedConfig`).
   Which of a type's layouts an action is stored in is decided by its property lists' lengths (three Sekiro billboards keep
-  Dark Souls III's layout, with one word past the project's names; five Elden Ring action-10500 records keep Sekiro's).
+  Dark Souls III's layout, with one word past the project's names; 26 Elden Ring action-10500 records keep Sekiro's).
   Read over all 2,913 + 12,155 files: no action refused; the actions per type equal an independent walker's; the typed
   parameters equal the fxr library's `toJSON` over a covering sample (every action type and list-length layout, and
   every tenth file: 334 Sekiro and 1,246 Elden Ring files, 21,656 and 91,888 actions), once its display conventions are
