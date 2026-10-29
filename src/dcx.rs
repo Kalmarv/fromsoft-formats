@@ -3,8 +3,8 @@
 use crate::{
     Result,
     bytes::View,
-    put::{Out, narrow},
     invalid,
+    put::{Out, narrow},
 };
 use primase_foundations::compress::{
     Decompressor, Error as CompressError, Zlib, Zstd,

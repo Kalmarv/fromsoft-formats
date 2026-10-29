@@ -85,7 +85,11 @@ impl Census<'_> {
     }
 
     fn sampled(&self, key: u64) -> bool {
-        !self.smoke || key.wrapping_add(self.seed).wrapping_mul(0x9E37_79B9_7F4A_7C15).is_multiple_of(STRIDE)
+        !self.smoke
+            || key
+                .wrapping_add(self.seed)
+                .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                .is_multiple_of(STRIDE)
     }
 
     /// One DCX envelope at `label`: framed again, decoded, compressed again (Kraken only in the sample), and for a

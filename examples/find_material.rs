@@ -42,7 +42,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut found: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
     let mut unread = 0;
     for model in &layout.models {
-        let Some(digits) = model.name.strip_prefix('m').filter(|d| d.len() == 6) else { continue };
+        let Some(digits) = model.name.strip_prefix('m').filter(|d| d.len() == 6) else {
+            continue;
+        };
         let path = format!("/map/{map}/{map}_{digits}.mapbnd.dcx");
         let Ok(bytes) = install.read(&path, &decoder) else {
             unread += 1;
@@ -50,23 +52,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         let binder = Binder::read(&bytes, &decoder)?;
         for file in &binder.files {
-            if !file.name.as_deref().is_some_and(|n| n.to_lowercase().ends_with(".flver")) {
+            if !file
+                .name
+                .as_deref()
+                .is_some_and(|n| n.to_lowercase().ends_with(".flver"))
+            {
                 continue;
             }
             let flver = Model::read(&file.bytes)?;
             for m in &flver.materials {
                 if m.name.to_lowercase().contains(&pattern) || m.mtd.to_lowercase().contains(&pattern) {
-                    found.entry(model.name.clone()).or_default().push((m.name.clone(), m.mtd.clone()));
+                    found
+                        .entry(model.name.clone())
+                        .or_default()
+                        .push((m.name.clone(), m.mtd.clone()));
                 }
             }
         }
     }
-    println!("{} models, {} map piece binders not found", layout.models.len(), unread);
+    println!(
+        "{} models, {} map piece binders not found",
+        layout.models.len(),
+        unread
+    );
     for part in &layout.parts {
         if part.kind != PartKind::MapPiece {
             continue;
         }
-        let Some(model) = part.model.and_then(|i| layout.models.get(i)) else { continue };
+        let Some(model) = part.model.and_then(|i| layout.models.get(i)) else {
+            continue;
+        };
         if let Some(materials) = found.get(&model.name) {
             println!(
                 "{} model {} at {:?} rotation {:?} scale {:?}: {:?}",

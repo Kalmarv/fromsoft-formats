@@ -59,7 +59,11 @@ impl Out {
 
     /// Appends a 16-bit word.
     pub fn u16(&mut self, v: u16) {
-        let b = if self.big { v.to_be_bytes() } else { v.to_le_bytes() };
+        let b = if self.big {
+            v.to_be_bytes()
+        } else {
+            v.to_le_bytes()
+        };
         self.buf.extend_from_slice(&b);
     }
 
@@ -145,9 +149,7 @@ impl Out {
 
     /// Overwrites the bytes at `at..at + v.len()`, which must already be written.
     pub fn patch(&mut self, at: usize, v: &[u8]) -> Result<()> {
-        let slot = at
-            .checked_add(v.len())
-            .and_then(|end| self.buf.get_mut(at..end));
+        let slot = at.checked_add(v.len()).and_then(|end| self.buf.get_mut(at..end));
         match slot {
             Some(slot) => {
                 slot.copy_from_slice(v);
@@ -158,11 +160,19 @@ impl Out {
     }
 
     fn word_bytes(&self, v: u32) -> [u8; 4] {
-        if self.big { v.to_be_bytes() } else { v.to_le_bytes() }
+        if self.big {
+            v.to_be_bytes()
+        } else {
+            v.to_le_bytes()
+        }
     }
 
     fn wide_bytes(&self, v: u64) -> [u8; 8] {
-        if self.big { v.to_be_bytes() } else { v.to_le_bytes() }
+        if self.big {
+            v.to_be_bytes()
+        } else {
+            v.to_le_bytes()
+        }
     }
 }
 

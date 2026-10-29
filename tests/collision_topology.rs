@@ -192,11 +192,11 @@ fn visit(t: &mut Totals, m: &Member<'_>) -> Result<()> {
             if let BvNodeKind::Internal { second_child } = n.kind
                 && let (Some(&a), Some(&b)) =
                     (section_of_node.get(&(i + 1)), section_of_node.get(&second_child))
-                {
-                    t.sibling_pairs += 1;
-                    t.sibling_pairs_over_127 +=
-                        usize::from(sections[a].primitives + sections[b].primitives > 127);
-                }
+            {
+                t.sibling_pairs += 1;
+                t.sibling_pairs_over_127 +=
+                    usize::from(sections[a].primitives + sections[b].primitives > 127);
+            }
         }
         for (si, sec) in trees.sections.iter().enumerate() {
             if (0..sections[si].primitives).any(|p| !prim_box.contains_key(&(si, p))) {

@@ -142,9 +142,10 @@ impl Install {
                                 break;
                             };
                             if let Err(e) = self.one(path, *map, &decoder, &mut state, &visit)
-                                && let Ok(mut f) = failures.lock() {
-                                    f.push(format!("{path}: {e}"));
-                                }
+                                && let Ok(mut f) = failures.lock()
+                            {
+                                f.push(format!("{path}: {e}"));
+                            }
                         }
                         state
                     })
