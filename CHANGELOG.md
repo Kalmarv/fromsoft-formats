@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.2 (2026-10-29)
 
 - `dcx::encode`: a Kraken payload is compressed one 256 KiB block at a time and the blocks are concatenated, so every
   block sets the restart bit, as every block of every shipped payload does (the library's one-call compression sets it on
