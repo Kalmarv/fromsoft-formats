@@ -6,6 +6,12 @@
 //! documented grammar and map table written again, a FLVER layout walker over the same archive entries); the second test's
 //! oracle is `oracles.soulstruct.elden/shader-uv-slots.json`, soulstruct 12b6918's `SHADER_UV_SLOTS` and `SHADER_GROUP_UV`
 //! converted to JSON.
+//!
+//! Elden Ring's counts are those of the path dictionary that names all 97,118 entries of the base archives
+//! (`tests/inputs`: UXM's list and the 87 Smithbox paths that hash onto the entries UXM's list leaves unnamed); the
+//! Python reader walked the same archives and named the same entries. A SpeedTree model is one whose header word at 0x68
+//! has 0x8000 in its high half (`flver::is_speedtree`), as in the reader; the FLVER version 0x20014 is not the test (two
+//! face models, `FC_M_0000_M` and `FG_A_0000_M`, have that version without being SpeedTree).
 mod inputs;
 
 use fromsoft_formats::{
@@ -322,12 +328,12 @@ fn soulstructs_uv_slot_table_against_the_models() -> Result<()> {
         "models in map, character, part, asset and object binders",
         models,
     );
-    assert_eq!((models, speedtree), (21_493, 121));
-    assert_eq!((with_material, without_material), (75_826, 11_193));
-    assert_eq!(observed.len(), 451);
+    assert_eq!((models, speedtree), (21_562, 119));
+    assert_eq!((with_material, without_material), (76_319, 11_194));
+    assert_eq!(observed.len(), 452);
     assert!(disagreeing.is_empty(), "{disagreeing:?}");
-    assert_eq!((in_table, agreeing), (180, 180));
-    assert_eq!((meshes_in_table, meshes_agreeing), (56_770, 55_811));
+    assert_eq!((in_table, agreeing), (181, 181));
+    assert_eq!((meshes_in_table, meshes_agreeing), (57_215, 56_256));
     // 168 of the table's 176 stems are in the grammar; the eight that are not are legacy and test shaders
     let outside: Vec<&String> = slots.keys().filter(|s| Profile::parse(s).is_none()).collect();
     assert_eq!(outside.len(), 8, "{outside:?}");

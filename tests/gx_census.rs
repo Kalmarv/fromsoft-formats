@@ -6,6 +6,10 @@
 //!
 //! The expected numbers are a census made with an independent Python reader of the same files (a FLVER walker over the
 //! same archive entries).
+//!
+//! Elden Ring's counts are those of the path dictionary that names all 97,118 entries of the base archives
+//! (`tests/inputs`: UXM's list and the 87 Smithbox paths that hash onto the entries UXM's list leaves unnamed); the
+//! Python reader walked the same archives and named the same entries.
 mod inputs;
 
 use fromsoft_formats::{
@@ -243,17 +247,17 @@ fn elden_rings_gx_items() -> Result<()> {
         t.models, t.materials, t.items, t.emissive, t.translucency, t.albedo, t.parallax, t.water
     );
     expect_found(Query::Install(inputs::Game::Elden, None), "models", t.models);
-    assert_eq!((t.models, t.materials, t.items), (21_614, 86_327, 112_774));
+    assert_eq!((t.models, t.materials, t.items), (21_681, 86_791, 113_293));
     assert_eq!(
         t.by_item,
         counts(&[
             ("GX00v100", 1),
-            ("GX00v102", 85_442),
+            ("GX00v102", 85_906),
             ("GX03v100", 1),
             ("GX04v100", 136),
-            ("GX05v100", 5_128),
+            ("GX05v100", 5_130),
             ("GX14v101", 688),
-            ("GX15v100", 809),
+            ("GX15v100", 857),
             ("GX20v100", 165),
             ("GX22v100", 162),
             ("GX24v100", 162),
@@ -264,12 +268,12 @@ fn elden_rings_gx_items() -> Result<()> {
     );
     assert_eq!(
         t.unnamed,
-        counts(&[("GX18", 565), ("GXMD", 19_232), ("GXUD", 119)])
+        counts(&[("GX18", 565), ("GXMD", 19_237), ("GXUD", 119)])
     );
     assert_eq!((t.emissive.0, t.emissive.1, t.emissive.2), (1, 0.6, 0.6));
     assert_eq!(
         (t.translucency.0, t.translucency.1, t.translucency.2),
-        (5_128, 1., 1.)
+        (5_130, 1., 1.)
     );
     assert_eq!(t.albedo.0, 688);
     assert!(
