@@ -480,7 +480,7 @@ impl Model {
             }
         }
 
-        let mut out = Out::new(FORMAT);
+        let mut out = Out::new(FORMAT, false);
         let speedtree = self.speedtree;
         out.bytes(b"FLVER\0L\0");
         out.u32(self.version);
@@ -866,7 +866,7 @@ impl Model {
         if speedtree {
             out.align(0x800);
         }
-        Ok(out.into_bytes())
+        Ok(out.finish())
     }
 }
 

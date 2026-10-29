@@ -56,7 +56,7 @@ impl Material {
     /// install. A value the format cannot hold is refused: a [`Value::Truncated`] of a code the format lacks or with
     /// as many bytes as its code declares or more (that is the typed variant's size), and a string with a NUL in it.
     pub fn write(&self) -> Result<Vec<u8>> {
-        let mut out = Out::new(FORMAT);
+        let mut out = Out::new(FORMAT, false);
         let params = out.word(self.params.len(), "parameter count")?;
         let samplers = out.word(self.samplers.len(), "sampler count")?;
         out.bytes(b"MAB\0");
@@ -95,7 +95,7 @@ impl Material {
         out.patch_u64(8, shader)?;
         out.patch_u64(16, source)?;
         out.bytes(&self.unreferenced_tail);
-        Ok(out.into_bytes())
+        Ok(out.finish())
     }
 }
 

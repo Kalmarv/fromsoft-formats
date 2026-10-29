@@ -537,8 +537,10 @@ mod division_tests {
                     name: n.map(str::to_owned),
                     flags: 0,
                     bytes: Vec::new(),
+                    wrap: None,
                 })
                 .collect(),
+            layout: super::Layout::default(),
         }
     }
 

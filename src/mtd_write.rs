@@ -248,7 +248,7 @@ impl MaterialDefinition {
 
     fn write_with(&self, recorded: Option<&[BlockLength]>, padding: &[PaddingAnomaly]) -> Result<Vec<u8>> {
         let mut w = Writer {
-            out: Out::new(FORMAT),
+            out: Out::new(FORMAT, false),
             open: Vec::new(),
             recorded,
             ended: 0,
@@ -256,6 +256,6 @@ impl MaterialDefinition {
             padded: 0,
         };
         w.run(self)?;
-        Ok(w.out.into_bytes())
+        Ok(w.out.finish())
     }
 }

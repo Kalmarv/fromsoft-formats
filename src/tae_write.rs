@@ -75,7 +75,7 @@ impl Tae {
     /// for every animation), a time that is not a number, an event group naming an event the animation lacks, a name
     /// with a NUL in it, and anything that does not fit a 32-bit offset or count.
     pub fn write(&self) -> Result<Vec<u8>> {
-        let mut out = Out::new(FORMAT);
+        let mut out = Out::new(FORMAT, false);
         let count = self.animations.len();
         let mut previous: Option<i64> = None;
         for a in &self.animations {
@@ -172,7 +172,7 @@ impl Tae {
         }
         let size = out.word(out.len(), "file size")?;
         out.patch_u32(12, size)?;
-        Ok(out.into_bytes())
+        Ok(out.finish())
     }
 }
 

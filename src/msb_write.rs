@@ -300,7 +300,7 @@ impl MapLayout {
             }
         }
 
-        let mut out = Out::new(FORMAT);
+        let mut out = Out::new(FORMAT, false);
         out.bytes(MAGIC);
         for (si, section) in self.sections.iter().enumerate() {
             let records = if si == 5 { &parts_records } else { &section.records };
@@ -334,7 +334,7 @@ impl MapLayout {
                 out.bytes(record);
             }
         }
-        let bytes = out.into_bytes();
+        let bytes = out.finish();
         MapLayout::read(&bytes)?;
         Ok(bytes)
     }

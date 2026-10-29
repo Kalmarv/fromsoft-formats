@@ -40,7 +40,7 @@ impl Script {
     /// The checks of [`Script::read`] apply to what is written: a rest behaviour above 2, or a parameter substitution of
     /// no bytes or outside its instruction's arguments, is refused.
     pub fn write(&self) -> Result<Vec<u8>> {
-        let mut out = Out::new(FORMAT);
+        let mut out = Out::new(FORMAT, false);
         out.bytes(b"EVD\0\x00\xff\x01\xff");
         out.u32(0xCD);
         out.u32(0);
@@ -94,8 +94,7 @@ impl Script {
         }
 
         let arguments_at = out.len();
-        let mut k = 0usize;
-        for instruction in self.events.iter().flat_map(|e| &e.instructions) {
+        for (k, instruction) in self.events.iter().flat_map(|e| &e.instructions).enumerate() {
             let record = instructions_at + k * INSTRUCTION;
             let at = if instruction.args.is_empty() {
                 -1
@@ -120,7 +119,6 @@ impl Script {
             out.patch(record + 24, &layer.to_le_bytes())?;
             out.bytes(&instruction.args);
             out.align(4);
-            k += 1;
         }
         out.zeros((16 - (out.len() - arguments_at) % 16) % 16);
         let arguments_len = out.len() - arguments_at;
@@ -164,7 +162,7 @@ impl Script {
             let value = out.wide(field, "header field")?;
             out.patch_u64(HEADER_FIELDS + i * 8, value)?;
         }
-        Ok(out.into_bytes())
+        Ok(out.finish())
     }
 
     /// The reader's checks of one event's own fields.

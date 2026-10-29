@@ -605,7 +605,7 @@ mod compression_tests {
 
     /// The error a decode gives, or `None` where it succeeds; a Kraken envelope whose framing passes ends at the missing
     /// library, which is "success" for this test.
-    fn refusal(decoder: &Decoder<'_>, bytes: &[u8]) -> Option<String> {
+    fn refused_by(decoder: &Decoder<'_>, bytes: &[u8]) -> Option<String> {
         match decoder.decode(bytes) {
             Ok(_) => None,
             Err(e) if e.to_string() == "DCX at 0x28: Oodle required" => None,
@@ -641,7 +641,7 @@ mod compression_tests {
         for (format, mut good) in cases {
             // a zero byte after the payload is alignment, so a payload size one over takes it
             good.push(0);
-            assert_eq!(refusal(&decoder, &good), None, "{format:?} as framed");
+            assert_eq!(refused_by(&decoder, &good), None, "{format:?} as framed");
             let word = |bytes: &[u8], at: usize| u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap());
             let (dsize, csize) = (word(&good, 28), word(&good, 32));
             for (at, was) in [(28, dsize), (32, csize)] {
@@ -649,7 +649,7 @@ mod compression_tests {
                     let mut bad = good.clone();
                     bad[at..at + 4].copy_from_slice(&now.to_be_bytes());
                     assert!(
-                        refusal(&decoder, &bad).is_some(),
+                        refused_by(&decoder, &bad).is_some(),
                         "{format:?}: the word at {at} is {now}, not {was}"
                     );
                 }
@@ -657,10 +657,10 @@ mod compression_tests {
             // the payload cut by one byte (its size word kept, so the envelope ends early), and one byte over
             let mut short = good.clone();
             short.truncate(short.len() - 2);
-            assert!(refusal(&decoder, &short).is_some(), "{format:?} short");
+            assert!(refused_by(&decoder, &short).is_some(), "{format:?} short");
             let mut over = good.clone();
             over.push(1);
-            assert!(refusal(&decoder, &over).is_some(), "{format:?} over");
+            assert!(refused_by(&decoder, &over).is_some(), "{format:?} over");
         }
     }
 }

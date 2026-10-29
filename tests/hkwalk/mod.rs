@@ -141,11 +141,10 @@ impl Install {
                             let Some((path, map)) = self.binders.get(i) else {
                                 break;
                             };
-                            if let Err(e) = self.one(path, *map, &decoder, &mut state, &visit) {
-                                if let Ok(mut f) = failures.lock() {
+                            if let Err(e) = self.one(path, *map, &decoder, &mut state, &visit)
+                                && let Ok(mut f) = failures.lock() {
                                     f.push(format!("{path}: {e}"));
                                 }
-                            }
                         }
                         state
                     })

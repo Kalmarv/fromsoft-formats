@@ -20,6 +20,11 @@ use fromsoft_formats::Game;
 use havok_formats::{DEFAULT_DEGENERATE_THRESHOLD, compressed_mesh, is_degenerate_triangle};
 use hkwalk::{Member, Result, Set, shapes};
 
+/// A source row: its three vertex indices.
+type SourceRow = [u64; 3];
+/// A triangle's three corners.
+type Triangle = [[f32; 3]; 3];
+
 #[derive(Debug, Default, PartialEq)]
 struct Totals {
     kept: usize,
@@ -54,7 +59,7 @@ fn visit(t: &mut Totals, m: &Member<'_>) -> Result<()> {
         let map = shape.field("triangleIndexToShapeKey")?.array()?;
         let by_key: BTreeMap<u32, [[f32; 3]; 3]> =
             mesh.triangles.iter().map(|t| (t.key, t.vertices)).collect();
-        let mut found: Vec<([u64; 3], Option<[[f32; 3]; 3]>)> = Vec::with_capacity(rows.len());
+        let mut found: Vec<(SourceRow, Option<Triangle>)> = Vec::with_capacity(rows.len());
         let mut position: BTreeMap<u64, [f32; 3]> = BTreeMap::new();
         for i in 0..rows.len() {
             let row = rows.get(i)?;

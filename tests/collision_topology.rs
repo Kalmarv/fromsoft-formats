@@ -189,15 +189,14 @@ fn visit(t: &mut Totals, m: &Member<'_>) -> Result<()> {
             section_of_node.insert(leaf, s);
         }
         for (i, n) in trees.mesh.nodes().iter().enumerate() {
-            if let BvNodeKind::Internal { second_child } = n.kind {
-                if let (Some(&a), Some(&b)) =
+            if let BvNodeKind::Internal { second_child } = n.kind
+                && let (Some(&a), Some(&b)) =
                     (section_of_node.get(&(i + 1)), section_of_node.get(&second_child))
                 {
                     t.sibling_pairs += 1;
                     t.sibling_pairs_over_127 +=
                         usize::from(sections[a].primitives + sections[b].primitives > 127);
                 }
-            }
         }
         for (si, sec) in trees.sections.iter().enumerate() {
             if (0..sections[si].primitives).any(|p| !prim_box.contains_key(&(si, p))) {
@@ -273,8 +272,8 @@ fn visit(t: &mut Totals, m: &Member<'_>) -> Result<()> {
                     .collect())
             };
             // (1) every subtree of 3 to 17 leaves against a pure bottom-up merge
-            for i in 0..nodes.len() {
-                let n = under[i].1.len();
+            for (i, (_, leaves)) in under.iter().enumerate().take(nodes.len()) {
+                let n = leaves.len();
                 if (3..=17).contains(&n) {
                     let slot = t.by_size.entry(n).or_default();
                     slot.0 += 1;
@@ -284,7 +283,7 @@ fn visit(t: &mut Totals, m: &Member<'_>) -> Result<()> {
             // (1) the maximal subtrees of 3 to 16 leaves against `sah_shape`
             for u in 0..nodes.len() {
                 let n = under[u].1.len();
-                if n < 3 || n > MERGE_LEAVES || (u != 0 && under[parent[u]].1.len() <= MERGE_LEAVES) {
+                if !(3..=MERGE_LEAVES).contains(&n) || (u != 0 && under[parent[u]].1.len() <= MERGE_LEAVES) {
                     continue;
                 }
                 let want = stock_clusters(u);

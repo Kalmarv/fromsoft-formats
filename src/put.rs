@@ -27,11 +27,6 @@ impl Out {
         self.buf.len()
     }
 
-    /// The bytes written so far.
-    pub fn as_slice(&self) -> &[u8] {
-        &self.buf
-    }
-
     /// The finished bytes.
     pub fn finish(self) -> Vec<u8> {
         self.buf
@@ -270,7 +265,7 @@ mod tests {
         assert!(o.patch_u64(usize::MAX, 1).is_err());
         assert!(o.word(1usize << 33, "x").is_err());
         assert_eq!(
-            o.into_bytes(),
+            o.finish(),
             [0xef, 0xbe, 0xad, 0xde, 1, 2, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]
         );
     }
@@ -282,7 +277,8 @@ mod tests {
         o.f32(1.0);
         o.i64(-1);
         o.patch_u32(0, 0x0102_0304).unwrap();
-        assert_eq!(&o.as_slice()[..8], [1, 2, 3, 4, 0x3f, 0x80, 0, 0]);
-        assert_eq!(&o.as_slice()[8..], [0xff; 8]);
+        let b = o.finish();
+        assert_eq!(&b[..8], [1, 2, 3, 4, 0x3f, 0x80, 0, 0]);
+        assert_eq!(&b[8..], [0xff; 8]);
     }
 }
