@@ -146,12 +146,26 @@ fn nibble_rule(
     Ok(())
 }
 
-/// The error the quantisation of the codecs allows a vertex of the rebuilt triangle with key `key`, per axis.
+/// The error the codecs allow a vertex of the rebuilt triangle with key `key`, per axis: half a code step of the coarser of
+/// the section's packed codec and the shared-vertex grid, and the rounding of the `f32` decode (`code * scale + minimum`
+/// is three roundings at the magnitude of the box's coordinates, up to the units in the last place of the largest of them;
+/// a mesh whose box reaches 300 m has 3.6e-5 m of that, a third of a step of its shared grid). The decode is the game's, and
+/// the reader replicates it, so the rounding belongs to what a rebuilt vertex reads back as.
 fn allowed(built: &BuiltMesh, key: u32, axis: usize) -> f64 {
-    let packed = f64::from(built.sections[(key >> 8) as usize].codec[3 + axis]);
+    let section = &built.sections[(key >> 8) as usize];
+    let packed = f64::from(section.codec[3 + axis]);
     let ranges = [2_097_151.0, 2_097_151.0, 4_194_303.0];
     let shared = (f64::from(built.domain[1][axis]) - f64::from(built.domain[0][axis])) / ranges[axis];
-    0.5001 * packed.max(shared)
+    let packed_far = f64::from(section.codec[axis]) + packed * [2047.0, 2047.0, 1023.0][axis];
+    let magnitude = [
+        f64::from(built.domain[0][axis]),
+        f64::from(built.domain[1][axis]),
+        f64::from(section.codec[axis]),
+        packed_far,
+    ]
+    .into_iter()
+    .fold(0.0, |m: f64, x| m.max(x.abs()));
+    0.5001 * packed.max(shared) + 2.0 * f64::from(f32::EPSILON) * magnitude
 }
 
 /// (2) Rebuild a mesh from its decoded triangles; what the rebuild decodes to, or `None` for a mesh that is not rebuilt.
