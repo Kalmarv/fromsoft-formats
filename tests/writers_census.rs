@@ -34,6 +34,7 @@ use fromsoft_formats::regulation;
 use fromsoft_formats::tpf::Package;
 use fromsoft_formats::{Archive, Binder, Game, Keys, NameDictionary};
 use inputs::{Depth, Game as Data, OracleSet, Tool, depth, install, keys, oodle, oracle, seed, threads};
+use primase_foundations::compress::oodle_framing;
 mod common;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -163,6 +164,19 @@ impl Census<'_> {
             Ok(back) if back == decoded => self.bump(&format!("dcx {codec} re-encoded decodes equal")),
             Ok(_) => self.fail(label, "the envelope it wrote decodes to other bytes"),
             Err(e) => self.fail(label, format!("the envelope it wrote does not decode: {e}")),
+        }
+        if env.compression == Compression::Kraken {
+            // every block of a shipped payload restarts the decoder; so must every block of ours
+            match oodle_framing::walk(parsed.payload, parsed.decoded_size) {
+                Ok(f) if f.restart_bits() == f.block_count() => {
+                    self.bump("dcx Kraken re-encoded blocks all restart");
+                }
+                Ok(f) => self.fail(
+                    label,
+                    format!("{} of {} blocks it wrote restart", f.restart_bits(), f.block_count()),
+                ),
+                Err(e) => self.fail(label, format!("the payload it wrote does not walk: {e}")),
+            }
         }
         if parsed.payload == env.payload {
             self.bump(&format!("dcx {codec} re-encoded payload byte-equal"));

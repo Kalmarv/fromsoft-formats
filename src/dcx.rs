@@ -283,7 +283,8 @@ pub struct Encoder<'a> {
 ///
 /// The compressors are not the ones that made the shipped files, so the payload differs from theirs while decoding to
 /// the same bytes (and the header equals theirs): Kraken goes through the game's library at the level the header
-/// states (`format.level`, an Oodle compression level, 6 in every shipped Kraken envelope but those that say 9; one
+/// states (`format.level`, an Oodle compression level, 6 in every shipped Kraken envelope but those that say 9; each
+/// 256 KiB block is compressed apart so that every block restarts the decoder, as the shipped ones do; one
 /// outside the library's -4 to 9 is refused; the sizes at 6 come out within about 1 per cent of the shipped ones); zlib
 /// is flate2's pure-Rust deflate at `format.level` (the real zlib at level 9 reproduces 48 of the 58 shipped zlib
 /// payloads, this implementation none); zstd is libzstd's streaming encoder at `format.level` with the frame
@@ -299,10 +300,17 @@ pub fn encode(format: &Format, decoded: &[u8], encoder: &Encoder<'_>) -> Result<
                     format!("Oodle level {} is outside the library's -4 to 9", format.level),
                 )
             })?;
-            encoder
+            let oodle = encoder
                 .oodle
-                .ok_or_else(|| invalid("DCX", 40, "Oodle required"))?
-                .compress_at(Codec::KRAKEN, level, decoded)?
+                .ok_or_else(|| invalid("DCX", 40, "Oodle required"))?;
+            // One block per 256 KiB, each compressed on its own: the library's one-call compression sets the restart
+            // bit of the first block only, while every block of every shipped payload has it set (the engine wiki's
+            // DCX page). Concatenated blocks are a stream the library decodes as a whole.
+            let mut payload = Vec::new();
+            for piece in decoded.chunks(oodle_framing::BLOCK_SIZE) {
+                payload.extend(oodle.compress_at(Codec::KRAKEN, level, piece)?);
+            }
+            payload
         }
         Compression::Deflate => {
             let mut z = flate2::write::ZlibEncoder::new(
