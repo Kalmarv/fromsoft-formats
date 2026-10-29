@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- `dcx::encode`: a Kraken payload is compressed one 256 KiB block at a time and the blocks are concatenated, so every
+  block sets the restart bit, as every block of every shipped payload does (the library's one-call compression sets it on
+  the first block only, and the later blocks of the old output continued the first one's matches). The library decodes
+  the concatenation as a whole, and the sizes come out like the shipped ones (a 1.99 MB binder: 1,138,147 bytes against
+  the shipped 1,167,321, where the old output was 969,044). Why: a loose `o114903.objbnd.dcx` re-encoded the old way made
+  Sekiro exit right after the load-game press (2 of 2 launches) while the stock bytes of the same file load; a
+  1,135,856-byte binder re-encoded the old way loaded. Whether the restart bit is what the game's loader needs is not
+  established; the cause of the exit is open. `tests/writers_census.rs` asserts that every Kraken block it re-encodes
+  restarts.
+
 ## 0.10.1 (2026-10-29)
 
 - `msb`: the running game does not draw a part by its draw groups against the collisions' display groups alone (the
