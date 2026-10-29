@@ -361,8 +361,22 @@ fn draw_blocks_and_the_numbers_of_regions_and_events() -> Result<()> {
         // collisions, collisions that set a display group, drawn parts, parts with no draw group, parts under a draw group
         // that one collision's display groups include, and parts under none that any does
         let mut census = [0usize; 6];
-        for layout in layouts.values() {
+        // parts under no draw group, those with display groups of their own, those whose display groups a collision displays
+        let mut zero = [0usize; 3];
+        for (name, layout) in &layouts {
             files += 1;
+            let z = layout.zero_draw_census()?;
+            for (total, n) in zero.iter_mut().zip([z.parts, z.with_display, z.display_met]) {
+                *total += n;
+            }
+            if game == Game::EldenRing && name == "m10_00_00_00" {
+                // the layout the running-game picture with draw groups zero and display groups set was made from
+                assert_eq!(
+                    (z.parts, z.with_display, z.display_met),
+                    (292, 171, 171),
+                    "{name}"
+                );
+            }
             let c = layout.group_census()?;
             for (total, n) in census.iter_mut().zip([
                 c.collisions,
@@ -438,6 +452,14 @@ fn draw_blocks_and_the_numbers_of_regions_and_events() -> Result<()> {
             [3_266, 906, 425_775, 317_870, 70_713, 37_192]
         };
         assert_eq!(census, expected_census, "{} groups", game.name());
+        // the same independent census, over the parts under no draw group: Sekiro 654 (271 with display groups of their own,
+        // 230 of those meeting the collisions' display groups); Elden Ring 317,870 (235,081; 9,198)
+        let expected_zero = if game == Game::Sekiro {
+            [654, 271, 230]
+        } else {
+            [317_870, 235_081, 9_198]
+        };
+        assert_eq!(zero, expected_zero, "{} zero draw groups", game.name());
         // the draw block's fourth field is 0 in Sekiro; in Elden Ring -1 as a signed word, then a byte that is 1 on 177 map
         // pieces
         if game == Game::Sekiro {

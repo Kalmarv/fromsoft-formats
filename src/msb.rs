@@ -1037,14 +1037,38 @@ impl DrawInfo {
         group_numbers(&self.display_groups)
     }
 
-    /// Whether one of the part's draw groups is in `display`, eight words of display groups: the test the community
-    /// documents for a part to be drawn while those display groups are active. Whether a part with no draw group is drawn
-    /// is not decided here.
-    pub fn draws_under(&self, display: &[u32; 8]) -> bool {
+    /// Whether one of the part's draw groups is in `groups`, eight words of groups: the test the community documents
+    /// for a part to be drawn while those groups are the display groups of the collision under the player. The running
+    /// game does not draw a part by this test against a collision's *display* groups alone: in Elden Ring's `m10_00`, with
+    /// the draw groups of every map piece and asset set to one group and the display groups of every collision set to the
+    /// same group, none of the near scenery is drawn. Against the collision's *draw* groups, which nearly every part's draw
+    /// groups are among (107,130 of Elden Ring's 107,905 parts with draw groups, in their map), it was not tried alone. A
+    /// part with no draw group is not decided here (see [`DrawInfo::displays_under`]).
+    pub fn draws_under(&self, groups: &[u32; 8]) -> bool {
         self.draw_groups
             .iter()
-            .zip(display)
-            .any(|(draw, shown)| draw & shown != 0)
+            .zip(groups)
+            .any(|(draw, other)| draw & other != 0)
+    }
+
+    /// Whether one of the part's own display groups is in `groups`, eight words of groups. The community documents the
+    /// display groups of anything but a collision as doing nothing; in the running game (Elden Ring 1.17.2, `m10_00`, every
+    /// map piece and asset with draw groups zero and display groups the single group 9) the near scenery is drawn while
+    /// that group is among both group arrays of the collision under the player, and is not drawn with the display groups
+    /// as stored. One view, one group.
+    pub fn displays_under(&self, groups: &[u32; 8]) -> bool {
+        self.display_groups
+            .iter()
+            .zip(groups)
+            .any(|(display, other)| display & other != 0)
+    }
+
+    /// Whether `collision`'s groups show this part under the reading that fits every running-game picture so far: one of
+    /// the part's draw groups is among the collision's draw groups, or one of its display groups among the collision's
+    /// display groups (each array against the array of the same name). It is a reading, not a finding: the pictures do not
+    /// separate the two terms, nor the arrays, nor map pieces from assets.
+    pub fn shown_by(&self, collision: &DrawInfo) -> bool {
+        self.draws_under(&collision.draw_groups) || self.displays_under(&collision.display_groups)
     }
 }
 
@@ -1191,7 +1215,10 @@ pub struct GroupCensus {
 impl MapLayout {
     /// How the layout's map pieces, objects and assets meet the display groups of its collisions: a part is *met* if one
     /// of its draw groups is in the union of the collisions' display groups ([`DrawInfo::display_groups`]; the second
-    /// block's groups are not counted). Reads [`MapLayout::draw_infos`], and refuses where it does.
+    /// block's groups are not counted). This is the community's reading, counted as it states it; the running game does
+    /// not follow it alone (see [`DrawInfo::draws_under`]), and the parts counted under no draw group include some it
+    /// draws through their display groups ([`MapLayout::zero_draw_census`]). Reads [`MapLayout::draw_infos`], and
+    /// refuses where it does.
     pub fn group_census(&self) -> Result<GroupCensus> {
         let infos = self.draw_infos()?;
         let kinds: std::collections::BTreeMap<usize, PartKind> =
@@ -1225,6 +1252,57 @@ impl MapLayout {
                 census.met = census.met.saturating_add(1);
             } else {
                 census.unmet = census.unmet.saturating_add(1);
+            }
+        }
+        Ok(census)
+    }
+}
+
+/// The parts of a layout that store no draw group, and what their own display groups are ([`MapLayout::zero_draw_census`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ZeroDrawCensus {
+    /// The drawn parts (map pieces, objects, assets) that store a draw block with all draw groups zero.
+    pub parts: usize,
+    /// ... of which set at least one display group of their own.
+    pub with_display: usize,
+    /// ... of which have a display group that one collision's display groups include.
+    pub display_met: usize,
+}
+
+impl MapLayout {
+    /// The parts under no draw group, how many of them carry display groups, and how many of those meet the union of the
+    /// collisions' display groups. In the running game such parts are drawn when their display groups match the
+    /// collision under the player (one view, [`DrawInfo::displays_under`]), so the parts [`GroupCensus::no_groups`] counts
+    /// are not all invisible. Reads [`MapLayout::draw_infos`], and refuses where it does.
+    pub fn zero_draw_census(&self) -> Result<ZeroDrawCensus> {
+        let infos = self.draw_infos()?;
+        let kinds: std::collections::BTreeMap<usize, PartKind> =
+            self.parts.iter().map(|p| (p.index, p.kind)).collect();
+        let kind_of = |part: usize| kinds.get(&part).copied();
+        let mut shown = [0u32; 8];
+        for info in &infos {
+            if let (Some(draw), Some(PartKind::Collision)) = (&info.draw, kind_of(info.part)) {
+                for (all, word) in shown.iter_mut().zip(draw.display_groups) {
+                    *all |= word;
+                }
+            }
+        }
+        let mut census = ZeroDrawCensus::default();
+        for info in &infos {
+            let Some(draw) = &info.draw else { continue };
+            if !matches!(
+                kind_of(info.part),
+                Some(PartKind::MapPiece | PartKind::Object | PartKind::Asset)
+            ) || draw.draw_groups.iter().any(|&w| w != 0)
+            {
+                continue;
+            }
+            census.parts = census.parts.saturating_add(1);
+            if draw.display_groups.iter().any(|&w| w != 0) {
+                census.with_display = census.with_display.saturating_add(1);
+                census.display_met = census
+                    .display_met
+                    .saturating_add(usize::from(draw.displays_under(&shown)));
             }
         }
         Ok(census)
@@ -2564,6 +2642,33 @@ mod region_tests {
         assert!(!none.draws_under(&[u32::MAX; 8]));
     }
 
+    /// A part's own display groups take part: `shown_by` is a draw group among the collision's draw groups or a display
+    /// group among its display groups, each array against its namesake and not across.
+    #[test]
+    fn a_part_is_shown_through_either_array_against_its_namesake() {
+        let info = |display: u32, draw: u32| DrawInfo {
+            display_groups: [display, 0, 0, 0, 0, 0, 0, 0],
+            draw_groups: [draw, 0, 0, 0, 0, 0, 0, 0],
+            collision_mask: [0; 32],
+            conditions: [0; 4],
+            tail: [0; 4],
+        };
+        // the collision under the spawn: group 9 in both arrays
+        let floor = info(1 << 9, 1 << 9);
+        assert!(
+            info(1 << 9, 0).shown_by(&floor),
+            "zero draw groups, matching display group"
+        );
+        assert!(info(0, 1 << 9).shown_by(&floor));
+        assert!(!info(0, 0).shown_by(&floor), "no groups at all");
+        assert!(!info(1 << 8, 1 << 8).shown_by(&floor));
+        // not across: the part's draw group against the collision's display group alone is not enough
+        assert!(!info(0, 1 << 5).shown_by(&info(1 << 5, 0)));
+        assert!(info(0, 1 << 3).draws_under(&[1 << 3, 0, 0, 0, 0, 0, 0, 0]));
+        assert!(info(1 << 3, 0).displays_under(&[1 << 3, 0, 0, 0, 0, 0, 0, 0]));
+        assert!(!info(1 << 3, 0).draws_under(&[u32::MAX; 8]));
+    }
+
     /// A draw block with the given display and draw words (the rest zero).
     fn grouped_block(len: usize, display: [u32; 8], draw: [u32; 8]) -> Vec<u8> {
         let mut b = vec![0u8; len];
@@ -2574,7 +2679,7 @@ mod region_tests {
     }
 
     /// Of the drawn parts, those under no draw group, those under one a collision displays and those under none are counted
-    /// apart; enemies are not drawn parts and a part's own display groups do not count.
+    /// apart; enemies are not drawn parts and a part's own display groups are not counted here.
     #[test]
     fn a_layouts_draw_groups_are_counted_against_its_collisions_display_groups() {
         let word = |w: u32| [w, 0, 0, 0, 0, 0, 0, 0];
@@ -2606,6 +2711,38 @@ mod region_tests {
                 no_groups: 1,
                 met: 1,
                 unmet: 1,
+            }
+        );
+    }
+
+    /// Of the parts under no draw group, those with display groups and those whose display groups a collision displays.
+    #[test]
+    fn parts_under_no_draw_group_are_split_by_their_own_display_groups() {
+        let word = |w: u32| [w, 0, 0, 0, 0, 0, 0, 0];
+        let none = [0u32; 8];
+        let header = 160;
+        let mut layout = layout_of_parts(
+            &Generation::SEKIRO,
+            vec![
+                part_with_blocks(Some(grouped_block(388, word(0b0110), none)), None, header),
+                part_with_blocks(Some(grouped_block(388, word(0b0100), none)), None, header),
+                part_with_blocks(Some(grouped_block(388, word(0b1000), none)), None, header),
+                part_with_blocks(Some(grouped_block(388, none, none)), None, header),
+                part_with_blocks(Some(grouped_block(388, word(0b0100), word(0b0100))), None, header),
+                part_with_blocks(Some(grouped_block(388, word(0b0100), none)), None, header),
+            ],
+        );
+        // part 0 is the collision; the map pieces 1 (met), 2 (display set, not met) and the object 3 (no groups) are under
+        // no draw group; map piece 4 has a draw group; 5 is an enemy
+        layout.parts[0].kind = PartKind::Collision;
+        layout.parts[3].kind = PartKind::Object;
+        layout.parts[5].kind = PartKind::Enemy;
+        assert_eq!(
+            layout.zero_draw_census().unwrap(),
+            ZeroDrawCensus {
+                parts: 3,
+                with_display: 2,
+                display_met: 1,
             }
         );
     }
