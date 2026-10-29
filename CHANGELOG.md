@@ -7,10 +7,11 @@
   the first block only, and the later blocks of the old output continued the first one's matches). The library decodes
   the concatenation as a whole, and the sizes come out like the shipped ones (a 1.99 MB binder: 1,138,147 bytes against
   the shipped 1,167,321, where the old output was 969,044). Why: a loose `o114903.objbnd.dcx` re-encoded the old way made
-  Sekiro exit right after the load-game press (2 of 2 launches) while the stock bytes of the same file load; a
-  1,135,856-byte binder re-encoded the old way loaded. Whether the restart bit is what the game's loader needs is not
-  established; the cause of the exit is open. `tests/writers_census.rs` asserts that every Kraken block it re-encodes
-  restarts.
+  Sekiro exit right after the load-game press (2 of 2 launches) while the stock bytes of the same file load; the same
+  binder re-encoded with every block restarting loaded and the whole route ran (1 launch). A 1,135,856-byte binder
+  re-encoded the old way also loaded (1 launch), so the restart bit is not shown to be necessary for every file; the
+  cause of the exit with the old output is not established. `tests/writers_census.rs` asserts that every Kraken block
+  it re-encodes restarts.
 
 ## 0.10.1 (2026-10-29)
 
