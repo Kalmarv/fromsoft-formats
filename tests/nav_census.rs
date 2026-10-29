@@ -173,7 +173,9 @@ fn sekiros_navmesh_binders_read_with_the_census_totals() -> Result<()> {
         (t.user_edges, t.clustered_faces, t.empty_meshes),
         (0, 279_053, 94)
     );
-    assert_eq!((t.triangles, t.incomplete_faces), (602_450, 0));
+    // havok-formats 0.9.0 keeps the corners straight only seen from above (208 triangles); its census checks every
+    // face's triangles against the polygon's area vector
+    assert_eq!((t.triangles, t.incomplete_faces), (602_658, 0));
     assert_eq!(
         (
             t.graphs,
@@ -203,7 +205,8 @@ fn elden_rings_navmesh_binders_read_with_the_census_totals() -> Result<()> {
         (t.user_edges, t.clustered_faces, t.empty_meshes),
         (2_597_337, 0, 4_027)
     );
-    assert_eq!((t.triangles, t.incomplete_faces), (11_075_816, 2));
+    // 3,826 of them the corners straight only seen from above (havok-formats 0.9.0's census)
+    assert_eq!((t.triangles, t.incomplete_faces), (11_079_642, 2));
     assert_eq!((t.graphs, t.graph_nodes, t.graph_edges), (0, 0, 0));
     assert_eq!((t.trees, t.tree_nodes), (6_021, 12_630_777));
     assert_eq!((t.setup_arrays, t.setups), (188, 673));

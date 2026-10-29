@@ -8,6 +8,9 @@
   group among its display groups: a reading that fits every picture so far, not a finding) and
   `MapLayout::zero_draw_census` (the parts under no draw group, how many carry display groups and how many of those a
   collision's display groups meet: Elden Ring 317,870, 235,081 and 9,198; Sekiro 654, 271 and 230).
+- Tests: `tests/nav_census.rs` expects the triangle totals of havok-formats 0.9.0's triangulator, which keeps the
+  corners straight only seen from above: Sekiro 602,658, Elden Ring 11,079,642 (0.10.0's test still had the totals
+  from before that change).
 
 ## 0.10.0 (2026-10-29)
 
