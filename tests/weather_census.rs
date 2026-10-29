@@ -6,9 +6,10 @@
 //!   archive, which holds 84 such files (the two no row names are 98 and 150).
 //! - `WeatherLotParam`: 164 rows with 272 weighted entries, every one naming a `WeatherParam` row: 19 distinct rows, reaching
 //!   14 distinct file ids.
-//! - `GparamRefSettingsParam`: 70 rows keyed by a map's decimal number, 2 of them with no target (-1); of the other 68, 56
-//!   name a target whose files the archive holds and for these the files [`area::draw_params`] gives the map are the
-//!   target's own stem's (the rule `area` uses agrees with the game's table); 12 name an expansion map's family.
+//! - `GparamRefSettingsParam`: 70 rows keyed by a map's decimal number, 2 of them with no target (-1); the other 68 name a
+//!   target, and for all 68 the files [`area::draw_params`] gives the map (the install's expansion archives included) are
+//!   the target's own stem's: the rule `area` uses agrees with the game's table. (The independent census read the base
+//!   archives only and found the files for 56; the 12 expansion maps' files are in the expansion archives.)
 //!
 //! Needs `installs.elden`, `keys.elden`, `tools.oodle6`; skipped otherwise.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
@@ -98,7 +99,6 @@ fn the_weather_and_reference_params_name_files_the_install_holds() -> Result<()>
         };
         let stems = area::draw_params(&archive, Game::EldenRing, &map);
         if stems.is_empty() {
-            // an expansion map: the base archives hold none of its files nor its family's
             expansion += 1;
             continue;
         }
@@ -108,6 +108,6 @@ fn the_weather_and_reference_params_name_files_the_install_holds() -> Result<()>
         );
         agree += 1;
     }
-    assert_eq!((agree, expansion, none), (56, 12, 2));
+    assert_eq!((agree, expansion, none), (68, 0, 2));
     Ok(())
 }
