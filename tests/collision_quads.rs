@@ -3,13 +3,14 @@
 //!
 //! The source triangles of a mesh are the rows of its `pParam.triangleDataArray`; each row's entry of
 //! `triangleIndexToShapeKey` gives the key the triangle got, so the stock quads are the pairs of rows whose keys differ in
-//! the half bit only. The pairing is run on the rows of each section (the stock tool pairs within a section) with the
-//! row's `primitiveDataIndex` as the data two triangles must share, and its pairs are compared with the stock ones.
+//! the half bit only. The pairing is run on all the rows of the mesh at once (the writers pair before they cut sections),
+//! with the row's `primitiveDataIndex` as the data two triangles must share, and its pairs are compared with the stock ones.
 //!
-//! It is not the stock rule in every detail: it finds 99.4% of Sekiro's stock quads (3,485,775 of 3,507,426) and 99.2% of
-//! Elden Ring's (7,505,319 of 7,568,285), and 99.5% and 99.4% of what it finds are stock quads. Where it picks a stock pair
-//! it picks the stock first half first, every time. The Sekiro object meshes come out lowest (28,801 of 32,485 stock quads),
-//! the misses being triangles on an edge that eight or more triangles share.
+//! It is not the stock rule in every detail: it finds 99.3% of Sekiro's stock quads (3,484,191 of 3,507,426) and 99.1% of
+//! Elden Ring's (7,501,872 of 7,568,285), and 99.5% and 99.3% of what it makes are stock quads. Where it picks a stock pair
+//! it picks the stock first half first, every time. The Sekiro object meshes come out lowest (27,928 of 32,485 stock quads),
+//! the misses being mostly triangles on an edge that three or more triangles share. Pairing each stock section on its own
+//! instead finds a little more (99.4% and 99.2%), but needs the stock sections.
 //!
 //! The counts are those of the census over the same files with the scratch probe's copy of the pairing (probe mode
 //! `quadcrate`), not copied from a run of this test. Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`,
@@ -86,10 +87,8 @@ fn visit(t: &mut Totals, m: &Member<'_>) -> Result<()> {
                 });
             }
         }
-        let mut sections: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
         let mut by_primitive: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
         for (i, row) in source.iter().enumerate() {
-            sections.entry(row.key >> 8).or_default().push(i);
             by_primitive.entry(row.key >> 1).or_default().push(i);
         }
         let mut stock: BTreeSet<(usize, usize)> = BTreeSet::new();
@@ -98,24 +97,21 @@ fn visit(t: &mut Totals, m: &Member<'_>) -> Result<()> {
                 stock.insert((a.min(b), a.max(b)));
             }
         }
+        let offered: Vec<QuadCandidate> = source
+            .iter()
+            .map(|row| QuadCandidate {
+                vertices: row.vertices,
+                data: row.data,
+            })
+            .collect();
         let mut found: BTreeSet<(usize, usize)> = BTreeSet::new();
         let mut first_half_first = 0usize;
-        for rows in sections.values() {
-            let offered: Vec<QuadCandidate> = rows
-                .iter()
-                .map(|&i| QuadCandidate {
-                    vertices: source[i].vertices,
-                    data: source[i].data,
-                })
-                .collect();
-            for [first, second] in pair_quads(&offered) {
-                let (a, b) = (rows[first], rows[second]);
-                let pair = (a.min(b), a.max(b));
-                if stock.contains(&pair) && source[a].key & 1 == 0 {
-                    first_half_first += 1;
-                }
-                found.insert(pair);
+        for [first, second] in pair_quads(&offered) {
+            let pair = (first.min(second), first.max(second));
+            if stock.contains(&pair) && source[first].key & 1 == 0 {
+                first_half_first += 1;
             }
+            found.insert(pair);
         }
         t.meshes += 1;
         t.meshes_exact += usize::from(stock == found);
@@ -145,8 +141,8 @@ fn sekiros_quads_are_what_the_pairing_finds() -> Result<()> {
     let Some(t) = totals(Game::Sekiro)? else {
         return Ok(());
     };
-    assert_eq!((t.meshes, t.meshes_exact), (3_333, 1_710));
-    assert_eq!((t.stock, t.found, t.both), (3_507_426, 3_502_109, 3_485_775));
+    assert_eq!((t.meshes, t.meshes_exact), (3_333, 1_690));
+    assert_eq!((t.stock, t.found, t.both), (3_507_426, 3_502_384, 3_484_191));
     assert_eq!(t.both_first_half_first, t.both);
     Ok(())
 }
@@ -156,8 +152,8 @@ fn elden_rings_quads_are_what_the_pairing_finds() -> Result<()> {
     let Some(t) = totals(Game::EldenRing)? else {
         return Ok(());
     };
-    assert_eq!((t.meshes, t.meshes_exact), (22_778, 18_114));
-    assert_eq!((t.stock, t.found, t.both), (7_568_285, 7_549_658, 7_505_319));
+    assert_eq!((t.meshes, t.meshes_exact), (22_778, 18_022));
+    assert_eq!((t.stock, t.found, t.both), (7_568_285, 7_550_979, 7_501_872));
     assert_eq!(t.both_first_half_first, t.both);
     Ok(())
 }
