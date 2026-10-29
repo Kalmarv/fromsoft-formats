@@ -20,14 +20,15 @@ pub fn oodle(
 pub fn archive(
     game: fromsoft_formats::Game,
 ) -> Result<Option<fromsoft_formats::Archive>, Box<dyn std::error::Error>> {
-    use crate::inputs::{Game as Data, install, keys};
+    use crate::inputs::{Game as Data, install, keys, threads};
     use fromsoft_formats::{Archive, Game, Keys};
     let data = match game {
         Game::Sekiro => Data::Sekiro,
         Game::EldenRing => Data::Elden,
     };
     Ok(match (install(data), keys(data)) {
-        (Some(dir), Some(keys)) => Some(Archive::open_game(
+        (Some(dir), Some(keys)) => Some(Archive::open_game_with(
+            threads(),
             dir,
             game,
             &Keys::from_folder(keys, game, None)?,

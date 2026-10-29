@@ -11,6 +11,9 @@
 - Tests: `tests/nav_census.rs` expects the triangle totals of havok-formats 0.9.0's triangulator, which keeps the
   corners straight only seen from above: Sekiro 602,658, Elden Ring 11,079,642 (0.10.0's test still had the totals
   from before that change).
+- Tests: `tests/writers_census.rs` walks the archives on `[run] threads` threads, largest entries first (Elden Ring's
+  walk on four threads: 43 minutes to 16), with the same counts on any thread count; `tests/common` opens the archives'
+  indexes on the same threads.
 
 ## 0.10.0 (2026-10-29)
 

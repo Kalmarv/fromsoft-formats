@@ -23,16 +23,17 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod inputs;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use fromsoft_formats::dcx::{self, Compression, Decoder, Encoder, Envelope};
 use fromsoft_formats::fmg::Fmg;
 use fromsoft_formats::param::Param;
 use fromsoft_formats::regulation;
 use fromsoft_formats::tpf::Package;
-use fromsoft_formats::{Binder, Game, Keys, NameDictionary};
-use inputs::{Depth, Game as Data, OracleSet, Tool, depth, install, keys, oodle, oracle, seed};
+use fromsoft_formats::{Archive, Binder, Game, Keys, NameDictionary};
+use inputs::{Depth, Game as Data, OracleSet, Tool, depth, install, keys, oodle, oracle, seed, threads};
 mod common;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -72,6 +73,15 @@ fn same_binder(a: &Binder, b: &Binder) -> bool {
 }
 
 impl Census<'_> {
+    /// Another thread's census added to this one.
+    fn merge(&mut self, other: Self) {
+        for (k, v) in other.counts {
+            self.add(&k, v);
+        }
+        self.failures.extend(other.failures);
+        self.notes.extend(other.notes);
+    }
+
     fn bump(&mut self, key: &str) {
         self.add(key, 1);
     }
@@ -375,7 +385,10 @@ fn census<'a>(
     }
 }
 
-fn report(game: &str, census: &Census<'_>) {
+/// Prints the counts, then the notes and failures sorted, so the report is the same on any thread count.
+fn report(game: &str, census: &mut Census<'_>) {
+    census.notes.sort();
+    census.failures.sort();
     println!(
         "{game} writers ({} depth, seed {})",
         if census.smoke { "smoke" } else { "full" },
@@ -392,6 +405,40 @@ fn report(game: &str, census: &Census<'_>) {
     }
 }
 
+/// One archive entry: a split binder's index with its payload, or any other file. A read the archive refuses is a
+/// failure of the census, not of the walk.
+fn entry(
+    c: &mut Census<'_>,
+    archive: &Archive,
+    names: &NameDictionary,
+    payload_of: &BTreeMap<u64, u64>,
+    hash: u64,
+) {
+    let label = names
+        .names
+        .get(&hash)
+        .and_then(|n| n.first())
+        .cloned()
+        .unwrap_or_else(|| format!("#{hash:016x}"));
+    if let Some(&payload) = payload_of.get(&hash) {
+        let label = format!("#{hash:016x}");
+        match (
+            archive.read_hash(hash, c.decoder),
+            archive.read_hash(payload, c.decoder),
+        ) {
+            (Ok(index), Ok(pay)) => c.binder(&label, &index, Some(&pay), hash),
+            (Err(e), _) | (_, Err(e)) => c.fail(&label, format!("archive read: {e}")),
+        }
+        return;
+    }
+    match archive.read_stored(hash) {
+        Ok(stored) => c.content(&label, &stored, hash),
+        Err(e) => c.fail(&label, format!("archive read: {e}")),
+    }
+}
+
+/// Every entry of `game`'s archives through the census, on `[run] threads` threads; the counts are the same on any
+/// count.
 fn walk(game: Game, data: Data) -> Result<Option<BTreeMap<String, usize>>> {
     let Some(archive) = common::archive(game)? else {
         return Ok(None);
@@ -408,7 +455,6 @@ fn walk(game: Game, data: Data) -> Result<Option<BTreeMap<String, usize>>> {
         oodle: Some(&dll),
         max_output: 1 << 31,
     };
-    let mut c = census(&decoder, &dll);
 
     // the BHD5 entries that are the index of a split binder, and the payload entry that belongs to each
     let mut payload_of = BTreeMap::new();
@@ -421,31 +467,45 @@ fn walk(game: Game, data: Data) -> Result<Option<BTreeMap<String, usize>>> {
             }
         }
     }
-    let payloads: std::collections::BTreeSet<u64> = payload_of.values().copied().collect();
+    let payloads: BTreeSet<u64> = payload_of.values().copied().collect();
+    // the largest entries first, so no thread is left with a large one at the end
+    let mut work: Vec<(usize, u64)> = archive
+        .entries
+        .iter()
+        .filter(|(hash, _)| !payloads.contains(hash))
+        .map(|(&hash, e)| {
+            let pair = payload_of.get(&hash).and_then(|p| archive.entries.get(p));
+            (
+                e.entry.padded_size + pair.map_or(0, |p| p.entry.padded_size),
+                hash,
+            )
+        })
+        .collect();
+    work.sort_unstable_by(|a, b| b.cmp(a));
 
-    for &hash in archive.entries.keys() {
-        if payloads.contains(&hash) {
-            continue;
-        }
-        if let Some(&payload) = payload_of.get(&hash) {
-            let label = format!("#{hash:016x}");
-            let (index, pay) = (
-                archive.read_hash(hash, &decoder)?,
-                archive.read_hash(payload, &decoder)?,
+    let next = AtomicUsize::new(0);
+    let mut c = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..threads().get())
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut c = census(&decoder, &dll);
+                    while let Some(&(_, hash)) = work.get(next.fetch_add(1, Ordering::Relaxed)) {
+                        entry(&mut c, &archive, &names, &payload_of, hash);
+                    }
+                    c
+                })
+            })
+            .collect();
+        let mut total = census(&decoder, &dll);
+        for h in handles {
+            total.merge(
+                h.join()
+                    .expect("a census thread panicked: its counts would be lost"),
             );
-            c.binder(&label, &index, Some(&pay), hash);
-            continue;
         }
-        let stored = archive.read_stored(hash)?;
-        let label = names
-            .names
-            .get(&hash)
-            .and_then(|n| n.first())
-            .cloned()
-            .unwrap_or_else(|| format!("#{hash:016x}"));
-        c.content(&label, &stored, hash);
-    }
-    report(game.name(), &c);
+        total
+    });
+    report(game.name(), &mut c);
     assert!(c.failures.is_empty(), "{} writer failures", c.failures.len());
     Ok(Some(c.counts))
 }
@@ -582,7 +642,7 @@ fn regulations() -> Result<()> {
             }
         }
     }
-    report("regulations", &c);
+    report("regulations", &mut c);
     assert!(c.failures.is_empty(), "{} writer failures", c.failures.len());
     expect(
         &c.counts,
