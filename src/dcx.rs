@@ -7,7 +7,9 @@ use crate::{
     invalid,
 };
 use primase_foundations::compress::{
-    Compressor, Decompressor, Error as CompressError, Zlib, Zstd, oodle::Oodle, oodle_framing,
+    Decompressor, Error as CompressError, Zlib, Zstd,
+    oodle::{Codec, Level, Oodle},
+    oodle_framing,
 };
 use std::io::Write;
 /// Where the payload starts in an envelope: after the 76-byte header every variant [`Envelope::parse`] accepts shares.
@@ -280,18 +282,28 @@ pub struct Encoder<'a> {
 /// `decoded` compressed as `format` says and framed ([`frame`]).
 ///
 /// The compressors are not the ones that made the shipped files, so the payload differs from theirs while decoding to
-/// the same bytes (and the header equals theirs): Kraken goes through the game's library at the level the crate's
-/// Oodle binding uses (4, where the shipped files say 6; the sizes come out within about 3 per cent of the shipped ones); zlib
+/// the same bytes (and the header equals theirs): Kraken goes through the game's library at the level the header
+/// states (`format.level`, an Oodle compression level, 6 in every shipped Kraken envelope but those that say 9; one
+/// outside the library's -4 to 9 is refused; the sizes at 6 come out within about 1 per cent of the shipped ones); zlib
 /// is flate2's pure-Rust deflate at `format.level` (the real zlib at level 9 reproduces 48 of the 58 shipped zlib
 /// payloads, this implementation none); zstd is libzstd's streaming encoder at `format.level` with the frame
 /// parameters of the shipped `regulation.bin` (no content size, no checksum, the 64 MiB window of level 21).
 pub fn encode(format: &Format, decoded: &[u8], encoder: &Encoder<'_>) -> Result<Vec<u8>> {
     format.validate()?;
     let payload = match format.compression {
-        Compression::Kraken => encoder
-            .oodle
-            .ok_or_else(|| invalid("DCX", 40, "Oodle required"))?
-            .compress(decoded)?,
+        Compression::Kraken => {
+            let level = Level::new(i32::from(format.level)).ok_or_else(|| {
+                invalid(
+                    "DCX",
+                    48,
+                    format!("Oodle level {} is outside the library's -4 to 9", format.level),
+                )
+            })?;
+            encoder
+                .oodle
+                .ok_or_else(|| invalid("DCX", 40, "Oodle required"))?
+                .compress_at(Codec::KRAKEN, level, decoded)?
+        }
         Compression::Deflate => {
             let mut z = flate2::write::ZlibEncoder::new(
                 Vec::new(),

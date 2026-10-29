@@ -51,7 +51,9 @@
   from their members as stored, TPFs, PARAMs, FMGs (all but 3 of Elden Ring's 3,968, which hold unreferenced zero bytes
   between their strings), and regulations encrypted again. What a compressor decides is not: a Kraken, zlib or zstd
   payload compressed again decodes to the same bytes under the same header but is not the shipped payload (the real zlib
-  at level 9 reproduces 48 of 58 shipped zlib payloads, this crate's pure-Rust deflate none).
+  at level 9 reproduces 48 of 58 shipped zlib payloads, this crate's pure-Rust deflate none). `dcx::encode` writes a
+  Kraken payload at the level the header states (6 or 9; `Oodle::compress_at`), which needs a `primase-foundations`
+  with `oodle::Level`; a level outside -4 to 9 is refused.
 - Breaking: `BinderFile` has `wrap: Option<dcx::Format>` (how a member that held a DCX envelope was framed), `Binder` has
   `layout: binder::Layout` (byte orders, name encoding, the format byte as stored, the hash-table flag and two unknown
   header bytes), `dcx::Envelope` has `format: dcx::Format` (the header's variant fields), `tpf::Package` has
