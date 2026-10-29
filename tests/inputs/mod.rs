@@ -186,6 +186,12 @@ primase_testdata::inputs! {
             about: r#"soulstruct's per-shader tables of the texture coordinate sets (`SHADER_UV_SLOTS`: the stem of each of 176 shaders to a tuple of UV names, `SHADER_GROUP_UV`: 168 stems to the UV each sampler group reads) as `{"source", "slots", "groups"}`; tests/shader_census.rs"#,
             source: r#"third-party: soulstruct 12b6918's `eldenring/models/shaders.py`, the two dictionary literals evaluated by a script that executes none of its code and written as JSON; the tables are the author's inference (HIGH, MEDIUM and LOW comments), used as an oracle and not as a source"#,
         },
+        Query::Oracle(OracleSet::Soulstruct, Game::Elden, "tae-event-classes.json") => {
+            status: Live,
+            gate: false,
+            about: r#"the TAE event types soulstruct lists and the layout of the data of each (`events`: per type id its enum `name`, its `class` and `fields` as `[offset, width, type, name, pad]`, null where it has no class); tests/tae_template_census.rs"#,
+            source: r#"third-party: soulstruct 12b6918's `base/animations/tae/enums.py` and `events.py` (Dark Souls Remastered and III era layouts), parsed without executing them by tools/gen_soulstruct_tae_events.py; names, ids, widths and types only, used as an oracle and not as a source"#,
+        },
         Query::Oracle(OracleSet::Dxc, Game::Elden, "shader-uv-programs.json") => {
             status: Live,
             gate: false,

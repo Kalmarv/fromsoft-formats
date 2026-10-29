@@ -14,6 +14,16 @@
 //! What the templates name is the community's: a field's name and type are an editor's reading, and the installs show
 //! where it fails (a field the template types as a float that stores a negative integer: [`Value::Word`]; a value no
 //! `entry` names; an event stored shorter than the template lists, with the fields it lacks in [`Decoded::missing`]).
+//!
+//! A second source, soulstruct's classes for the event types of the Dark Souls Remastered and III era, lists 113 types, 106
+//! of them in Sekiro's template and 96 in Elden Ring's (none of the others occurs in either game's files). Where both give
+//! an event type fields, no field of one straddles the edge of a field of the other except in Sekiro's event 112 (the
+//! template's word at byte 6 against soulstruct's edge at byte 8, which Elden Ring's template and soulstruct both keep);
+//! they type 5 words of Sekiro's events and 4 of Elden Ring's as a float where the other has an integer, and the stored
+//! words side with the template for the jump table's argument A (floats) and Sekiro's event 130 (integers), and with
+//! soulstruct for event 730 (integers: the words [`Value::Word`] keeps). soulstruct's classes are the older games' layouts,
+//! so for 7 Sekiro and 9 Elden Ring event types some events hold a nonzero byte past the fields it lists, and none past the
+//! template's (`tests/tae_template_census.rs`).
 use crate::{Result, invalid, xml};
 use std::collections::BTreeMap;
 

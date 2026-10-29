@@ -32,7 +32,9 @@
   angle in degrees, `horizontal_angle` (offset 184) as the horizontal one and `near_distance` (offset 188) as the near plane,
   from a running Sekiro.
 - `tae::template`: the community's event templates (DSAnimStudio's XML, supplied by the caller) read and applied:
-  `Templates::parse`, `EventTemplate::decode`.
+  `Templates::parse`, `EventTemplate::decode`. Held to a second source, soulstruct's event classes (106 of Sekiro's and 96 of
+  Elden Ring's templated types are also listed there; the two agree on every field boundary but one, and on whether a
+  4-byte word is a float but for five Sekiro and four Elden Ring words: `tests/tae_template_census.rs`).
 - `tpf::PixelFamily`: the layout a stored format code stands for (`Texture::pixel_family`). Codes 9 and 105 are the same
   four bytes in the opposite channel order.
 - `collision::hit_class_name`: the community's names of the HitMtrlParam classes.
