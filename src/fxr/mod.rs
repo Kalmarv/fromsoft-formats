@@ -397,18 +397,23 @@ impl Node {
 pub struct StaticTransform {
     /// The translation, as stored.
     pub offset: [f32; 3],
-    /// The rotation about each axis in degrees, as stored. The fxr project documents the order as Z, then X, then Y, with
-    /// the translation after all rotations.
+    /// The rotation about each axis in degrees, as stored. The order is Z, then X, then Y, with the translation after all
+    /// rotations. Observed in the running Sekiro 1.06: a spot light under a node stored as (-65, -75, -35) degrees with a
+    /// child offset of (0, 0, -1) shone along the image of +Z under Y(-75) after X(+65): the order Z, X, Y matches and
+    /// none of the other five orders does, the Y rotation is the usual right-handed one and the X rotation is the
+    /// opposite sense (the stored X angle is negated). The Z angle does not change a light's axis when Z is turned first,
+    /// so its sense is not observed. One stored triple was checked, not a range.
     pub rotation_degrees: [f32; 3],
 }
 
 impl StaticTransform {
     /// The affine map the transform makes (the images of the x, y and z axes, then the translation): the three rotations
-    /// one after the other about Z, then X, then Y (each the usual right-handed rotation by the stored degrees), then
-    /// the translation. The order is the fxr project's statement and the handedness its (unstated) convention: neither
-    /// is checked against the game.
+    /// one after the other about Z, then X, then Y, then the translation. Y and Z turn by the stored degrees in the usual
+    /// right-handed sense and X by the negated stored degrees, as the order and senses observed in the game (see
+    /// [`StaticTransform::rotation_degrees`]; the Z sense is the one assumption not observed).
     pub fn matrix(&self) -> crate::affine::Matrix {
         let [x, y, z] = self.rotation_degrees.map(|a| f64::from(a).to_radians());
+        let x = -x;
         let (sx, cx) = x.sin_cos();
         let (sy, cy) = y.sin_cos();
         let (sz, cz) = z.sin_cos();
@@ -1988,7 +1993,7 @@ mod tests {
         assert_eq!(single.config_in_state(5).map(|c| c.id), Some(1));
     }
 
-    /// The static transform turns about Z, then X, then Y, and moves after all of them.
+    /// The static transform turns about Z, then X (the stored angle negated), then Y, and moves after all of them.
     #[test]
     fn a_static_transform_turns_z_then_x_then_y() {
         let near = |a: [f64; 3], b: [f64; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-12);
@@ -1997,11 +2002,12 @@ mod tests {
             rotation_degrees: [90., 0., 90.],
         };
         let m = t.matrix();
-        // +X turns to +Y about Z and then to +Z about X; +Z is not moved by the first and turns to -Y about X
-        assert!(near(crate::affine::affine_vector(&m, [1., 0., 0.]), [0., 0., 1.]));
+        // +X turns to +Y about Z and then to -Z about X (the X sense is the negated stored angle); +Z is not moved by
+        // the first and turns to +Y about X
+        assert!(near(crate::affine::affine_vector(&m, [1., 0., 0.]), [0., 0., -1.]));
         assert!(near(
             crate::affine::affine_vector(&m, [0., 0., 1.]),
-            [0., -1., 0.]
+            [0., 1., 0.]
         ));
         assert!(near(crate::affine::affine_point(&m, [0.; 3]), [1., 2., 3.]));
         // Y alone: +Z turns to +X, +X to -Z
@@ -2015,5 +2021,24 @@ mod tests {
             crate::affine::affine_vector(&y, [1., 0., 0.]),
             [0., 0., -1.]
         ));
+    }
+
+    /// The spot light seen in the running game under a node stored as (-65, -75, -35) with a child at (0, 0, -1): the
+    /// light stood at the child's image and shone along (-0.4082, -0.9063, 0.1094) (the image of +Z).
+    #[test]
+    fn a_static_transform_matches_the_spot_axis_seen_in_the_game() {
+        let m = StaticTransform {
+            offset: [0.; 3],
+            rotation_degrees: [-65., -75., -35.],
+        }
+        .matrix();
+        let axis = crate::affine::affine_vector(&m, [0., 0., 1.]);
+        let child = crate::affine::affine_vector(&m, [0., 0., -1.]);
+        for (got, seen) in axis.iter().zip([-0.4082, -0.9063, 0.1094]) {
+            assert!((got - seen).abs() < 1e-4, "{axis:?}");
+        }
+        for (got, axis) in child.iter().zip(axis) {
+            assert!((got + axis).abs() < 1e-12);
+        }
     }
 }
