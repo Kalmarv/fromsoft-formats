@@ -115,8 +115,6 @@
   these against an independent parser's census (the dummy fields as a separate Python reader of the FLVER header region
   gives them).
 
-## 0.10.0 (2026-10-28)
-
 - Breaking: the variable-length lists of `flver::Vertex` (`uvs`, `layer_bytes`, `tangents`, `tangent_indices`, `colors`)
   are `flver::Channel`s, not `Vec`s: a list keeps its first few values in the vertex (`uvs` two, `tangents`, `colors` and
   `layer_bytes` one, `tangent_indices` four) and moves to the heap beyond that. A `Channel` dereferences to a slice
