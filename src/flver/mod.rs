@@ -247,7 +247,15 @@ pub struct Dummy {
     /// 108,608 dummies of Sekiro's and Elden Ring's models, the other three 255 on all but 3,273 (grey 128, or 0, 0, 208).
     /// (SoulsFormatsNEXT: "not certain about the ordering".)
     pub color: [u8; 4],
-    /// A stored flag whose meaning SoulsFormatsNEXT does not state.
+    /// A stored flag whose meaning SoulsFormatsNEXT does not state. On the data it follows [`Dummy::attach_bone`]: in a
+    /// model of more than one bone it is set exactly when the attach bone is not -1, in 20,108 of Sekiro's 20,136
+    /// dummies of such models and 86,033 of Elden Ring's 86,135, the exceptions being all set with no attach bone (28 dummies
+    /// in 7 Sekiro models, 102 in 30 Elden Ring models; their parent bones are named for dummies, `dmy_poly`, `dummy`,
+    /// `Dmy_...`). It is not the rule in a model of a single bone, where an attach bone is bone 0, the parent bone too: set
+    /// on 34 and clear on 8 of the 42 such dummies of Sekiro, set on 29 and clear on 2,157 of Elden Ring's 2,186. A model
+    /// of one bone with no attach bone has it clear (90 and 19 dummies). So the attach bone is not derived from it nor it
+    /// from the attach bone; keep the stored value. (Counts: the whole of both installs, 14,459 and 22,169 models, 20,268
+    /// and 88,340 dummies.)
     pub flag1: bool,
     /// Whether [`Dummy::upward`] is meaningful.
     pub use_upward_vector: bool,

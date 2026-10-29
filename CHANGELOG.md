@@ -108,6 +108,12 @@
   padded to one; the writer follows them.
 - `tae::Tae::check_templates` and `write_checked`: hold a file to the event templates (`tae::template`), refusing an
   event whose asserted field stores another value with the animation, event and field named (`tae::TemplateCheck`).
+- `flver::Dummy::flag1` documented from a census of every dummy of both installs (20,268 in Sekiro's 14,459 models,
+  88,340 in Elden Ring's 22,169): in a model of more than one bone it is set exactly when the attach bone is not -1
+  except for 28 and 102 dummies that are set with none; in a model of one bone it does not follow the attach bone
+  (Sekiro 34 set and 8 clear of 42 with attach bone 0, Elden Ring 29 and 2,157 of 2,186). `tests/flver_census.rs` counts
+  these against an independent parser's census (the dummy fields as a separate Python reader of the FLVER header region
+  gives them).
 
 ## 0.10.0 (2026-10-28)
 

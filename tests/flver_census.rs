@@ -98,6 +98,46 @@ fn tally(model: &Model, counts: &mut Counts) {
         add("bit 8 set", bone.flags & 8 != 0);
         add("bit 8 set on a mesh's node", bone.flags & 8 != 0 && named_by_mesh);
     }
+    // the dummies' `flag1` against the attach bone, in models of one bone and in the others
+    let single = model.bones.len() == 1;
+    for dummy in &model.dummies {
+        let attached = dummy.attach_bone != -1;
+        add("dummies", true);
+        add("dummies with flag1", dummy.flag1);
+        add("dummies with an attach bone", attached);
+        if single {
+            add("dummies in single-bone models", true);
+            add(
+                "single-bone dummies with an attach bone and flag1",
+                attached && dummy.flag1,
+            );
+            add(
+                "single-bone dummies with an attach bone and no flag1",
+                attached && !dummy.flag1,
+            );
+            add(
+                "single-bone dummies with no attach bone and flag1",
+                !attached && dummy.flag1,
+            );
+            add(
+                "single-bone dummies with no attach bone and no flag1",
+                !attached && !dummy.flag1,
+            );
+        } else {
+            add(
+                "other dummies where flag1 follows the attach bone",
+                attached == dummy.flag1,
+            );
+            add(
+                "other dummies with flag1 and no attach bone",
+                !attached && dummy.flag1,
+            );
+            add(
+                "other dummies with an attach bone and no flag1",
+                attached && !dummy.flag1,
+            );
+        }
+    }
     let mut maximum = 0;
     for mesh in &model.meshes {
         for face in &mesh.faces {
@@ -511,6 +551,17 @@ fn flver_models(
             ("face sets", 110_365),
             ("face set word +6 is 1", 85_996),
             ("face set word +6 maximum", 371),
+            ("dummies", 20_268),
+            ("dummies with flag1", 13_469),
+            ("dummies with an attach bone", 13_449),
+            ("dummies in single-bone models", 132),
+            ("single-bone dummies with an attach bone and flag1", 34),
+            ("single-bone dummies with an attach bone and no flag1", 8),
+            ("single-bone dummies with no attach bone and flag1", 0),
+            ("single-bone dummies with no attach bone and no flag1", 90),
+            ("other dummies where flag1 follows the attach bone", 20_108),
+            ("other dummies with flag1 and no attach bone", 28),
+            ("other dummies with an attach bone and no flag1", 0),
         ],
         Game::EldenRing => &[
             ("bones", 535_503),
@@ -527,6 +578,17 @@ fn flver_models(
             ("face sets", 277_113),
             ("face set word +6 is 1", 149_048),
             ("face set word +6 maximum", 285),
+            ("dummies", 88_340),
+            ("dummies with flag1", 69_004),
+            ("dummies with an attach bone", 71_059),
+            ("dummies in single-bone models", 2_205),
+            ("single-bone dummies with an attach bone and flag1", 29),
+            ("single-bone dummies with an attach bone and no flag1", 2_157),
+            ("single-bone dummies with no attach bone and flag1", 0),
+            ("single-bone dummies with no attach bone and no flag1", 19),
+            ("other dummies where flag1 follows the attach bone", 86_033),
+            ("other dummies with flag1 and no attach bone", 102),
+            ("other dummies with an attach bone and no flag1", 0),
         ],
     };
     for &(key, n) in want {
