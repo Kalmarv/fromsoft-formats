@@ -8,8 +8,10 @@
 //!   14 distinct file ids.
 //! - `GparamRefSettingsParam`: 70 rows keyed by a map's decimal number, 2 of them with no target (-1); the other 68 name a
 //!   target, and for all 68 the files [`area::draw_params`] gives the map (the install's expansion archives included) are
-//!   the target's own stem's: the rule `area` uses agrees with the game's table. (The independent census read the base
-//!   archives only and found the files for 56; the 12 expansion maps' files are in the expansion archives.)
+//!   the target's own stem's: the rule `area` uses agrees with the game's table. The independent census (its own BHD5
+//!   reading of the six decrypted archive headers, entries 40 bytes apart, and its own path hash, the rule restated in
+//!   Python) gives the same (68, 0, 2) over the base archives alone and over all six; the (56, 12) first written here
+//!   came from an incomplete list of probed paths.
 //!
 //! Needs `installs.elden`, `keys.elden`, `tools.oodle6`; skipped otherwise.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]

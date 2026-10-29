@@ -8,7 +8,7 @@
 //! of them name an area that has a file of exactly that number (`m11_00_0020` for sub id 20); Elden Ring's 11 activations
 //! name 0, 1, 2, 3, 4 and 500, and of the 10 that belong to a map 6 name a file that exists (0 in the open-world tiles,
 //! 500 in `m14_00`: `m14_00_0500`); the other 4 name 1 in `m11_10` (whose only file is 0000) and 4, 2 and 3 in three
-//! expansion maps the base archives hold no draw-param file of.
+//! expansion maps, none of which has a draw-param file of that number.
 
 use crate::Game;
 use crate::emedf::{self, Typed, Value};
