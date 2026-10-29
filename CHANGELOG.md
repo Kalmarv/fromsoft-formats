@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.0 (2026-10-29)
 
 - `weather_assets`, Elden Ring's weather asset params, each read strictly to the install's layout (type, layout
   revision and row size; padding zero):

@@ -46,14 +46,14 @@ publish = true
 
 [workspace.dependencies]
 aes = { version = "=0.9.3", default-features = false }
-dxcontainer = { version = "0.3.0", git = "https://github.com/Kalmarv/dx", rev = "6b3595b70afc1cf906f047e74102ce5967c822c3" }
+dxcontainer = { version = "0.4.0", git = "https://github.com/Kalmarv/dx", rev = "c32a3689c6bd26a0ee0777664091f4e04843927e" }
 encoding_rs = { version = "=0.8.42", default-features = false, features = ["alloc"] }
 flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
 half = { version = "=2.7.1", default-features = false }
-havok-formats = { version = "0.8.1", git = "https://github.com/Kalmarv/havok-formats", rev = "252cec530cae8563abe865571ce2899a93458af9" }
+havok-formats = { version = "0.9.0", git = "https://github.com/Kalmarv/havok-formats", rev = "f681dd1375a6d05666cc998c581defe47d326063" }
 num-bigint = { version = "=0.5.1", default-features = false, features = ["std"] }
-primase-foundations = { version = "0.2.1", git = "https://github.com/Kalmarv/primase-foundations", rev = "6201129940a970d87392ab2ee59cd0c9c04ed7e4" }
-primase-testdata = { version = "0.1.0", git = "https://github.com/Kalmarv/primase-testdata", rev = "d0258530ca9ca0ca74e957716ae8683e7facc8a7" }
+primase-foundations = { version = "0.3.0", git = "https://github.com/Kalmarv/primase-foundations", rev = "f9cf4ece1de77fce9d703c63347dd70b728b7c0e" }
+primase-testdata = { version = "0.1.1", git = "https://github.com/Kalmarv/primase-testdata", rev = "b719ce1f1e64c0af0d624a5445cc4871a2cf9977" }
 serde = { version = "1", default-features = false, features = ["std", "derive"] }
 serde_json = { version = "=1.0.154", default-features = false, features = ["std", "preserve_order", "float_roundtrip"] }
 sha2 = { version = "=0.11.1", default-features = false }
