@@ -185,7 +185,7 @@ dependencies = [
 [[package]]
 name = "dxcontainer"
 version = "0.3.0"
-source = "git+https://github.com/Kalmarv/dx?rev=e42b5ff7559e364c1c8a8977ece6460cd8797205#e42b5ff7559e364c1c8a8977ece6460cd8797205"
+source = "git+https://github.com/Kalmarv/dx?rev=6b3595b70afc1cf906f047e74102ce5967c822c3#6b3595b70afc1cf906f047e74102ce5967c822c3"
 dependencies = [
  "primase-foundations",
  "thiserror",
@@ -558,7 +558,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 [[package]]
 name = "primase-foundations"
 version = "0.2.1"
-source = "git+https://github.com/Kalmarv/primase-foundations?rev=e895f966130651bd78c47505b53322cc3f58083a#e895f966130651bd78c47505b53322cc3f58083a"
+source = "git+https://github.com/Kalmarv/primase-foundations?rev=6201129940a970d87392ab2ee59cd0c9c04ed7e4#6201129940a970d87392ab2ee59cd0c9c04ed7e4"
 dependencies = [
  "flate2",
  "half",
@@ -567,6 +567,7 @@ dependencies = [
  "oozextract",
  "ruzstd",
  "thiserror",
+ "zlib-rs",
 ]
 
 [[package]]
@@ -1008,6 +1009,12 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "zlib-rs"
+version = "0.6.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b268e58e7c693d7c271f93ffc4ba3b380412554231c85bf61ca7af91042a4112"
 
 [[package]]
 name = "zmij"
