@@ -3,7 +3,7 @@
 use crate::{
     Result,
     bytes::View,
-    emit::{Out, narrow},
+    put::{Out, narrow},
     invalid,
 };
 use primase_foundations::compress::{

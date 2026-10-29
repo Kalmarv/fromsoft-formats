@@ -26,7 +26,7 @@ use primase_foundations::compress::{Compressor, Zlib};
 
 use crate::binder::{Binder, BinderFile, normalised_format};
 use crate::dcx::{self, Encoder};
-use crate::emit::{Out, add, align_up, mul, narrow};
+use crate::put::{Out, add, align_up, mul, narrow};
 use crate::{Result, invalid};
 
 /// How the members' bytes reach the file.

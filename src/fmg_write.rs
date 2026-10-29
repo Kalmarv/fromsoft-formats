@@ -5,7 +5,7 @@
 //! group has the index of its first string slot, its first and its last id; the strings follow the slot table in id
 //! order, each as UTF-16 and a NUL, with no sharing and no gaps; the file is padded with zeros to a multiple of 4 bytes
 //! and then by [`Fmg::extra_padding`]. The layout of [`crate::fmg`] describes the header.
-use crate::emit::{Out, add, mul, narrow};
+use crate::put::{Out, add, mul, narrow};
 use crate::fmg::Fmg;
 use crate::{Result, invalid};
 

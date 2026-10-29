@@ -14,7 +14,7 @@
 //!      row that has it, and every other name once for its own row
 //!      zero bytes to the end of the file ([`Stored::padding`])
 //! ```
-use crate::emit::{Out, add, mul, narrow};
+use crate::put::{Out, add, mul, narrow};
 use crate::param::{Param, Stored};
 use crate::{Result, invalid};
 

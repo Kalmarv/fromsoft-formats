@@ -1,5 +1,3 @@
-//! Strict readers (and for DCX, BND4, TPF, FMG, PARAM and `regulation.bin` writers) of FromSoftware's data (Sekiro: Shadows Die Twice and Elden Ring): the installed BHD5/BDT archives
-
 //! Strict readers of FromSoftware's data (Sekiro: Shadows Die Twice and Elden Ring): the installed BHD5/BDT archives
 //! ([`Archive`], with keys the caller supplies), DCX envelopes ([`dcx`]), BND4 binders ([`Binder`]) and the formats
 //! they hold: FLVER models, map layouts (MSB), light banks (BTL), hang edges (EDGE), event scripts (EMEVD), text
@@ -7,7 +5,9 @@
 //! events (TAE), texture packages (TPF), collision (Havok, CLM2), effects and their lights (FXR), and the instruction
 //! schema of the event scripts (EMEDF).
 //!
-//! Writers for MTD, MATBIN, EMEVD, TAE, MSB and FLVER write what they read back to the bytes it was read from.
+//! Writers for DCX, BND4, TPF, FMG, PARAM, `regulation.bin`, MTD, MATBIN, EMEVD, TAE, MSB and FLVER write what they
+//! read; each one's documentation says where its output can differ from the stored bytes (a compressed payload
+//! compressed again, for one).
 //!
 //! Every read is checked: data that is shorter than it says, refers outside itself or holds a value the reader does
 //! not know is an [`Error`] naming the format and the offset, rather than a panic or a silently skipped field. What a

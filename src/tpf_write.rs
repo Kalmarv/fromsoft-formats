@@ -10,7 +10,7 @@
 //!      zero padding between the names and the first DDS file (none but in one file)
 //!      the DDS files one after the other, no padding between and none after the last
 //! ```
-use crate::emit::{Out, add, mul, narrow};
+use crate::put::{Out, add, mul, narrow};
 use crate::tpf::{Package, TextureKind};
 use crate::{Result, invalid};
 
