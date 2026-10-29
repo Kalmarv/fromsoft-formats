@@ -3,8 +3,8 @@
 //!
 //! The leaves of a section tree, in file order, carry the index each primitive is stored at. The stock tool numbers the
 //! primitives in the pre-order of the tree and then sorts them by data-run index with its quicksort; a section names one
-//! run, so the result depends on the count alone. Every section tree of two leaves or more follows it: 273,137 in Sekiro
-//! and 720,603 in Elden Ring; 80 and 1,123 trees have a single leaf.
+//! run, so the result depends on the count alone. Every section tree of two leaves or more follows it: 273,148 in Sekiro
+//! and 721,282 in Elden Ring (all the section trees there are, with the 80 and 1,123 that have a single leaf).
 //!
 //! The counts are those of the census over the same files with the scratch probe's copy of the rule (probe mode
 //! `numperm`), not copied from a run of this test. Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`,
@@ -35,7 +35,7 @@ impl Totals {
 
 fn visit(t: &mut Totals, m: &Member<'_>) -> Result<()> {
     for shape in shapes(m.tag)? {
-        if shape.type_name() != "fsnpCustomParamCompressedMeshShape" {
+        if !shape.type_name().contains("CompressedMesh") {
             continue;
         }
         let data = shape.field("data")?.dereference()?;
@@ -86,7 +86,7 @@ fn every_section_tree_of_sekiro_numbers_its_primitives_the_stock_way() -> Result
     let Some(t) = totals(Game::Sekiro)? else {
         return Ok(());
     };
-    assert_eq!((t.followed, t.not_followed, t.single_leaf), (273_137, 0, 80));
+    assert_eq!((t.followed, t.not_followed, t.single_leaf), (273_148, 0, 80));
     Ok(())
 }
 
@@ -95,6 +95,6 @@ fn every_section_tree_of_elden_ring_numbers_its_primitives_the_stock_way() -> Re
     let Some(t) = totals(Game::EldenRing)? else {
         return Ok(());
     };
-    assert_eq!((t.followed, t.not_followed, t.single_leaf), (720_603, 0, 1_123));
+    assert_eq!((t.followed, t.not_followed, t.single_leaf), (721_282, 0, 1_123));
     Ok(())
 }
