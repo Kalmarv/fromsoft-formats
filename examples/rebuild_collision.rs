@@ -282,7 +282,7 @@ fn stand_point(mesh: &havok_formats::CompressedMesh) -> Option<([f32; 3], f32)> 
         .fold(f32::NEG_INFINITY, f32::max);
     mesh.triangles
         .iter()
-        .filter_map(|t| up(t).map(|(area, centre)| (area, centre)))
+        .filter_map(up)
         .filter(|(_, c)| c[1] >= top - 0.3)
         .max_by(|a, b| a.0.total_cmp(&b.0))
         .map(|(area, centre)| (centre, area))
