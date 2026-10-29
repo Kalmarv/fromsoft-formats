@@ -2004,11 +2004,11 @@ mod tests {
         let m = t.matrix();
         // +X turns to +Y about Z and then to -Z about X (the X sense is the negated stored angle); +Z is not moved by
         // the first and turns to +Y about X
-        assert!(near(crate::affine::affine_vector(&m, [1., 0., 0.]), [0., 0., -1.]));
         assert!(near(
-            crate::affine::affine_vector(&m, [0., 0., 1.]),
-            [0., 1., 0.]
+            crate::affine::affine_vector(&m, [1., 0., 0.]),
+            [0., 0., -1.]
         ));
+        assert!(near(crate::affine::affine_vector(&m, [0., 0., 1.]), [0., 1., 0.]));
         assert!(near(crate::affine::affine_point(&m, [0.; 3]), [1., 2., 3.]));
         // Y alone: +Z turns to +X, +X to -Z
         let y = StaticTransform {
