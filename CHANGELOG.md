@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- `param::WeatherAssetParam` (Elden Ring's `WeatherAssetReplaceParam`): per row the sky map (`mapId`, `map_name()`
+  `m60_00_00_99`), the weather (`TransitionSrcWeather`), `isFireAsh` as stored (0 and 1 in the base game's rows, 2 in
+  the later addition's maps' rows), the asset ids of the used `AssetId` slots (`asset_model_name` gives `AEG096_010`)
+  and the set `CreateAssetLimitId`s, with `applies_at(limit)`. Read strictly: version 2, 64-byte rows, padding zero,
+  every slot an asset or -1. `param::WeatherAssetLimits`: `MapDefaultInfoParam`'s `WeatherCreateAssetLimitId` of each
+  map (version 6, 64-byte rows). `game_params::read_weather_assets` and `read_weather_asset_limits` read them from an
+  install. Over the install every row matches the paramdef reading, and every asset a row names is placed by its sky
+  map's layout (the 18 sky maps the base game holds; `tests/weather_assets_census.rs`).
+
 ## 0.10.0 (2026-10-28)
 
 - Breaking: the variable-length lists of `flver::Vertex` (`uvs`, `layer_bytes`, `tangents`, `tangent_indices`, `colors`)

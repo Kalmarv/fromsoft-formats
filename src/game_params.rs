@@ -111,6 +111,36 @@ pub fn read_model_sfx_param(
     crate::param::ModelSfxParam::from_param(&read_param(install, archive, decoder, leaf)?)
 }
 
+/// Elden Ring's weather asset replace param: which assets of each sky map each weather shows. Refused for a game that
+/// has no such param (Sekiro: its param binder holds none).
+pub fn read_weather_assets(
+    install: &Install,
+    archive: &Archive,
+    decoder: &Decoder<'_>,
+) -> Result<crate::param::WeatherAssetParam> {
+    crate::param::WeatherAssetParam::from_param(&read_param(
+        install,
+        archive,
+        decoder,
+        "WeatherAssetReplaceParam.param",
+    )?)
+}
+
+/// Elden Ring's weather asset creation limit of each map (`MapDefaultInfoParam`), which says which of the weather
+/// asset rows with limits apply on it. Refused for a game that has no such param (Sekiro).
+pub fn read_weather_asset_limits(
+    install: &Install,
+    archive: &Archive,
+    decoder: &Decoder<'_>,
+) -> Result<crate::param::WeatherAssetLimits> {
+    crate::param::WeatherAssetLimits::from_param(&read_param(
+        install,
+        archive,
+        decoder,
+        "MapDefaultInfoParam.param",
+    )?)
+}
+
 /// The descriptive NPC fields, with the game's explicit layout and no row choice.
 pub fn read_npc_stats(
     install: &Install,
