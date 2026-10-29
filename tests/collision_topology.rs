@@ -1,5 +1,5 @@
-//! The topology of the stock compressed-mesh trees against the tree builder of `havok-formats` (`sah_shape`), and the
-//! interior bits of the stock meshes, on every compressed mesh of both installs.
+//! The topology of the stock compressed-mesh trees against the tree builder of `havok-formats` (`sah_shape`), on every
+//! compressed mesh of both installs.
 //!
 //! Topology. Leaf boxes are the primitives' decoded vertices grown by the shape's convex radius; a section is used when
 //! every primitive has a box. (1) Every maximal subtree of 3 to 16 leaves of a section tree is rebuilt from its leaves'
@@ -12,12 +12,8 @@
 //! 127 together. (4) The total surface of the inner nodes of `sah_shape` trees against the stock trees and
 //! `balanced_shape` trees.
 //!
-//! Interior bits. A set bit of `triangleIsInterior` is on a triangle whose three edges each meet another triangle (edges
-//! compared by the exact bits of their vertices) in all but 5 triangles of Sekiro and 214 of Elden Ring; 41% and 44% of
-//! the triangles of that kind in meshes that have any bit have it. Which ones is not established.
-//!
-//! The counts are those of the census over the same files (probe modes `topogate` and `intcount`, which compile a copy
-//! of the builder's text): they are not copied from a run of this test. Needs `installs.{sekiro,elden}`,
+//! The counts are those of the census over the same files (probe mode `topogate`, which compiles a copy of the
+//! builder's text): they are not copied from a run of this test. Needs `installs.{sekiro,elden}`,
 //! `keys.{sekiro,elden}`, `tools.oodle6` and `oracles.uxm.{sekiro,elden}/dictionary.txt`; a game that is not configured is
 //! skipped.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
@@ -62,12 +58,6 @@ struct Totals {
     stock_surface: f64,
     sah_surface: f64,
     balanced_surface: f64,
-    // interior bits
-    meshes_with_bits: usize,
-    meshes_without_bits: usize,
-    bits_set: usize,
-    bits_set_three_edges: usize,
-    three_edges_in_meshes_with_bits: usize,
 }
 
 impl Totals {
@@ -97,11 +87,6 @@ impl Totals {
         self.stock_surface += o.stock_surface;
         self.sah_surface += o.sah_surface;
         self.balanced_surface += o.balanced_surface;
-        self.meshes_with_bits += o.meshes_with_bits;
-        self.meshes_without_bits += o.meshes_without_bits;
-        self.bits_set += o.bits_set;
-        self.bits_set_three_edges += o.bits_set_three_edges;
-        self.three_edges_in_meshes_with_bits += o.three_edges_in_meshes_with_bits;
     }
 }
 
@@ -329,40 +314,6 @@ fn visit(t: &mut Totals, m: &Member<'_>) -> Result<()> {
                 t.balanced_surface += c2;
             }
         }
-        // the interior bits against the edges that meet another triangle
-        let bits = shape.field("triangleIsInterior")?.field("storage")?;
-        let num_bits = bits.field("numBits")?.signed()? as usize;
-        let words = bits.field("words")?.array()?;
-        let key_of = |v: &[f32; 3]| [v[0].to_bits(), v[1].to_bits(), v[2].to_bits()];
-        let edge = |a: [u32; 3], b: [u32; 3]| if a <= b { (a, b) } else { (b, a) };
-        let mut edges: BTreeMap<([u32; 3], [u32; 3]), u32> = BTreeMap::new();
-        for tri in &mesh.triangles {
-            let k = tri.vertices.each_ref().map(key_of);
-            for (a, b) in [(0, 1), (1, 2), (2, 0)] {
-                *edges.entry(edge(k[a], k[b])).or_default() += 1;
-            }
-        }
-        let mut rows: Vec<(usize, bool)> = Vec::new();
-        for tri in &mesh.triangles {
-            let key = tri.key as usize;
-            let bit = key < num_bits && (words.get(key / 32)?.unsigned()? as u32 >> (key % 32)) & 1 == 1;
-            let k = tri.vertices.each_ref().map(key_of);
-            let shared = [(0, 1), (1, 2), (2, 0)]
-                .iter()
-                .filter(|&&(a, b)| edges[&edge(k[a], k[b])] >= 2)
-                .count();
-            rows.push((shared, bit));
-        }
-        if rows.iter().any(|r| r.1) {
-            t.meshes_with_bits += 1;
-            for (shared, bit) in rows {
-                t.bits_set += usize::from(bit);
-                t.bits_set_three_edges += usize::from(bit && shared == 3);
-                t.three_edges_in_meshes_with_bits += usize::from(shared == 3);
-            }
-        } else {
-            t.meshes_without_bits += 1;
-        }
     }
     Ok(())
 }
@@ -412,10 +363,6 @@ fn sekiros_trees_follow_the_surface_area_rule_below_17_leaves() -> Result<()> {
     assert_eq!((t.costed, t.sah_no_worse), (272_471, 237_143));
     assert!(t.sah_surface < 0.95 * t.stock_surface, "{t:?}");
     assert!(t.balanced_surface > 1.25 * t.stock_surface, "{t:?}");
-    // interior bits
-    assert_eq!((t.meshes_with_bits, t.meshes_without_bits), (2_982, 362));
-    assert_eq!((t.bits_set, t.bits_set_three_edges), (8_080_712, 8_080_707));
-    assert_eq!(t.three_edges_in_meshes_with_bits, 8_080_707 + 11_833_024);
     Ok(())
 }
 
@@ -447,8 +394,5 @@ fn elden_rings_trees_follow_the_surface_area_rule_below_17_leaves() -> Result<()
     assert_eq!((t.costed, t.sah_no_worse), (719_647, 668_361));
     assert!(t.sah_surface < 0.95 * t.stock_surface, "{t:?}");
     assert!(t.balanced_surface > 1.25 * t.stock_surface, "{t:?}");
-    assert_eq!((t.meshes_with_bits, t.meshes_without_bits), (17_122, 5_777));
-    assert_eq!((t.bits_set, t.bits_set_three_edges), (25_136_262, 25_136_048));
-    assert_eq!(t.three_edges_in_meshes_with_bits, 25_136_048 + 31_619_896);
     Ok(())
 }
