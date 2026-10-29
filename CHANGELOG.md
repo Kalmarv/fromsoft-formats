@@ -2,14 +2,20 @@
 
 ## Unreleased
 
-- `param::WeatherAssetParam` (Elden Ring's `WeatherAssetReplaceParam`): per row the sky map (`mapId`, `map_name()`
-  `m60_00_00_99`), the weather (`TransitionSrcWeather`), `isFireAsh` as stored (0 and 1 in the base game's rows, 2 in
-  the later addition's maps' rows), the asset ids of the used `AssetId` slots (`asset_model_name` gives `AEG096_010`)
-  and the set `CreateAssetLimitId`s, with `applies_at(limit)`. Read strictly: version 2, 64-byte rows, padding zero,
-  every slot an asset or -1. `param::WeatherAssetLimits`: `MapDefaultInfoParam`'s `WeatherCreateAssetLimitId` of each
-  map (version 6, 64-byte rows). `game_params::read_weather_assets` and `read_weather_asset_limits` read them from an
-  install. Over the install every row matches the paramdef reading, and every asset a row names is placed by its sky
-  map's layout (the 18 sky maps the base game holds; `tests/weather_assets_census.rs`).
+- `weather_assets`, Elden Ring's weather asset params, each read strictly to the install's layout (type, layout
+  revision and row size; padding zero):
+  - `WeatherAssetParam` (`WeatherAssetReplaceParam`). Per row: the sky map (`mapId`, `map_name()` `m60_00_00_99`), the
+    weather (`TransitionSrcWeather`), `isFireAsh` as stored (0 and 1 in the base game's rows, 2 in the later addition's
+    maps' rows), the asset ids of the used `AssetId` slots and the set `CreateAssetLimitId`s, with `applies_at(limit)`.
+    Version 2, 64-byte rows, every asset slot an asset or -1.
+  - `WeatherAssetCreateParam` (`WeatherAssetCreateParam`). Per row: the asset created, its slot, the condition as
+    stored, the transition weathers, the elapsed-time weather and seconds, delay, probability, life and fade times,
+    the in-game hours, the creation points and limits it sets. Version 1, 64-byte rows.
+  - `WeatherAssetLimits` (`MapDefaultInfoParam`'s `WeatherCreateAssetLimitId` of each map). Version 6, 64-byte rows.
+  - `asset_model_name(id)`: `AEG096_010` for 96010.
+- `game_params::read_weather_assets`, `read_weather_asset_creates` and `read_weather_asset_limits` read them from an
+  install. `tests/weather_assets_census.rs` covers every row of the install: every field matches the paramdef reading,
+  and every asset a replace row names is placed by its sky map's layout (the 18 sky maps the base game holds).
 
 ## 0.10.0 (2026-10-28)
 

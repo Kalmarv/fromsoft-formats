@@ -117,12 +117,27 @@ pub fn read_weather_assets(
     install: &Install,
     archive: &Archive,
     decoder: &Decoder<'_>,
-) -> Result<crate::param::WeatherAssetParam> {
-    crate::param::WeatherAssetParam::from_param(&read_param(
+) -> Result<crate::weather_assets::WeatherAssetParam> {
+    crate::weather_assets::WeatherAssetParam::from_param(&read_param(
         install,
         archive,
         decoder,
         "WeatherAssetReplaceParam.param",
+    )?)
+}
+
+/// Elden Ring's weather asset create param: the assets a weather change or the time spent in a weather creates.
+/// Refused for a game that has no such param (Sekiro).
+pub fn read_weather_asset_creates(
+    install: &Install,
+    archive: &Archive,
+    decoder: &Decoder<'_>,
+) -> Result<crate::weather_assets::WeatherAssetCreateParam> {
+    crate::weather_assets::WeatherAssetCreateParam::from_param(&read_param(
+        install,
+        archive,
+        decoder,
+        "WeatherAssetCreateParam.param",
     )?)
 }
 
@@ -132,8 +147,8 @@ pub fn read_weather_asset_limits(
     install: &Install,
     archive: &Archive,
     decoder: &Decoder<'_>,
-) -> Result<crate::param::WeatherAssetLimits> {
-    crate::param::WeatherAssetLimits::from_param(&read_param(
+) -> Result<crate::weather_assets::WeatherAssetLimits> {
+    crate::weather_assets::WeatherAssetLimits::from_param(&read_param(
         install,
         archive,
         decoder,

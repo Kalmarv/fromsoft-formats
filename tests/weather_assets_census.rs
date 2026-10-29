@@ -1,7 +1,7 @@
-//! Elden Ring's weather asset replace param (`WeatherAssetParam`) and the maps' weather asset creation limits
-//! (`WeatherAssetLimits`), over the install: every row read, compared field by field with the paramdef reading of the
-//! same params, and every asset a row names found among the models of its sky map's layout, for each sky map the
-//! archives hold.
+//! Elden Ring's weather asset replace param (`WeatherAssetParam`), its weather asset create param
+//! (`WeatherAssetCreateParam`) and the maps' weather asset creation limits (`WeatherAssetLimits`), over the install:
+//! every row read, compared field by field with the paramdef reading of the same params, and every asset a replace row
+//! names found among the models of its sky map's layout, for each sky map the archives hold.
 //!
 //! The totals asserted are those of an independent census (a Python walk of the params typed by the Smithbox paramdefs
 //! and of the decoded layouts, reading no output of this crate): 1,007 rows naming 27 sky maps, of which the archives
@@ -9,16 +9,23 @@
 //! rows with a creation limit; 1,599 asset slots in use; no two rows of one map, weather, fire-ash state and limits;
 //! every named asset placed by its sky map's layout. `MapDefaultInfoParam`: 875 rows, by creation limit -1: 114, 0: 69,
 //! 1: 125, 2: 71, 3: 72, 4: 198, 21: 8, 31: 10, 41: 19, 42: 8, 50: 145, 60: 26, 65: 1, 70: 8, 75: 1.
+//! `WeatherAssetCreateParam` (the same independent census):
+//! version 1, 64-byte rows, 8 rows, every padding byte zero; `CreateConditionType` 0 in 6 rows and 1 in 2; the assets
+//! AEG050_448, AEG050_449, AEG096_200 and AEG096_201, two rows each; `CreateAssetLimitId0` 2, 4 and 70 in 2, 2 and 4
+//! rows and the other limit slots -1; `CreatePoint0` set in every row and the other points -1.
 //!
 //! Needs `installs.elden`, `keys.elden`, `tools.oodle6` and `oracles.smithbox.elden/defs`; skipped when not configured.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod inputs;
 
 use fromsoft_formats::dcx::Decoder;
-use fromsoft_formats::game_params::{param_binder, read_weather_asset_limits, read_weather_assets};
+use fromsoft_formats::game_params::{
+    param_binder, read_weather_asset_creates, read_weather_asset_limits, read_weather_assets,
+};
 use fromsoft_formats::msb::MapLayout;
-use fromsoft_formats::param::{Param, asset_model_name};
+use fromsoft_formats::param::Param;
 use fromsoft_formats::paramdef::ParamDefs;
+use fromsoft_formats::weather_assets::asset_model_name;
 use fromsoft_formats::{Game, Install, Keys};
 use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use std::collections::{BTreeMap, BTreeSet};
@@ -125,6 +132,76 @@ fn weather_assets_and_limits_of_the_install() -> Result<()> {
             row.id
         );
     }
+    let creates = read_weather_asset_creates(&install, &archive, &decoder)?;
+    let stored = Param::read(&binder.member("WeatherAssetCreateParam.param").unwrap().bytes)?;
+    let typed = defs.bind(&stored, binder.regulation_number())?;
+    assert_eq!(typed.rows().count(), creates.rows.len());
+    let float = |t: &fromsoft_formats::paramdef::TypedRow<'_>, name: &str| {
+        t.get(name).and_then(|v| v.as_f64()).unwrap()
+    };
+    for (row, t) in creates.rows.iter().zip(typed.rows()) {
+        assert_eq!(t.id, row.id);
+        let ints = [
+            ("AssetId", i64::from(row.asset)),
+            ("SlotNo", i64::from(row.slot)),
+            ("CreateConditionType", i64::from(row.condition)),
+            ("TransitionSrcWeather", i64::from(row.transition.0)),
+            ("TransitionDstWeather", i64::from(row.transition.1)),
+            ("ElapsedTimeCheckweather", i64::from(row.elapsed_weather)),
+            ("CreateProbability", i64::from(row.probability)),
+        ];
+        for (name, value) in ints {
+            assert_eq!(int(&t, name), value, "row {} {name}", row.id);
+        }
+        let floats = [
+            ("ElapsedTime", row.elapsed_time),
+            ("CreateDelayTime", row.delay),
+            ("LifeTime", row.life_time),
+            ("FadeTime", row.fade_time),
+            ("EnableCreateTimeMin", row.hours.0),
+            ("EnableCreateTimeMax", row.hours.1),
+        ];
+        for (name, value) in floats {
+            assert_eq!(float(&t, name), f64::from(value), "row {} {name}", row.id);
+        }
+        let points: Vec<i64> = (0..4)
+            .map(|k| int(&t, &format!("CreatePoint{k}")))
+            .filter(|&p| p != -1)
+            .collect();
+        assert_eq!(
+            points,
+            row.points.iter().map(|&p| i64::from(p)).collect::<Vec<_>>(),
+            "row {}",
+            row.id
+        );
+        let set: Vec<i64> = (0..4)
+            .map(|k| int(&t, &format!("CreateAssetLimitId{k}")))
+            .filter(|&l| l != -1)
+            .collect();
+        assert_eq!(
+            set,
+            row.limits.iter().map(|&l| i64::from(l)).collect::<Vec<_>>(),
+            "row {}",
+            row.id
+        );
+    }
+    let mut created = BTreeMap::<String, usize>::new();
+    let mut conditions = BTreeMap::<u8, usize>::new();
+    let mut first_limit = BTreeMap::<i8, usize>::new();
+    for r in &creates.rows {
+        *created.entry(asset_model_name(r.asset as i32)).or_default() += 1;
+        *conditions.entry(r.condition).or_default() += 1;
+        assert_eq!((r.points.len(), r.limits.len()), (1, 1), "row {}", r.id);
+        *first_limit.entry(r.limits[0]).or_default() += 1;
+    }
+    assert_eq!(creates.rows.len(), 8);
+    assert_eq!(conditions, BTreeMap::from([(0, 6), (1, 2)]));
+    assert_eq!(
+        created,
+        BTreeMap::from(["AEG050_448", "AEG050_449", "AEG096_200", "AEG096_201"].map(|a| (a.to_owned(), 2)))
+    );
+    assert_eq!(first_limit, BTreeMap::from([(2, 2), (4, 2), (70, 4)]));
+
     let stored = Param::read(&binder.member("MapDefaultInfoParam.param").unwrap().bytes)?;
     let typed = defs.bind(&stored, binder.regulation_number())?;
     assert_eq!(typed.rows().count(), limits.maps.len());
