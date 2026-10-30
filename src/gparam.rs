@@ -91,7 +91,9 @@ pub struct Unread {
 /// The reference-value lookup and bank activation are separate from this stored list.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ParamExtra {
+    /// Index into the file's group table, retained without resolving or deduplicating it.
     pub group_index: u32,
+    /// Signed value IDs in their stored order, including duplicates.
     pub ids: Vec<i32>,
     /// The version-5-and-later word at +12, retained as bits; its meaning is not established.
     pub unknown_0c: Option<u32>,
