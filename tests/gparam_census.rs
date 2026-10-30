@@ -256,3 +256,39 @@ fn every_draw_param_file_states_its_time_axis() -> Result<()> {
     }
     Ok(())
 }
+
+/// Expected lists and words were read independently from the installed files' extra tables;
+/// these are source records, not an assumed weather-composition mask.
+#[test]
+fn installed_extra_records_retain_group_indices_ids_and_unknown_words() -> Result<()> {
+    let Some((archive, dll, _dictionary)) = open(Game::Sekiro, Data::Sekiro)? else {
+        return Ok(());
+    };
+    let decoder = Decoder {
+        oodle: Some(&dll),
+        max_output: 1 << 30,
+    };
+    for (stem, bloom_word) in [("m11_01_0000", 0), ("m11_01_0020", 1)] {
+        let file = Gparam::read(&archive.read(&format!("/param/drawparam/{stem}.gparam.dcx"), &decoder)?)?;
+        assert_eq!(file.extras.len(), 23, "{stem}");
+        for (index, extra) in file.extras.iter().enumerate() {
+            assert_eq!(extra.group_index as usize, index, "{stem}");
+            let ids: &[i32] = match index {
+                0 => &[0, 100, 110, 120],
+                4 | 5 | 6 | 10 | 22 => &[0],
+                _ => &[],
+            };
+            assert_eq!(extra.ids, ids, "{stem} group {index}");
+            let word = match index {
+                0 | 4 | 6 | 22 => 1,
+                5 => bloom_word,
+                _ => 0,
+            };
+            assert_eq!(extra.unknown_0c, Some(word), "{stem} group {index}");
+        }
+        assert_eq!(file.groups[4].key, "Tone Map[Yebis]");
+        assert_eq!(file.unread.extras, 0);
+        println!("{stem}: 23 extra records checked against the installed table oracle");
+    }
+    Ok(())
+}

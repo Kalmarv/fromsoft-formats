@@ -20,9 +20,9 @@
 //! - a value is stored by its type (`Values`); a vector of two or three floats takes 16 bytes; the IDs are an `i32` each,
 //!   with a time of day as `f32` after it from version 5.
 //!
-//! What this reads is everything but the three blocks it does not interpret, which [`Gparam::unread`] counts: the comment
-//! tables, the opaque `data30` block and the extras (SoulsFormats: `UnkParamExtra`, which tie value IDs of groups
-//! together).
+//! Extra records (SoulsFormats: `UnkParamExtra`) retain a group index and its list of value IDs. Elden Ring's native
+//! parameter loader consults this list when it chooses stored values versus reference values; membership is not a
+//! complete layer-selection rule. Comment tables and the opaque `data30` block remain uninterpreted.
 use crate::{
     Result,
     bytes::{Budget, View},
@@ -41,6 +41,8 @@ pub struct Gparam {
     pub version: u32,
     /// The groups, in file order.
     pub groups: Vec<Group>,
+    /// Group-indexed value-ID lists, in file order, including duplicate group indices and IDs.
+    pub extras: Vec<ParamExtra>,
     /// The time axis the values' times of day are on (version 5 and later; `None` before).
     pub time: Option<TimeAxis>,
     /// What the file stores that is not read.
@@ -78,10 +80,21 @@ impl TimeAxis {
 /// The parts of the file [`Gparam::read`] does not interpret.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Unread {
-    /// The opaque extras: records that tie value IDs of a group together (their meaning is not established).
+    /// Extra records not decoded (zero for the supported versions).
     pub extras: usize,
     /// The bytes of the opaque block before them.
     pub data_bytes: usize,
+}
+
+/// A stored extra record, 12 bytes before version 5 and 16 bytes from version 5.
+/// Elden Ring's loader matches `group_index` against the file's group index, then checks value-ID membership.
+/// The reference-value lookup and bank activation are separate from this stored list.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ParamExtra {
+    pub group_index: u32,
+    pub ids: Vec<i32>,
+    /// The version-5-and-later word at +12, retained as bits; its meaning is not established.
+    pub unknown_0c: Option<u32>,
 }
 
 /// A group of fields (a lighting set, fog, a tone map): its key (the editor identity, `LightSet ParamEditor`) and name.
@@ -260,6 +273,12 @@ impl Gparam {
         self.groups.iter().find(|g| g.key == key)
     }
 
+    /// The first extra record for a group index, as Elden Ring's native lookup searches the table.
+    /// `None` differs from a present record with no IDs; no composition policy is inferred from either.
+    pub fn extra(&self, group_index: u32) -> Option<&ParamExtra> {
+        self.extras.iter().find(|extra| extra.group_index == group_index)
+    }
+
     /// Read a file (already decompressed). A version other than 3, 5 and 6, or the narrow magic, is refused by name;
     /// every count and offset is checked against the file before it is followed.
     pub fn read(data: &[u8]) -> Result<Self> {
@@ -295,8 +314,9 @@ impl Gparam {
         let values_at = int(40)?;
         let ids_at = int(44)?;
         let data_at = int(48)?;
-        let extras = int(52)?;
+        let extra_count = int(52)?;
         let extras_at = int(56)?;
+        let extra_ids_at = int(60)?;
         let wide_ids = version >= 5;
         let header = if wide_ids { 84 } else { 80 };
         v.slice(0, header)?;
@@ -345,13 +365,51 @@ impl Gparam {
             }
             groups.push(Group { key, name, fields });
         }
+        let stride = if wide_ids { 16 } else { 12 };
+        let extra_table = v.slice(
+            extras_at,
+            extra_count
+                .checked_mul(stride)
+                .ok_or_else(|| invalid(FORMAT, 52, "extra count overflow"))?,
+        )?;
+        budget.charge(extras_at, extra_table.len())?;
+        let mut extras = Vec::with_capacity(extra_count);
+        for i in 0..extra_count {
+            let at = v.element(extras_at, i, stride)?;
+            let group_index = v.u32(at)?;
+            let count = int(v.at(at, 4)?)?;
+            let ids = extra_ids_at
+                .checked_add(int(v.at(at, 8)?)?)
+                .ok_or_else(|| invalid(FORMAT, at, "extra ID offset overflow"))?;
+            let table = v.slice(
+                ids,
+                count
+                    .checked_mul(4)
+                    .ok_or_else(|| invalid(FORMAT, at, "extra ID count overflow"))?,
+            )?;
+            budget.charge(ids, table.len())?;
+            let ids = (0..count)
+                .map(|j| v.i32(v.element(ids, j, 4)?))
+                .collect::<Result<Vec<_>>>()?;
+            let unknown_0c = if wide_ids {
+                Some(v.u32(v.at(at, 12)?)?)
+            } else {
+                None
+            };
+            extras.push(ParamExtra {
+                group_index,
+                ids,
+                unknown_0c,
+            });
+        }
         let unread = Unread {
-            extras,
+            extras: 0,
             data_bytes: extras_at.saturating_sub(data_at),
         };
         Ok(Gparam {
             version,
             groups,
+            extras,
             time,
             unread,
         })
@@ -758,11 +816,32 @@ mod tests {
             misc.field("Label").unwrap().values,
             Values::Text(vec!["a".into(), "bc".into()])
         );
-        // the blocks it does not interpret are counted
+        assert_eq!(
+            g.extras,
+            [
+                ParamExtra {
+                    group_index: 0,
+                    ids: vec![1],
+                    unknown_0c: Some(0)
+                },
+                ParamExtra {
+                    group_index: 0,
+                    ids: vec![2],
+                    unknown_0c: Some(0)
+                },
+            ]
+        );
+        assert_eq!(
+            g.extra(0).unwrap().ids,
+            [1],
+            "the first matching record is retained"
+        );
+        assert!(g.extra(1).is_none());
+        // the block it does not interpret is counted; the extras are now decoded
         assert_eq!(
             g.unread,
             Unread {
-                extras: 2,
+                extras: 0,
                 data_bytes: 8
             }
         );
@@ -774,6 +853,14 @@ mod tests {
         // version 3 stores no times of day and a shorter header; version 6 a field's count as a short
         let three = Gparam::read(&sample(3)).unwrap();
         assert_eq!(three.version, 3);
+        assert_eq!(
+            three.extras[0],
+            ParamExtra {
+                group_index: 0,
+                ids: vec![1],
+                unknown_0c: None
+            }
+        );
         let sharp = three
             .group("LightSet ParamEditor")
             .unwrap()
@@ -784,6 +871,14 @@ mod tests {
         assert_eq!(sharp.values, Values::F32(vec![1.0, 2.0, 3.0]));
         let six = Gparam::read(&sample(6)).unwrap();
         assert_eq!(six.version, 6);
+        assert_eq!(
+            six.extras[1],
+            ParamExtra {
+                group_index: 0,
+                ids: vec![2],
+                unknown_0c: Some(0)
+            }
+        );
         let sharp = six
             .group("LightSet ParamEditor")
             .unwrap()
@@ -871,5 +966,38 @@ mod tests {
         // a group count that its table cannot hold
         huge[16..20].copy_from_slice(&u32::MAX.to_le_bytes());
         assert!(Gparam::read(&huge).is_err());
+    }
+
+    #[test]
+    fn extras_keep_signed_ids_and_unknown_bits_and_bound_every_range() {
+        for version in [3, 5, 6] {
+            let mut whole = sample(version);
+            let extra_at = u32::from_le_bytes(whole[56..60].try_into().unwrap()) as usize;
+            let ids_at = u32::from_le_bytes(whole[60..64].try_into().unwrap()) as usize;
+            whole[ids_at..ids_at + 4].copy_from_slice(&(-7i32).to_le_bytes());
+            if version >= 5 {
+                whole[extra_at + 12..extra_at + 16].copy_from_slice(&0xffff_ffffu32.to_le_bytes());
+            }
+            let file = Gparam::read(&whole).unwrap();
+            assert_eq!(file.extras[0].ids, [-7]);
+            assert_eq!(file.extras[0].unknown_0c, (version >= 5).then_some(u32::MAX));
+            for cut in [extra_at, ids_at, ids_at + 7] {
+                assert!(
+                    Gparam::read(&whole[..cut]).is_err(),
+                    "version {version}, cut {cut}"
+                );
+            }
+            for at in [52, 56, 60, extra_at + 4, extra_at + 8] {
+                let mut bad = whole.clone();
+                bad[at..at + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+                assert!(
+                    Gparam::read(&bad).is_err(),
+                    "version {version}, bad offset/count at {at}"
+                );
+            }
+            let mut empty = whole.clone();
+            empty[extra_at + 4..extra_at + 8].copy_from_slice(&0u32.to_le_bytes());
+            assert!(Gparam::read(&empty).unwrap().extra(0).unwrap().ids.is_empty());
+        }
     }
 }
