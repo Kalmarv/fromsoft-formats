@@ -66,6 +66,10 @@ primase_testdata::inputs! {
             about: "tables of soulstruct, converted to JSON by a script (the tables are Python literals in its sources)",
             source: "third-party: soulstruct 12b6918 (GPL-3.0-or-later per its pyproject.toml), read as data and never copied into a repository",
         },
+        Saves = "saves" {
+            about: "copies of the user's own character saves, taken from the game's save folder (never the live file), and independent readings of them",
+            source: "the user's own saves: a file copied from the save folder as stored",
+        },
         Dxc = "dxc" {
             about: "Microsoft DXC's disassembly of the games' DXIL shader programs, reduced to a census by a script",
             source: "independent: DXC 10.0.26100.0's `dxc -dumpbin` over the programs of the user's install, read by tools/gen_shader_uv_programs.py",
@@ -239,6 +243,18 @@ primase_testdata::inputs! {
             gate: true,
             about: r#"the community's English names of Sekiro's HitMtrlParam rows (as for Elden Ring; Paramdex's names): 50 of the 51 rows are named; tests/hit_class_names.rs"#,
             source: r#"third-party: Smithbox fdde3225's `Smithbox.Data/Assets/PARAM/SDT/Param Row Names/English/HitMtrlParam.json` (MIT repository), read in place"#,
+        },
+        Query::Oracle(OracleSet::Saves, Game::Elden, "ER0000.sl2") => {
+            status: Live,
+            gate: false,
+            about: r#"one Elden Ring PC save (`ER0000.sl2`, the BND4 of ten character slots and the profile) with one character, as stored; tests/save_census.rs"#,
+            source: r#"the user's own save: copied from the game's save folder as stored, read only"#,
+        },
+        Query::Oracle(OracleSet::Saves, Game::Elden, "ER0000.walk.json") => {
+            status: Live,
+            gate: false,
+            about: r#"an independent reading of `ER0000.sl2`: per slot whose version word is not 0, its index, version, the seven `ChrAsm` words, the 22 equipped item ids, the 22 handles and the item id each handle's record holds; tests/save_census.rs"#,
+            source: r#"independent: a Python standard-library walk written from ER-Save-Editor 014107f's slot order (`src/save/common/save_slot.rs`), sharing no code with this crate and choosing differently where it can (a hand-read BND4 table, occupancy by the version word, item record sizes by the handle's type); not part of this repository"#,
         },
     }
     debug {}

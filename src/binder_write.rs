@@ -52,7 +52,7 @@ fn stored_member<'a>(
     index: usize,
     mode: Mode<'_>,
 ) -> Result<Stored<'a>> {
-    if file.flags & !3 != 0 {
+    if file.flags & !crate::binder::KNOWN_FILE_FLAGS != 0 {
         return Err(invalid(
             format,
             0,

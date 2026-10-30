@@ -23,6 +23,7 @@ aes.workspace = true
 flate2.workspace = true
 num-bigint.workspace = true
 sha2.workspace = true
+md-5.workspace = true
 zstd.workspace = true
 
 [dev-dependencies]
@@ -51,6 +52,7 @@ encoding_rs = { version = "=0.8.42", default-features = false, features = ["allo
 flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
 half = { version = "=2.7.1", default-features = false }
 havok-formats = { version = "0.9.0", git = "https://github.com/Kalmarv/havok-formats", rev = "f681dd1375a6d05666cc998c581defe47d326063" }
+md-5 = { version = "=0.11.0", default-features = false }
 num-bigint = { version = "=0.5.1", default-features = false, features = ["std"] }
 primase-foundations = { version = "0.3.0", git = "https://github.com/Kalmarv/primase-foundations", rev = "f9cf4ece1de77fce9d703c63347dd70b728b7c0e" }
 primase-testdata = { version = "0.1.6", git = "https://github.com/Kalmarv/primase-testdata", rev = "40acdd6a2775412cc812f67e5b3edfdc9b76c54c" }

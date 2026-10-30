@@ -9,6 +9,10 @@ use primase_foundations::compress::{DEFLATE_MAX_RATIO, Decompressor, Zlib};
 /// How many times over the file's bytes a binder's records may decode to (compressed files hold fewer bytes than they
 /// make; the real binders of the games decode to a small multiple of their size).
 const DECODED_TIMES: usize = 64;
+/// The member flag bits a binder may set, in the reader's bit order: bit 0 (the member is stored compressed), bit 1 and
+/// bit 3. Bits 1 and 3 are kept and written back as stored; what they mean to the game is not known. The Elden Ring PC
+/// save `tests/save_census.rs` reads sets both on every member.
+pub const KNOWN_FILE_FLAGS: u8 = 0b1011;
 /// One member of a binder.
 #[derive(Debug, Clone)]
 pub struct BinderFile {
@@ -16,7 +20,7 @@ pub struct BinderFile {
     pub id: Option<i32>,
     /// The member's name, where the binder stores names (UTF-16 or ASCII; stored text, not normalised).
     pub name: Option<String>,
-    /// The member's two flag bits as stored (bit 0: stored compressed).
+    /// The member's flag bits as stored, in the reader's bit order ([`KNOWN_FILE_FLAGS`]; bit 0: stored compressed).
     pub flags: u8,
     /// The member's bytes, decompressed; a nested DCX envelope is decoded too. Empty when read by
     /// [`Binder::split_names`]; the bytes as stored (nothing decoded) when read by [`Binder::read_stored`] or
@@ -315,7 +319,7 @@ impl Binder {
             let p = v.element(64, i, record)?;
             let f = v.u8(p)?;
             let flags = if bitbe { f } else { f.reverse_bits() };
-            if flags & !3 != 0 {
+            if flags & !KNOWN_FILE_FLAGS != 0 {
                 return Err(invalid("BND4", p, "unknown file flags"));
             }
             v.expect(v.at(p, 1)?, &[0, 0, 0, 255, 255, 255, 255])?;

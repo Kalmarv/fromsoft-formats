@@ -123,6 +123,7 @@ pub mod param;
 mod param_write;
 pub mod paramdef;
 pub mod regulation;
+pub mod save;
 
 mod put;
 mod sekiro;
