@@ -25,7 +25,9 @@ use std::path::Path;
 
 use fromsoft_formats::dcx::Decoder;
 use fromsoft_formats::game_params::{param_binder, regulation_binder};
-use fromsoft_formats::param::{GrassParam, NpcParam, NpcStats, Param};
+use fromsoft_formats::param::{
+    AssetGeometryParam, DrawDistScaleParam, GrassParam, NpcParam, NpcStats, Param, PartsDrawParam,
+};
 use fromsoft_formats::paramdef::{ParamDefs, TypedParam, Value};
 use fromsoft_formats::{Binder, Game, Install, Keys};
 use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
@@ -142,11 +144,22 @@ fn bind_all(label: &str, binder: &Binder, defs: &ParamDefs, digests: &mut String
     tally
 }
 
-/// The typed values of `NPC_PARAM_ST`, the grass params and the outfit-free stats equal what the hand-written readers
-/// read from the same rows.
-fn cross_check(game: Game, binder: &Binder, defs: &ParamDefs) -> (usize, usize) {
+/// The rows [`cross_check`] compared, by reader.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Checked {
+    npc: usize,
+    grass: usize,
+    parts_draw: usize,
+    asset_geometry: usize,
+    draw_dist_scale: usize,
+}
+
+/// The typed values of `NPC_PARAM_ST`, the grass params, the outfit-free stats and the texture-switch params
+/// (`PartsDrawParam`, `AssetEnvironmentGeometryParam`, `LoadBalancerDrawDistScaleParam`) equal what the hand-written
+/// readers read from the same rows.
+fn cross_check(game: Game, binder: &Binder, defs: &ParamDefs) -> Checked {
     let regulation = binder.regulation_number();
-    let (mut npc_rows, mut grass_rows) = (0, 0);
+    let mut checked = Checked::default();
     for file in &binder.files {
         let Ok(param) = Param::read(&file.bytes) else {
             continue;
@@ -169,7 +182,7 @@ fn cross_check(game: Game, binder: &Binder, defs: &ParamDefs) -> (usize, usize) 
                         let typed_value = row.get(name).unwrap().as_f64().unwrap();
                         assert_eq!(typed_value, value, "row {} {name}", row.id);
                     }
-                    npc_rows += 1;
+                    checked.npc += 1;
                 }
             }
             "GRASS_TYPE_PARAM_ST" => {
@@ -202,13 +215,52 @@ fn cross_check(game: Game, binder: &Binder, defs: &ParamDefs) -> (usize, usize) 
                     if game == Game::EldenRing {
                         assert_eq!(text("model1Name"), hand.model1);
                     }
-                    grass_rows += 1;
+                    checked.grass += 1;
+                }
+            }
+            "PARTS_DRAW_PARAM_ST" if game == Game::EldenRing => {
+                let typed = defs.bind(&param, regulation).unwrap();
+                let hand = PartsDrawParam::from_param(&param).unwrap();
+                for (row, hand) in typed.rows().zip(&hand.rows) {
+                    assert_eq!(row.id, hand.id);
+                    let float = |n: &str| row.get(n).unwrap().as_f64().unwrap();
+                    assert_eq!(float("tex_lv01_BorderDist"), f64::from(hand.tex_lv01_border));
+                    assert_eq!(float("tex_lv01_PlayDist"), f64::from(hand.tex_lv01_play));
+                    assert_eq!(
+                        row.get("lodType").unwrap().as_i64(),
+                        Some(i64::from(hand.lod_type))
+                    );
+                    checked.parts_draw += 1;
+                }
+            }
+            "ASSET_GEOMETORY_PARAM_ST" if game == Game::EldenRing => {
+                let typed = defs.bind(&param, regulation).unwrap();
+                let hand = AssetGeometryParam::from_param(&param).unwrap();
+                for (row, hand) in typed.rows().zip(&hand.rows) {
+                    assert_eq!(row.id, hand.id);
+                    assert_eq!(
+                        row.get("refDrawParamId").unwrap().as_i64(),
+                        Some(i64::from(hand.draw_param))
+                    );
+                    checked.asset_geometry += 1;
+                }
+            }
+            "LOAD_BALANCER_DRAW_DIST_SCALE_PARAM_ST" if game == Game::EldenRing => {
+                let typed = defs.bind(&param, regulation).unwrap();
+                let hand = DrawDistScaleParam::from_param(&param).unwrap();
+                for (row, hand) in typed.rows().zip(&hand.rows) {
+                    assert_eq!(row.id, hand.id);
+                    for (k, &level) in hand.levels.iter().enumerate() {
+                        let typed_value = row.get(&format!("Lv{k:02}")).unwrap().as_f64().unwrap();
+                        assert_eq!(typed_value, f64::from(level), "row {} Lv{k:02}", row.id);
+                    }
+                    checked.draw_dist_scale += 1;
                 }
             }
             _ => {}
         }
     }
-    (npc_rows, grass_rows)
+    checked
 }
 
 fn write_digests(name: &str, text: &str) {
@@ -229,10 +281,34 @@ fn configured(game: Game) -> Option<(Install, inputs::OodleLibrary)> {
 
 #[test]
 fn every_param_of_the_installs_binds() -> Result<()> {
-    // (game, defs folder's game, members, read by Param::read, rows, params whose def revision differs, empty)
-    for (game, set, members, unread, rows, differs, npc, grass) in [
-        (Game::EldenRing, Data::Elden, 194, 0, 179_358, 10, 7_045, 632),
-        (Game::Sekiro, Data::Sekiro, 138, 3, 36_083, 0, 0, 166),
+    // (game, defs folder's game, members, read by Param::read, rows, params whose def revision differs, rows the
+    // hand-written readers read; the texture-switch readers are Elden Ring's)
+    let checked = |npc, grass, parts_draw, asset_geometry, draw_dist_scale| Checked {
+        npc,
+        grass,
+        parts_draw,
+        asset_geometry,
+        draw_dist_scale,
+    };
+    for (game, set, members, unread, rows, differs, expected) in [
+        (
+            Game::EldenRing,
+            Data::Elden,
+            194,
+            0,
+            179_358,
+            10,
+            checked(7_045, 632, 385, 24_106, 154),
+        ),
+        (
+            Game::Sekiro,
+            Data::Sekiro,
+            138,
+            3,
+            36_083,
+            0,
+            checked(1_279, 166, 0, 0, 0),
+        ),
     ] {
         let (Some((install, dll)), Some(dir)) = (configured(game), oracle(OracleSet::Smithbox, set, "defs"))
         else {
@@ -259,11 +335,7 @@ fn every_param_of_the_installs_binds() -> Result<()> {
             Game::EldenRing => assert_eq!(binder.regulation_number(), Some(11_730_034)),
             Game::Sekiro => assert_eq!(binder.regulation_number(), None),
         }
-        let (npc_rows, grass_rows) = cross_check(game, &binder, &defs);
-        if npc > 0 {
-            assert_eq!(npc_rows, npc);
-        }
-        assert_eq!(grass_rows, grass, "grass rows");
+        assert_eq!(cross_check(game, &binder, &defs), expected);
         write_digests(
             &format!("{}-install.tsv", game.name().replace(' ', "-")),
             &digests,

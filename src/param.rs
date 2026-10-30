@@ -1,5 +1,7 @@
 //! PARAM files (`NpcParam.param` and the other params of a game's param binder): the table of rows as stored, and the
-//! typed reading of the NPC param's display masks.
+//! typed reading of the NPC param's display masks and of a few other params' fields (grass types, model effects,
+//! and Elden Ring's texture-level switch: `PartsDrawParam`, the asset geometry param's draw-param reference and the
+//! load balancer's draw-distance scales).
 //!
 //! [`Param::read`] is strict about the layout Sekiro's and Elden Ring's params share (little-endian, 64-bit offsets,
 //! the param type named by an offset, UTF-16 row names): the header, the row table, the rows' data, the param type
@@ -732,6 +734,197 @@ impl ModelSfxParam {
     }
 }
 
+/// Elden Ring's `PartsDrawParam`: the distances a placed model changes its LODs, texture level and drawing at.
+pub const PARTS_DRAW_PARAM_TYPE: &str = "PARTS_DRAW_PARAM_ST";
+/// Its layout revision and row size: Paramdex's `ER/Defs/PartsDrawParam.xml` as Smithbox ships it (DataVersion 5).
+const PARTS_DRAW_VERSION: u16 = 5;
+const PARTS_DRAW_ROW: usize = 144;
+/// Where the row keeps `tex_lv01_BorderDist`, `tex_lv01_PlayDist` (f32) and `lodType` (u8). The game's own getter of
+/// the texture switch (eldenring.exe 1.17.3, the one that tests the border against zero) reads the border at 0x28.
+const TEX_LV01_BORDER: usize = 40;
+const TEX_LV01_PLAY: usize = 44;
+const LOD_TYPE: usize = 80;
+
+/// The fields of a `PartsDrawParam` row this reader reads: the texture level switch and the LOD type.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+pub struct PartsDraw {
+    /// The row's ID.
+    pub id: i32,
+    /// `tex_lv01_BorderDist`: the distance in metres the textures change from their own form to their lv01 form at;
+    /// 0 is no switch.
+    pub tex_lv01_border: f32,
+    /// `tex_lv01_PlayDist`: the margin either side of the border (metres).
+    pub tex_lv01_play: f32,
+    /// `lodType`: which row of the load balancer's draw-distance scales applies ([`DrawDistScaleParam`], row
+    /// `100 + lodType`).
+    pub lod_type: u8,
+}
+
+/// The rows of `PartsDrawParam`, as far as [`PartsDraw`] reads them.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct PartsDrawParam {
+    /// Every row, in file order.
+    pub rows: Vec<PartsDraw>,
+}
+
+impl PartsDrawParam {
+    /// The rows of `param`, which must be `PARTS_DRAW_PARAM_ST` of version 5 with 144-byte rows (the one layout whose
+    /// offsets are known; any other is refused).
+    pub fn from_param(param: &Param) -> Result<PartsDrawParam> {
+        layout(param, PARTS_DRAW_PARAM_TYPE, PARTS_DRAW_VERSION, PARTS_DRAW_ROW)?;
+        let rows = param
+            .rows
+            .iter()
+            .map(|r| {
+                Ok(PartsDraw {
+                    id: r.id,
+                    tex_lv01_border: f32::from_le_bytes(field(r, TEX_LV01_BORDER)?),
+                    tex_lv01_play: f32::from_le_bytes(field(r, TEX_LV01_PLAY)?),
+                    lod_type: u8::from_le_bytes(field(r, LOD_TYPE)?),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(PartsDrawParam { rows })
+    }
+
+    /// The row with `id`.
+    pub fn row(&self, id: i32) -> Option<&PartsDraw> {
+        self.rows.iter().find(|r| r.id == id)
+    }
+}
+
+/// Elden Ring's `AssetEnvironmentGeometryParam`: per asset model `AEGnnn_mmm`, the row `nnn * 1000 + mmm`.
+pub const ASSET_GEOMETRY_PARAM_TYPE: &str = "ASSET_GEOMETORY_PARAM_ST";
+/// Its layout revision and row size as the install's regulation (1.17.3) stores them: revision 6, 320-byte rows, which
+/// Paramdex's `ER/Defs/AssetGeometryParam.xml` (as Smithbox ships it, stating revision 4) lays out.
+const ASSET_GEOMETRY_VERSION: u16 = 6;
+const ASSET_GEOMETRY_ROW: usize = 320;
+/// Where the row keeps `refDrawParamId` (s32).
+const REF_DRAW_PARAM: usize = 8;
+
+/// The field of an `AssetEnvironmentGeometryParam` row this reader reads: the asset's `PartsDrawParam` row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct AssetGeometry {
+    /// The row's ID: `nnn * 1000 + mmm` for the asset model `AEGnnn_mmm`.
+    pub id: i32,
+    /// `refDrawParamId`: the asset's `PartsDrawParam` row; negative where it names none.
+    pub draw_param: i32,
+}
+
+/// The rows of `AssetEnvironmentGeometryParam`, as far as [`AssetGeometry`] reads them.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct AssetGeometryParam {
+    /// Every row, in file order.
+    pub rows: Vec<AssetGeometry>,
+}
+
+impl AssetGeometryParam {
+    /// The rows of `param`, which must be `ASSET_GEOMETORY_PARAM_ST` of version 6 with 320-byte rows (the one layout
+    /// whose offsets are known; any other is refused).
+    pub fn from_param(param: &Param) -> Result<AssetGeometryParam> {
+        layout(
+            param,
+            ASSET_GEOMETRY_PARAM_TYPE,
+            ASSET_GEOMETRY_VERSION,
+            ASSET_GEOMETRY_ROW,
+        )?;
+        let rows = param
+            .rows
+            .iter()
+            .map(|r| {
+                Ok(AssetGeometry {
+                    id: r.id,
+                    draw_param: i32::from_le_bytes(field(r, REF_DRAW_PARAM)?),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(AssetGeometryParam { rows })
+    }
+
+    /// The row of the asset model `AEGnnn_mmm` (`nnn * 1000 + mmm`).
+    pub fn row(&self, id: i32) -> Option<&AssetGeometry> {
+        self.rows.iter().find(|r| r.id == id)
+    }
+}
+
+/// Elden Ring's `LoadBalancerDrawDistScaleParam`: per row, a scale of the draw distances for each load-balancer level.
+pub const DRAW_DIST_SCALE_PARAM_TYPE: &str = "LOAD_BALANCER_DRAW_DIST_SCALE_PARAM_ST";
+/// Its layout revision and row size: Paramdex's `ER/Defs/LoadBalancerDrawDistScaleParam.xml` (`Lv00` .. `Lv20`, then
+/// 44 reserved bytes).
+const DRAW_DIST_SCALE_VERSION: u16 = 0;
+const DRAW_DIST_SCALE_ROW: usize = 128;
+/// The load-balancer levels a row holds a scale for.
+pub const DRAW_DIST_SCALE_LEVELS: usize = 21;
+
+/// One row of `LoadBalancerDrawDistScaleParam`.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+pub struct DrawDistScale {
+    /// The row's ID.
+    pub id: i32,
+    /// `Lv00` .. `Lv20`: the scale at each load-balancer level.
+    pub levels: [f32; DRAW_DIST_SCALE_LEVELS],
+}
+
+/// The rows of `LoadBalancerDrawDistScaleParam`.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct DrawDistScaleParam {
+    /// Every row, in file order.
+    pub rows: Vec<DrawDistScale>,
+}
+
+impl DrawDistScaleParam {
+    /// The rows of `param`, which must be `LOAD_BALANCER_DRAW_DIST_SCALE_PARAM_ST` of version 0 with 128-byte rows
+    /// (the one layout whose offsets are known; any other is refused).
+    pub fn from_param(param: &Param) -> Result<DrawDistScaleParam> {
+        layout(
+            param,
+            DRAW_DIST_SCALE_PARAM_TYPE,
+            DRAW_DIST_SCALE_VERSION,
+            DRAW_DIST_SCALE_ROW,
+        )?;
+        let rows = param
+            .rows
+            .iter()
+            .map(|r| {
+                let mut levels = [0.0; DRAW_DIST_SCALE_LEVELS];
+                for (level, at) in levels.iter_mut().zip((0..).step_by(4)) {
+                    *level = f32::from_le_bytes(field(r, at)?);
+                }
+                Ok(DrawDistScale { id: r.id, levels })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(DrawDistScaleParam { rows })
+    }
+
+    /// The row with `id`.
+    pub fn row(&self, id: i32) -> Option<&DrawDistScale> {
+        self.rows.iter().find(|r| r.id == id)
+    }
+}
+
+/// Refuse `param` unless it is `param_type` of layout revision `version` with rows of `size` bytes.
+fn layout(param: &Param, param_type: &str, version: u16, size: usize) -> Result<()> {
+    if param.param_type == param_type && param.data_version == version && param.row_size == size {
+        return Ok(());
+    }
+    Err(invalid(
+        FORMAT,
+        0,
+        format!(
+            "{} version {} with rows of {} bytes, the reader is of {param_type} version {version} with rows of {size}",
+            param.param_type, param.data_version, param.row_size
+        ),
+    ))
+}
+
+/// The `N` bytes of `row` at `at`.
+fn field<const N: usize>(row: &Row, at: usize) -> Result<[u8; N]> {
+    at.checked_add(N)
+        .and_then(|end| row.data.get(at..end))
+        .and_then(|b| <[u8; N]>::try_from(b).ok())
+        .ok_or_else(|| invalid(FORMAT, at, format!("field beyond row {}", row.id)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1058,6 +1251,86 @@ mod tests {
                 ModelSfxParam::from_param(&Param::read(&other).unwrap()).is_err(),
                 "{name} {size}"
             );
+        }
+    }
+
+    /// The texture-switch params read their fields at the offsets of their one layout; another revision, size or type
+    /// is refused, naming what was found.
+    #[test]
+    fn the_texture_switch_params_read_their_fields_and_refuse_other_layouts() {
+        let mut parts = vec![0u8; PARTS_DRAW_ROW];
+        parts[TEX_LV01_BORDER..][..4].copy_from_slice(&80f32.to_le_bytes());
+        parts[TEX_LV01_PLAY..][..4].copy_from_slice(&5f32.to_le_bytes());
+        parts[LOD_TYPE] = 1;
+        let bytes = fixture(
+            PARTS_DRAW_PARAM_TYPE,
+            PARTS_DRAW_VERSION,
+            PARTS_DRAW_ROW,
+            &[(81000, parts)],
+        );
+        let read = PartsDrawParam::from_param(&Param::read(&bytes).unwrap()).unwrap();
+        assert_eq!(
+            read.row(81000),
+            Some(&PartsDraw {
+                id: 81000,
+                tex_lv01_border: 80.0,
+                tex_lv01_play: 5.0,
+                lod_type: 1
+            })
+        );
+        assert_eq!(read.row(1), None);
+
+        let mut asset = vec![0u8; ASSET_GEOMETRY_ROW];
+        asset[REF_DRAW_PARAM..][..4].copy_from_slice(&81000i32.to_le_bytes());
+        let bytes = fixture(
+            ASSET_GEOMETRY_PARAM_TYPE,
+            ASSET_GEOMETRY_VERSION,
+            ASSET_GEOMETRY_ROW,
+            &[(810000, asset)],
+        );
+        let read = AssetGeometryParam::from_param(&Param::read(&bytes).unwrap()).unwrap();
+        assert_eq!(read.row(810000).map(|r| r.draw_param), Some(81000));
+
+        let mut scale = vec![0u8; DRAW_DIST_SCALE_ROW];
+        for k in 0..DRAW_DIST_SCALE_LEVELS {
+            scale[4 * k..][..4].copy_from_slice(&(k as f32).to_le_bytes());
+        }
+        let bytes = fixture(
+            DRAW_DIST_SCALE_PARAM_TYPE,
+            DRAW_DIST_SCALE_VERSION,
+            DRAW_DIST_SCALE_ROW,
+            &[(101, scale)],
+        );
+        let read = DrawDistScaleParam::from_param(&Param::read(&bytes).unwrap()).unwrap();
+        assert_eq!(read.row(101).map(|r| r.levels[20]), Some(20.0));
+
+        let e = PartsDrawParam::from_param(
+            &Param::read(&fixture(
+                PARTS_DRAW_PARAM_TYPE,
+                4,
+                PARTS_DRAW_ROW,
+                &[(1, vec![0; PARTS_DRAW_ROW])],
+            ))
+            .unwrap(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("version 4 with rows of 144 bytes"), "{e}");
+        for (name, version, size) in [
+            (
+                ASSET_GEOMETRY_PARAM_TYPE,
+                ASSET_GEOMETRY_VERSION,
+                ASSET_GEOMETRY_ROW + 8,
+            ),
+            (
+                PARTS_DRAW_PARAM_TYPE,
+                DRAW_DIST_SCALE_VERSION,
+                DRAW_DIST_SCALE_ROW,
+            ),
+        ] {
+            let other = Param::read(&fixture(name, version, size, &[(1, vec![0; size])])).unwrap();
+            assert!(AssetGeometryParam::from_param(&other).is_err(), "{name} {size}");
+            assert!(DrawDistScaleParam::from_param(&other).is_err(), "{name} {size}");
         }
     }
 }
