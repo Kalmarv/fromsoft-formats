@@ -173,7 +173,11 @@ impl Census<'_> {
                 }
                 Ok(f) => self.fail(
                     label,
-                    format!("{} of {} blocks it wrote restart", f.restart_bits(), f.block_count()),
+                    format!(
+                        "{} of {} blocks it wrote restart",
+                        f.restart_bits(),
+                        f.block_count()
+                    ),
                 ),
                 Err(e) => self.fail(label, format!("the payload it wrote does not walk: {e}")),
             }

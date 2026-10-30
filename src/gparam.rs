@@ -824,7 +824,10 @@ mod tests {
         assert_eq!(time.sampling(), (0.0, 12.0));
         // with it set, the stored period is not used
         clear[13] = 1;
-        assert_eq!(Gparam::read(&clear).unwrap().time.unwrap().sampling(), (6.5, 24.0));
+        assert_eq!(
+            Gparam::read(&clear).unwrap().time.unwrap().sampling(),
+            (6.5, 24.0)
+        );
     }
 
     #[test]

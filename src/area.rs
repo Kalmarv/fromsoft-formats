@@ -134,7 +134,9 @@ pub fn draw_param_path(stem: &str) -> String {
 }
 
 /// The draw-param files the archive holds for `area`'s map, by stem, in ID order: every `<map>_<0000..9999>` of the first
-/// of its [`draw_param_maps`] that has any. A map none of whose stems has a file has none.
+/// of the stems its map's files can share that has any (its own `mAA_BB`, then, in Elden Ring, the stem a family or the
+/// open world shares: `m60_00`, `m61_00`, `mAA_00`, the catacombs' `m30_00`). A map none of whose stems has a file has
+/// none.
 pub fn draw_params(archive: &Archive, game: Game, area: &str) -> Vec<String> {
     draw_params_where(game, area, |path| archive.contains(path))
 }

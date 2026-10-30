@@ -220,7 +220,10 @@ fn every_draw_param_file_states_its_time_axis() -> Result<()> {
             .values()
             .flatten()
             .map(String::as_str)
-            .filter(|p| p.strip_prefix("/param/drawparam/").is_some_and(|f| f.ends_with(".gparam.dcx") && !f.contains('/')))
+            .filter(|p| {
+                p.strip_prefix("/param/drawparam/")
+                    .is_some_and(|f| f.ends_with(".gparam.dcx") && !f.contains('/'))
+            })
             .filter(|p| archive.contains(p))
             .collect();
         type Axis = (u32, Option<(u8, String, String)>);
