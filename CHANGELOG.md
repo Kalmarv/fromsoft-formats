@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.11.0 (2026-10-29)
 
 - `gparam`: `Gparam::time`, the header's time axis (`TimeAxis`, version 5 and later): the offset flag (byte 13), the
   offset (the float at 64) and the period (the float at 80), which the reader used to skip. `TimeAxis::sampling` gives
