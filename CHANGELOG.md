@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.12.0 (2026-10-30)
 
 - `param`: Elden Ring's texture-switch params, typed. `PartsDrawParam` (`PartsDraw`: `tex_lv01_BorderDist`,
   `tex_lv01_PlayDist` and `lodType` at 40, 44 and 80; revision 5, 144-byte rows), `AssetGeometryParam`
