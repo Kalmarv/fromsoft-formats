@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- `param`: Elden Ring's texture-switch params, typed. `PartsDrawParam` (`PartsDraw`: `tex_lv01_BorderDist`,
+  `tex_lv01_PlayDist` and `lodType` at 40, 44 and 80; revision 5, 144-byte rows), `AssetGeometryParam`
+  (`AssetGeometry::draw_param`, `refDrawParamId` at 8; revision 6, 320-byte rows as the 1.17.3 regulation stores them,
+  which Paramdex's definition, stating revision 4, lays out) and `DrawDistScaleParam` (`LoadBalancerDrawDistScaleParam`,
+  `Lv00` .. `Lv20`; revision 0, 128-byte rows). Any other type, revision or row size is refused. eldenring.exe 1.17.3's
+  getter of the texture switch reads the border at 0x28. `tests/paramdef_census.rs` checks every row against the
+  Smithbox-typed values: 385 `PartsDrawParam`, 24,106 asset geometry and 154 draw-distance scale rows of regulation
+  11730034 are equal.
+
 ## 0.11.0 (2026-10-29)
 
 - `gparam`: `Gparam::time`, the header's time axis (`TimeAxis`, version 5 and later): the offset flag (byte 13), the
