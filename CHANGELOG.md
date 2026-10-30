@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.12.2 (2026-10-30)
+
+- `save`: Elden Ring PC character saves (`ER0000.sl2`). `Save` reads which of the ten slots hold a character (the profile's flags) and, for each, its `Hold` (the arm style and the active slot of each hand, arrows and bolts: the seven `ChrAsm` words) and `Equipped` (the item in each of the 22 equipment slots). Every slot member's MD5 must match its bytes, and every equipped handle must be an item record of the slot holding the item id its slot word holds, so a wrong record size or block offset is refused. `tests/save_census.rs` agrees with an independent walk of one save on the occupied slots, their versions, the seven `ChrAsm` words and all 22 equipment slots.
+- `binder`: `KNOWN_FILE_FLAGS`, the member flag bits a binder may set: bit 0 (stored compressed), bits 1 and 3 (kept and written back as stored; their meaning is not known). Bit 3 was refused before; Elden Ring's PC save sets it on every member.
+
 ## 0.12.1 (2026-10-30)
 
 - `msb`: wind SFX regions (type 6). `MapLayout::wind_sfx_region` reads a region's type data as `WindSfxRegion { effect_id, wind_area, unknown_float }`, with each layout's offsets (Elden Ring: effect +0, area index +4, float +8; Sekiro: effect +0, index +20, float +24); other lengths and stored words are refused by name, and a region of another type gives `None`. Its census test agrees with an independent reading of every layout of both installs: Elden Ring 72 regions in 11 maps, Sekiro 106 in 9.
