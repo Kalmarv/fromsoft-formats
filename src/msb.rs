@@ -1930,7 +1930,7 @@ impl MapLayout {
         if !stored {
             return Err(r.err(0, format!("{length} bytes of type data")));
         }
-        let index_at = if sekiro { 20 } else { 4 };
+        let (index_at, float_at) = if sekiro { (20, 24) } else { (4, 8) };
         if sekiro {
             r.expect(4, &[0xff; 16])?;
             r.expect(28, &[0; 4])?;
@@ -1946,7 +1946,7 @@ impl MapLayout {
         Ok(Some(WindSfxRegion {
             effect_id: r.u32(0)? as i32,
             wind_area,
-            unknown_float: f32::from_bits(r.u32(index_at + 4)?),
+            unknown_float: f32::from_bits(r.u32(float_at)?),
         }))
     }
 
