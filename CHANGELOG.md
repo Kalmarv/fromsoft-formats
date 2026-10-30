@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.12.1 (2026-10-30)
+
+- `msb`: wind SFX regions (type 6). `MapLayout::wind_sfx_region` reads a region's type data as `WindSfxRegion { effect_id, wind_area, unknown_float }`, with each layout's offsets (Elden Ring: effect +0, area index +4, float +8; Sekiro: effect +0, index +20, float +24); other lengths and stored words are refused by name, and a region of another type gives `None`. Its census test agrees with an independent reading of every layout of both installs: Elden Ring 72 regions in 11 maps, Sekiro 106 in 9.
+
 ## 0.12.0 (2026-10-30)
 
 - `param`: Elden Ring's texture-switch params, typed. `PartsDrawParam` (`PartsDraw`: `tex_lv01_BorderDist`,
