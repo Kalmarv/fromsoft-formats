@@ -1489,6 +1489,20 @@ pub struct SfxRegion {
     pub second_byte: u8,
 }
 
+/// What a wind SFX region (type 6) names ([`MapLayout::wind_sfx_region`]): the effect it spawns, whose wind force
+/// actions blow while it plays, and the region that bounds it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindSfxRegion {
+    /// The FXR effect id (`f<id, nine digits>.fxr`).
+    pub effect_id: i32,
+    /// The index of a region in the layout's regions (SoulsFormats' `WindAreaIndex`), `None` for -1: in Elden Ring the
+    /// region itself (66 of the install's 72 wind SFX regions), a wind area (type 18; 5) or none (1); in Sekiro a wind
+    /// area (86 of 106), none (15) or the region itself (5).
+    pub wind_area: Option<usize>,
+    /// The float after the index: -1.0 in every wind SFX region of both installs. Not understood.
+    pub unknown_float: f32,
+}
+
 /// One event of the layout as stored (`EVENT_PARAM_ST`): what every type
 /// shares, and the type's own data as bytes. SoulsFormats' `MSBS`/`MSBE` `Event` read the header alike: a number at
 /// +8, the type at +12, the index in the type at +16, the base data offset at +24 (a part index, a region index, the
@@ -1889,6 +1903,50 @@ impl MapLayout {
             effect_id: r.u32(0)? as i32,
             start_disabled,
             second_byte,
+        }))
+    }
+
+    /// What a wind SFX region (type 6) names: its effect, the region bounding it and a float. Elden Ring stores the effect
+    /// id at type data +0, the region index at +4 and the float at +8 (12 bytes, or 16 with a zero word after); Sekiro
+    /// the effect id at +0, four -1 words, the index at +20, the float at +24 and a zero word (32 bytes). `None` for a
+    /// region of another type. Other lengths, other words where -1 or 0 is stored, or an index below -1 are refused.
+    pub fn wind_sfx_region(&self, region: &Region) -> Result<Option<WindSfxRegion>> {
+        if region.type_code != 6 {
+            return Ok(None);
+        }
+        let r = View {
+            data: &region.type_data,
+            format: "MSB wind SFX region",
+            be: false,
+            base: 0,
+        };
+        let sekiro = self.generation.name == Generation::SEKIRO.name;
+        let length = region.type_data.len();
+        let stored = if sekiro {
+            length == 32
+        } else {
+            length == 12 || length == 16
+        };
+        if !stored {
+            return Err(r.err(0, format!("{length} bytes of type data")));
+        }
+        let index_at = if sekiro { 20 } else { 4 };
+        if sekiro {
+            r.expect(4, &[0xff; 16])?;
+            r.expect(28, &[0; 4])?;
+        } else if length == 16 {
+            r.expect(12, &[0; 4])?;
+        }
+        let index = r.u32(index_at)? as i32;
+        let wind_area = match index {
+            -1 => None,
+            i if i >= 0 => Some(i as usize),
+            _ => return Err(r.err(index_at, "wind area index")),
+        };
+        Ok(Some(WindSfxRegion {
+            effect_id: r.u32(0)? as i32,
+            wind_area,
+            unknown_float: f32::from_bits(r.u32(index_at + 4)?),
         }))
     }
 
@@ -2433,6 +2491,60 @@ mod region_tests {
             vec![region_in(&Generation::SEKIRO, "S", 5, 0, &[], 1, &data)],
         );
         assert!(bad.sfx_region(&bad.map_regions().unwrap()[0]).is_err());
+    }
+
+    /// A wind SFX region names its effect, its bounding region and a float where each generation keeps them; a region of
+    /// another type names none; lengths and fixed words other than the stored ones are refused.
+    #[test]
+    fn a_wind_sfx_region_names_its_effect_and_its_area() {
+        let words = |w: &[i32]| w.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>();
+        let minus_one = (-1.0f32).to_bits() as i32;
+        let elden = layout(
+            &Generation::ELDEN_RING,
+            vec![
+                region("A", 6, 0, &[], 1, &words(&[808003, 0, minus_one])),
+                region("B", 6, 0, &[], 2, &words(&[808001, 3, minus_one, 0])),
+                region("C", 6, 0, &[], 3, &words(&[808003, -1, minus_one])),
+                region("D", 18, 0, &[], 4, &[]),
+                region("E", 6, 0, &[], 5, &words(&[808003, 4, minus_one, 1])),
+                region("F", 6, 0, &[], 6, &words(&[808003, -2, minus_one])),
+                region("G", 6, 0, &[], 7, &words(&[808003, 6])),
+            ],
+        );
+        let regions = elden.map_regions().unwrap();
+        let wind = |i: usize| elden.wind_sfx_region(&regions[i]);
+        assert_eq!(
+            wind(0).unwrap(),
+            Some(WindSfxRegion {
+                effect_id: 808003,
+                wind_area: Some(0),
+                unknown_float: -1.0
+            })
+        );
+        assert_eq!(wind(1).unwrap().unwrap().wind_area, Some(3));
+        assert_eq!(wind(2).unwrap().unwrap().wind_area, None);
+        assert_eq!(wind(3).unwrap(), None);
+        assert!(wind(4).is_err() && wind(5).is_err() && wind(6).is_err());
+        // Sekiro: the effect, four -1 words, the index, the float, a zero word
+        let mut data = words(&[800082, -1, -1, -1, -1, 9, minus_one, 0]);
+        let sekiro = layout(
+            &Generation::SEKIRO,
+            vec![region_in(&Generation::SEKIRO, "S", 6, 0, &[], 1, &data)],
+        );
+        assert_eq!(
+            sekiro.wind_sfx_region(&sekiro.map_regions().unwrap()[0]).unwrap(),
+            Some(WindSfxRegion {
+                effect_id: 800082,
+                wind_area: Some(9),
+                unknown_float: -1.0
+            })
+        );
+        data[8] = 0;
+        let bad = layout(
+            &Generation::SEKIRO,
+            vec![region_in(&Generation::SEKIRO, "S", 6, 0, &[], 1, &data)],
+        );
+        assert!(bad.wind_sfx_region(&bad.map_regions().unwrap()[0]).is_err());
     }
 
     /// A Sekiro event record: the header, then the name and the base block (part, region, entity).
