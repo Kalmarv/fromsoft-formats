@@ -28,6 +28,7 @@ use fromsoft_formats::{Binder, Game, Install, Keys, dcx::Decoder};
 use primase_foundations::compress::oodle::{Oodle, Version};
 use std::path::Path;
 
+#[allow(unsafe_code)] // loading the caller-trusted native decoder is explicitly unsafe
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // One PKCS#1 `RSA PUBLIC KEY` PEM per archive (`Data1.pem` ... `Data5.pem`), which you hold.
     let keys = Keys::from_folder("keys", Game::Sekiro, None)?;
@@ -109,6 +110,15 @@ gate = 'smoke'                           # or 'full': how much the heavy tests c
 
 [tests/inputs/README.md](tests/inputs/README.md) lists every input the tests read, what it is and where it comes from. Besides the installs, keys and Oodle library, some tests compare this crate's reading with the output of independent readers (SoulsFormats, SoulsFormatsNEXT, the fxr library, UXM's path lists) kept under `oracles.root`; those files are made by the user from their own installs and are not part of this repository. The file layout comes from [primase-testdata](https://github.com/Kalmarv/primase-testdata), which also has a sample.
 
+## Draw parameters and wind regions
+
+`msb::MapLayout::wind_sfx_region` reads a type-6 region as `WindSfxRegion` with the effect ID, wind-area index
+and retained unknown float, using each game's layout. Other region types return `None`.
+`param::PartsDrawParam`, `AssetGeometryParam` and `DrawDistScaleParam` expose Elden Ring's texture-switch distances,
+asset-to-draw-param references and distance-scale rows; unsupported revisions and row lengths are errors.
+`gparam::Gparam::time` retains the stored time axis; `TimeAxis::sampling` gives the source offset and period for
+sampling at the caller's hour. Reading the fields does not choose a texture form or weather for the caller.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), including how to report a file this crate cannot read.
@@ -116,6 +126,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md), including how to report a file this crat
 ## Related work
 
 The layouts follow the community's documentation of these formats, chiefly SoulsFormats and SoulsFormatsNEXT (names of unknown fields follow them), Paramdex and Smithbox (param layouts), the fxr project (the names, types and defaults of the effect actions' parameters; Unlicense), and UXM (archive lists and path hashes); the tests check this crate's readings against theirs. Used by [primase](https://github.com/Kalmarv/primase), a game-asset conversion library.
+
+## Check the examples
+
+From the repository root, `cargo test -p fromsoft-formats --doc` checks the crate documentation, and
+`cargo build -p fromsoft-formats --examples` builds its example programs. Examples that read paths need the caller's files; the repository ships no game assets.
 
 ## Licence
 
