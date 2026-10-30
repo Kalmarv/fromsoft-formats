@@ -389,7 +389,7 @@ impl Gparam {
             )?;
             budget.charge(ids, table.len())?;
             let ids = (0..count)
-                .map(|j| v.i32(v.element(ids, j, 4)?))
+                .map(|j| v.u32(v.element(ids, j, 4)?).map(|bits| bits as i32))
                 .collect::<Result<Vec<_>>>()?;
             let unknown_0c = if wide_ids {
                 Some(v.u32(v.at(at, 12)?)?)
