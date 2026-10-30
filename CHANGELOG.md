@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.13.0 (2026-10-30)
+
+- Breaking: `fxr::actions::WindForce` names thirteen parameters from what Elden Ring does with them: `distance_falloff`, `distance_falloff_radius`, `local`, `wave_length`, `wave_offset`, `weight`, `gust`, `gust_length`, `gust_scale`, `gust_offset`, `gust_rise`, `gust_fall` and `gust_rest`. The corresponding names returned by `params` change as well. `TRACED_PARAMS` records each new name and the fxr project's name; `library_name` maps a parameter name back to the project's. The real-data wind test checks the named values against the force field built by the game.
+
 ## 0.12.2 (2026-10-30)
 
 - `save`: Elden Ring PC character saves (`ER0000.sl2`). `Save` reads which of the ten slots hold a character (the profile's flags) and, for each, its `Hold` (the arm style and the active slot of each hand, arrows and bolts: the seven `ChrAsm` words) and `Equipped` (the item in each of the 22 equipment slots). Every slot member's MD5 must match its bytes, and every equipped handle must be an item record of the slot holding the item id its slot word holds, so a wrong record size or block offset is refused. `tests/save_census.rs` agrees with an independent walk of one save on the occupied slots, their versions, the seven `ChrAsm` words and all 22 equipment slots.
