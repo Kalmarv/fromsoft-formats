@@ -16940,16 +16940,21 @@ pub struct WindForce {
     pub unk_ds3_f1_24: i32,
     /// Field `unk_ds3_f1_25`.
     pub unk_ds3_f1_25: f32,
-    /// Field `unk_ds3_f1_26`.
-    pub unk_ds3_f1_26: i32,
-    /// Field `unk_ds3_f1_27`.
-    pub unk_ds3_f1_27: f32,
+    /// Field `distanceFalloff` (the fxr project's `unk_ds3_f1_26`): When non-zero, the wind fades with the
+    /// distance from the field's origin along its direction: the factor is `1 - |distance| /
+    /// distanceFalloffRadius`, clamped to 0..1.
+    pub distance_falloff: i32,
+    /// Field `distanceFalloffRadius` (the fxr project's `unk_ds3_f1_27`): The distance along the wind's
+    /// direction at which `distanceFalloff` has faded the wind to 0 (at least 0.0001).
+    pub distance_falloff_radius: f32,
     /// Field `unk_ds3_f1_28`.
     pub unk_ds3_f1_28: f32,
     /// Field `unk_ds3_f1_29`.
     pub unk_ds3_f1_29: i32,
-    /// Field `unk_ds3_f1_30`.
-    pub unk_ds3_f1_30: i32,
+    /// Field `local` (the fxr project's `unk_ds3_f1_30`): When non-zero, a cloth samples the field at each
+    /// particle; when 0 (and `unk_ds3_f1_31` is 0), it samples the field once at the centre of the cloth's
+    /// bounds and applies that wind to every particle.
+    pub local: i32,
     /// Field `unk_ds3_f1_31`.
     pub unk_ds3_f1_31: i32,
     /// Field `unk_ds3_f1_32`.
@@ -16968,10 +16973,13 @@ pub struct WindForce {
     pub force_random_multiplier_min: f32,
     /// Field `forceRandomMultiplierMax`.
     pub force_random_multiplier_max: f32,
-    /// Field `unk_ds3_f1_40`.
-    pub unk_ds3_f1_40: f32,
-    /// Field `unk_ds3_f1_41`.
-    pub unk_ds3_f1_41: f32,
+    /// Field `waveLength` (the fxr project's `unk_ds3_f1_40`): The wind's strength follows a sine wave
+    /// travelling along the wind's direction, one cycle per `waveLength` metres (at least 0.001) and one per
+    /// second: `sin(2 pi / waveLength * (t - distance))`.
+    pub wave_length: f32,
+    /// Field `waveOffset` (the fxr project's `unk_ds3_f1_41`): Added to the wave's sine before it is halved
+    /// and raised by a half: the wave's strength is `((sin + waveOffset) * 0.5) * 0.5 + 0.5` of the force.
+    pub wave_offset: f32,
     /// Field `unk_ds3_f1_42`.
     pub unk_ds3_f1_42: f32,
     /// Field `unk_ds3_f1_44`.
@@ -16980,8 +16988,9 @@ pub struct WindForce {
     pub unk_ds3_f1_45: f32,
     /// Field `forceMultiplier`.
     pub force_multiplier: f32,
-    /// Field `unk_ds3_f1_47`.
-    pub unk_ds3_f1_47: f32,
+    /// Field `weight` (the fxr project's `unk_ds3_f1_47`): Multiplies the wind the field gives a cloth; a
+    /// field of weight 0 is skipped.
+    pub weight: f32,
     /// Field `unk_ds3_f1_48`.
     pub unk_ds3_f1_48: f32,
     /// Field `unk_sdt_f1_48`.
@@ -16996,20 +17005,26 @@ pub struct WindForce {
     pub unk_sdt_f1_52: f32,
     /// Field `fadeOutTime`.
     pub fade_out_time: i32,
-    /// Field `unk_sdt_f1_54`.
-    pub unk_sdt_f1_54: f32,
-    /// Field `unk_sdt_f1_55`.
-    pub unk_sdt_f1_55: f32,
-    /// Field `unk_sdt_f1_56`.
-    pub unk_sdt_f1_56: f32,
-    /// Field `unk_sdt_f1_57`.
-    pub unk_sdt_f1_57: f32,
-    /// Field `unk_sdt_f1_58`.
-    pub unk_sdt_f1_58: f32,
-    /// Field `unk_ds3_f1_49`.
-    pub unk_ds3_f1_49: f32,
-    /// Field `unk_ds3_f1_50`.
-    pub unk_ds3_f1_50: f32,
+    /// Field `gust` (the fxr project's `unk_sdt_f1_54`): The gusts' speed along the wind's direction, in
+    /// metres per second, and a factor of their strength; gusts are off when it is not above 0.
+    pub gust: f32,
+    /// Field `gustLength` (the fxr project's `unk_sdt_f1_55`): The gusts' wavelength along the wind (at least
+    /// 0.001), the across-wind wobble's wavelength (twice it) and the wobble's amplitude (at most 5).
+    pub gust_length: f32,
+    /// Field `gustScale` (the fxr project's `unk_sdt_f1_56`): Multiplies the gusts' strength.
+    pub gust_scale: f32,
+    /// Field `gustOffset` (the fxr project's `unk_sdt_f1_57`): Added to the gusts' sine before it is halved,
+    /// as `waveOffset` is to the wave's.
+    pub gust_offset: f32,
+    /// Field `gustRise` (the fxr project's `unk_sdt_f1_58`): The time a gust takes to rise to full strength,
+    /// as part of the gust period `gustRise + gustFall + gustRest`.
+    pub gust_rise: f32,
+    /// Field `gustFall` (the fxr project's `unk_ds3_f1_49`): The time a gust takes to fall from full
+    /// strength, as part of the gust period.
+    pub gust_fall: f32,
+    /// Field `gustRest` (the fxr project's `unk_ds3_f1_50`): The calm between gusts, as part of the gust
+    /// period.
+    pub gust_rest: f32,
     /// Field `unk_ds3_f1_43`.
     pub unk_ds3_f1_43: f32,
     /// What the struct does not name.
@@ -17059,11 +17074,11 @@ impl WindForce {
             unk_ds3_f1_23: w.int(Some(Place::F1(23)), 0, "unk_ds3_f1_23")?,
             unk_ds3_f1_24: w.int(Some(Place::F1(24)), 0, "unk_ds3_f1_24")?,
             unk_ds3_f1_25: w.float(Some(Place::F1(25)), 1.0, "unk_ds3_f1_25")?,
-            unk_ds3_f1_26: w.int(Some(Place::F1(26)), 0, "unk_ds3_f1_26")?,
-            unk_ds3_f1_27: w.float(Some(Place::F1(27)), 0.0, "unk_ds3_f1_27")?,
+            distance_falloff: w.int(Some(Place::F1(26)), 0, "distanceFalloff")?,
+            distance_falloff_radius: w.float(Some(Place::F1(27)), 0.0, "distanceFalloffRadius")?,
             unk_ds3_f1_28: w.float(Some(Place::F1(28)), 0.0, "unk_ds3_f1_28")?,
             unk_ds3_f1_29: w.int(Some(Place::F1(29)), 30, "unk_ds3_f1_29")?,
-            unk_ds3_f1_30: w.int(Some(Place::F1(30)), 0, "unk_ds3_f1_30")?,
+            local: w.int(Some(Place::F1(30)), 0, "local")?,
             unk_ds3_f1_31: w.int(Some(Place::F1(31)), 0, "unk_ds3_f1_31")?,
             unk_ds3_f1_32: w.int(Some(Place::F1(32)), 0, "unk_ds3_f1_32")?,
             unk_ds3_f1_33: w.int(Some(Place::F1(33)), 0, "unk_ds3_f1_33")?,
@@ -17073,8 +17088,8 @@ impl WindForce {
             unk_ds3_f1_37: w.float(Some(Place::F1(37)), 0.0, "unk_ds3_f1_37")?,
             force_random_multiplier_min: w.float(Some(Place::F1(38)), 1.0, "forceRandomMultiplierMin")?,
             force_random_multiplier_max: w.float(Some(Place::F1(39)), 1.0, "forceRandomMultiplierMax")?,
-            unk_ds3_f1_40: w.float(Some(Place::F1(40)), 1.0, "unk_ds3_f1_40")?,
-            unk_ds3_f1_41: w.float(Some(Place::F1(41)), 1.0, "unk_ds3_f1_41")?,
+            wave_length: w.float(Some(Place::F1(40)), 1.0, "waveLength")?,
+            wave_offset: w.float(Some(Place::F1(41)), 1.0, "waveOffset")?,
             unk_ds3_f1_42: w.float(Some(Place::F1(42)), 1.0, "unk_ds3_f1_42")?,
             unk_ds3_f1_44: w.float(
                 match which {
@@ -17100,13 +17115,13 @@ impl WindForce {
                 1.0,
                 "forceMultiplier",
             )?,
-            unk_ds3_f1_47: w.float(
+            weight: w.float(
                 match which {
                     0 | 1 => Some(Place::F1(46)),
                     _ => Some(Place::F1(47)),
                 },
                 1.0,
-                "unk_ds3_f1_47",
+                "weight",
             )?,
             unk_ds3_f1_48: w.float(
                 match which {
@@ -17164,61 +17179,61 @@ impl WindForce {
                 0,
                 "fadeOutTime",
             )?,
-            unk_sdt_f1_54: w.float(
+            gust: w.float(
                 match which {
                     0 | 1 => Some(Place::F1(54)),
                     _ => None,
                 },
                 0.0,
-                "unk_sdt_f1_54",
+                "gust",
             )?,
-            unk_sdt_f1_55: w.float(
+            gust_length: w.float(
                 match which {
                     0 | 1 => Some(Place::F1(55)),
                     _ => None,
                 },
                 0.0,
-                "unk_sdt_f1_55",
+                "gustLength",
             )?,
-            unk_sdt_f1_56: w.float(
+            gust_scale: w.float(
                 match which {
                     0 | 1 => Some(Place::F1(56)),
                     _ => None,
                 },
                 1.0,
-                "unk_sdt_f1_56",
+                "gustScale",
             )?,
-            unk_sdt_f1_57: w.float(
+            gust_offset: w.float(
                 match which {
                     0 | 1 => Some(Place::F1(57)),
                     _ => None,
                 },
                 1.0,
-                "unk_sdt_f1_57",
+                "gustOffset",
             )?,
-            unk_sdt_f1_58: w.float(
+            gust_rise: w.float(
                 match which {
                     0 | 1 => Some(Place::F1(58)),
                     _ => None,
                 },
                 1.0,
-                "unk_sdt_f1_58",
+                "gustRise",
             )?,
-            unk_ds3_f1_49: w.float(
+            gust_fall: w.float(
                 match which {
                     0 | 1 => Some(Place::F1(59)),
                     _ => Some(Place::F1(49)),
                 },
                 10.0,
-                "unk_ds3_f1_49",
+                "gustFall",
             )?,
-            unk_ds3_f1_50: w.float(
+            gust_rest: w.float(
                 match which {
                     0 | 1 => Some(Place::F1(60)),
                     _ => Some(Place::F1(50)),
                 },
                 60.0,
-                "unk_ds3_f1_50",
+                "gustRest",
             )?,
             unk_ds3_f1_43: w.float(
                 match which {
@@ -17275,11 +17290,14 @@ impl WindForce {
             ("unk_ds3_f1_23", Param::Int(self.unk_ds3_f1_23)),
             ("unk_ds3_f1_24", Param::Int(self.unk_ds3_f1_24)),
             ("unk_ds3_f1_25", Param::Float(self.unk_ds3_f1_25)),
-            ("unk_ds3_f1_26", Param::Int(self.unk_ds3_f1_26)),
-            ("unk_ds3_f1_27", Param::Float(self.unk_ds3_f1_27)),
+            ("distanceFalloff", Param::Int(self.distance_falloff)),
+            (
+                "distanceFalloffRadius",
+                Param::Float(self.distance_falloff_radius),
+            ),
             ("unk_ds3_f1_28", Param::Float(self.unk_ds3_f1_28)),
             ("unk_ds3_f1_29", Param::Int(self.unk_ds3_f1_29)),
-            ("unk_ds3_f1_30", Param::Int(self.unk_ds3_f1_30)),
+            ("local", Param::Int(self.local)),
             ("unk_ds3_f1_31", Param::Int(self.unk_ds3_f1_31)),
             ("unk_ds3_f1_32", Param::Int(self.unk_ds3_f1_32)),
             ("unk_ds3_f1_33", Param::Int(self.unk_ds3_f1_33)),
@@ -17295,13 +17313,13 @@ impl WindForce {
                 "forceRandomMultiplierMax",
                 Param::Float(self.force_random_multiplier_max),
             ),
-            ("unk_ds3_f1_40", Param::Float(self.unk_ds3_f1_40)),
-            ("unk_ds3_f1_41", Param::Float(self.unk_ds3_f1_41)),
+            ("waveLength", Param::Float(self.wave_length)),
+            ("waveOffset", Param::Float(self.wave_offset)),
             ("unk_ds3_f1_42", Param::Float(self.unk_ds3_f1_42)),
             ("unk_ds3_f1_44", Param::Float(self.unk_ds3_f1_44)),
             ("unk_ds3_f1_45", Param::Float(self.unk_ds3_f1_45)),
             ("forceMultiplier", Param::Float(self.force_multiplier)),
-            ("unk_ds3_f1_47", Param::Float(self.unk_ds3_f1_47)),
+            ("weight", Param::Float(self.weight)),
             ("unk_ds3_f1_48", Param::Float(self.unk_ds3_f1_48)),
             ("unk_sdt_f1_48", Param::Float(self.unk_sdt_f1_48)),
             ("unk_sdt_f1_49", Param::Float(self.unk_sdt_f1_49)),
@@ -17309,13 +17327,13 @@ impl WindForce {
             ("unk_sdt_f1_51", Param::Float(self.unk_sdt_f1_51)),
             ("unk_sdt_f1_52", Param::Float(self.unk_sdt_f1_52)),
             ("fadeOutTime", Param::Int(self.fade_out_time)),
-            ("unk_sdt_f1_54", Param::Float(self.unk_sdt_f1_54)),
-            ("unk_sdt_f1_55", Param::Float(self.unk_sdt_f1_55)),
-            ("unk_sdt_f1_56", Param::Float(self.unk_sdt_f1_56)),
-            ("unk_sdt_f1_57", Param::Float(self.unk_sdt_f1_57)),
-            ("unk_sdt_f1_58", Param::Float(self.unk_sdt_f1_58)),
-            ("unk_ds3_f1_49", Param::Float(self.unk_ds3_f1_49)),
-            ("unk_ds3_f1_50", Param::Float(self.unk_ds3_f1_50)),
+            ("gust", Param::Float(self.gust)),
+            ("gustLength", Param::Float(self.gust_length)),
+            ("gustScale", Param::Float(self.gust_scale)),
+            ("gustOffset", Param::Float(self.gust_offset)),
+            ("gustRise", Param::Float(self.gust_rise)),
+            ("gustFall", Param::Float(self.gust_fall)),
+            ("gustRest", Param::Float(self.gust_rest)),
             ("unk_ds3_f1_43", Param::Float(self.unk_ds3_f1_43)),
         ]
     }
@@ -19530,6 +19548,33 @@ pub fn argument_of(id: i16, name: &str) -> Option<PropertyArgument> {
         (11000, "radiusY") => ActiveTime,
         _ => return None,
     })
+}
+
+/// The parameters named here and not by the fxr project, whose names come from what Elden Ring's code does with
+/// them: the action type, the name used here (in `params` and the struct's documentation) and the project's.
+pub const TRACED_PARAMS: &[(i16, &str, &str)] = &[
+    (10300, "distanceFalloff", "unk_ds3_f1_26"),
+    (10300, "distanceFalloffRadius", "unk_ds3_f1_27"),
+    (10300, "local", "unk_ds3_f1_30"),
+    (10300, "waveLength", "unk_ds3_f1_40"),
+    (10300, "waveOffset", "unk_ds3_f1_41"),
+    (10300, "weight", "unk_ds3_f1_47"),
+    (10300, "gust", "unk_sdt_f1_54"),
+    (10300, "gustLength", "unk_sdt_f1_55"),
+    (10300, "gustScale", "unk_sdt_f1_56"),
+    (10300, "gustOffset", "unk_sdt_f1_57"),
+    (10300, "gustRise", "unk_sdt_f1_58"),
+    (10300, "gustFall", "unk_ds3_f1_49"),
+    (10300, "gustRest", "unk_ds3_f1_50"),
+];
+
+/// The fxr project's name of a parameter of action type `ty` named `name` here (the same name unless
+/// [`TRACED_PARAMS`] renames it).
+pub fn library_name(ty: i16, name: &str) -> &str {
+    TRACED_PARAMS
+        .iter()
+        .find(|&&(t, ours, _)| t == ty && ours == name)
+        .map_or(name, |&(_, _, theirs)| theirs)
 }
 
 /// The name of every action type that occurs in an installed file, by type number.

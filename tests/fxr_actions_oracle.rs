@@ -319,8 +319,12 @@ fn action_matches<'a>(t: &Typed, json: &'a Value) -> std::result::Result<Vec<&'a
         .get("particleUniformScale")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    // the parameters named from the game's code, under the library's names
+    let library = |name: &'static str| -> &'static str {
+        i16::try_from(ty).map_or(name, |t| fromsoft_formats::fxr::actions::library_name(t, name))
+    };
     for (name, p) in &mine {
-        let Some(v) = obj.get(*name) else {
+        let Some(v) = obj.get(library(name)) else {
             // the library presents a rich model's U and V parameters as one two-component UV parameter
             if ty == 10015
                 && matches!(
@@ -338,7 +342,7 @@ fn action_matches<'a>(t: &Typed, json: &'a Value) -> std::result::Result<Vec<&'a
         };
         param_matches(ty, name, p, v, uniform_scale).map_err(|e| format!("{name}: {e}"))?;
     }
-    let have: BTreeSet<&str> = mine.iter().map(|(n, _)| *n).collect();
+    let have: BTreeSet<&str> = mine.iter().map(|(n, _)| library(n)).collect();
     Ok(obj
         .keys()
         .map(String::as_str)

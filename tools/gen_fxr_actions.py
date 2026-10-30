@@ -3,9 +3,10 @@
 files, with the parameter names, their order and their kinds in each layout the files use.
 
 Input: the fxr project's action data (`dist/actions.json` of EvenTorset/fxr, Unlicense: the names of an action's
-properties and fields, their order in each game's files, their types and defaults). The project is the only source of the
-names; the layout of the lists in the files is checked against them by tests/fxr_actions_census.rs on every action of both
-installs.
+properties and fields, their order in each game's files, their types and defaults). The project is the source of the
+names, except where TRACED_NAMES gives one that Elden Ring's own code pins (what the game does with the value); the
+layout of the lists in the files is checked against them by tests/fxr_actions_census.rs on every action of both installs.
+The output is identical to the committed file for the package versions 32.1.2 and 32.1.3, after rustfmt.
 
     python tools/gen_fxr_actions.py PATH/TO/actions.json > src/fxr/actions.rs
 
@@ -15,6 +16,7 @@ generated per type: Sekiro's, Elden Ring's and Dark Souls III's (a few Sekiro fi
 import json
 import re
 import sys
+import textwrap
 
 OCCURRING = [1, 11, 15, 34, 35, 36, 46, 55, 60, 64, 65, 75, 83, 84, 105, 106, 113, 120, 121, 122, 123, 128, 129, 130, 131,
              132, 133, 199, 200, 201, 300, 301, 399, 400, 401, 402, 403, 404, 405, 500, 501, 502, 503, 600, 601, 602, 603,
@@ -34,6 +36,55 @@ WORD_KIND = {"boolean": "Bool", "integer": "Int", "float": "Float"}
 # fields whose library type disagrees with what every installed file stores (found by tests/fxr_actions_census.rs);
 # the value is the kind the files agree with
 FIELD_OVERRIDES = {}
+# names for parameters the fxr project leaves unnamed, from what Elden Ring 1.17.3 does with them: the action's fields
+# copied word for word to the force field it creates, and the force the cloth gets from that field. Keyed by action type
+# and the project's name; the value is the name used here and what the game does with it.
+TRACED_NAMES = {
+    10300: {
+        "unk_ds3_f1_26": ("distanceFalloff", "When non-zero, the wind fades with the distance from the field's origin "
+                          "along its direction: the factor is `1 - |distance| / distanceFalloffRadius`, clamped to 0..1."),
+        "unk_ds3_f1_27": ("distanceFalloffRadius", "The distance along the wind's direction at which "
+                          "`distanceFalloff` has faded the wind to 0 (at least 0.0001)."),
+        "unk_ds3_f1_30": ("local", "When non-zero, a cloth samples the field at each particle; when 0 (and "
+                          "`unk_ds3_f1_31` is 0), it samples the field once at the centre of the cloth's bounds and "
+                          "applies that wind to every particle."),
+        "unk_ds3_f1_40": ("waveLength", "The wind's strength follows a sine wave travelling along the wind's "
+                          "direction, one cycle per `waveLength` metres (at least 0.001) and one per second: "
+                          "`sin(2 pi / waveLength * (t - distance))`."),
+        "unk_ds3_f1_41": ("waveOffset", "Added to the wave's sine before it is halved and raised by a half: the "
+                          "wave's strength is `((sin + waveOffset) * 0.5) * 0.5 + 0.5` of the force."),
+        "unk_ds3_f1_47": ("weight", "Multiplies the wind the field gives a cloth; a field of weight 0 is skipped."),
+        "unk_sdt_f1_54": ("gust", "The gusts' speed along the wind's direction, in metres per second, and a factor "
+                          "of their strength; gusts are off when it is not above 0."),
+        "unk_sdt_f1_55": ("gustLength", "The gusts' wavelength along the wind (at least 0.001), the across-wind "
+                          "wobble's wavelength (twice it) and the wobble's amplitude (at most 5)."),
+        "unk_sdt_f1_56": ("gustScale", "Multiplies the gusts' strength."),
+        "unk_sdt_f1_57": ("gustOffset", "Added to the gusts' sine before it is halved, as `waveOffset` is to the "
+                          "wave's."),
+        "unk_sdt_f1_58": ("gustRise", "The time a gust takes to rise to full strength, as part of the gust "
+                          "period `gustRise + gustFall + gustRest`."),
+        "unk_ds3_f1_49": ("gustFall", "The time a gust takes to fall from full strength, as part of the gust "
+                          "period."),
+        "unk_ds3_f1_50": ("gustRest", "The calm between gusts, as part of the gust period."),
+    },
+}
+
+
+def apply_traced_names(acts):
+    """Renames the parameters TRACED_NAMES names, in the action's properties and in every layout's lists."""
+    for t, names in TRACED_NAMES.items():
+        a = acts[t]
+        props = a.setdefault("properties", {})
+        for old, (new, doc) in names.items():
+            if old not in props or new in props:
+                raise SystemExit(f"{t}: cannot rename {old} to {new}")
+            meta = dict(props.pop(old))
+            meta["traced"] = (old, doc)
+            props[new] = meta
+            for lay in (a.get("structure") or {}).values():
+                for lst in ("properties1", "properties2", "fields1", "fields2"):
+                    if lay and lay.get(lst):
+                        lay[lst] = [new if n == old else n for n in lay[lst]]
 
 
 def snake(name):
@@ -73,6 +124,7 @@ def match_arms(values):
 def main(path):
     data = json.load(open(path, encoding="utf-8"))
     acts = {a["type"]: a for a in data}
+    apply_traced_names(acts)
     out = []
     w = out.append
     w("//! Generated by `tools/gen_fxr_actions.py` from the fxr project's action data (EvenTorset/fxr, Unlicense). Do not edit.")
@@ -158,6 +210,11 @@ def main(path):
                 c = meta.get("components", 1)
                 w(f"    /// Property `{n}` ({c} component{'s' if c != 1 else ''}).")
                 w(f"    pub {rust[n]}: Property,")
+            elif "traced" in meta:
+                old, doc = meta["traced"]
+                for line in textwrap.wrap(f"Field `{n}` (the fxr project's `{old}`): {doc}", 110 - len("    /// ")):
+                    w(f"    /// {line}")
+                w(f"    pub {rust[n]}: {FIELD_RUST[kinds[n]]},")
             else:
                 w(f"    /// Field `{n}`.")
                 w(f"    pub {rust[n]}: {FIELD_RUST[kinds[n]]},")
@@ -351,6 +408,23 @@ def main(path):
         w(f'        ({t}, "{n}") => {short[arg]},')
     w("        _ => return None,")
     w("    })")
+    w("}")
+    w("")
+    w("/// The parameters named here and not by the fxr project, whose names come from what Elden Ring's code does with")
+    w("/// them: the action type, the name used here (in `params` and the struct's documentation) and the project's.")
+    w("pub const TRACED_PARAMS: &[(i16, &str, &str)] = &[")
+    for t, names in TRACED_NAMES.items():
+        for old, (new, _doc) in names.items():
+            w(f'    ({t}, "{new}", "{old}"),')
+    w("];")
+    w("")
+    w("/// The fxr project's name of a parameter of action type `ty` named `name` here (the same name unless")
+    w("/// [`TRACED_PARAMS`] renames it).")
+    w("pub fn library_name(ty: i16, name: &str) -> &str {")
+    w("    TRACED_PARAMS")
+    w("        .iter()")
+    w("        .find(|&&(t, ours, _)| t == ty && ours == name)")
+    w("        .map_or(name, |&(_, _, theirs)| theirs)")
     w("}")
     w("")
     w("/// The name of every action type that occurs in an installed file, by type number.")
