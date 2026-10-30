@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- `gparam`: `Gparam::time`, the header's time axis (`TimeAxis`, version 5 and later): the offset flag (byte 13), the
+  offset (the float at 64) and the period (the float at 80), which the reader used to skip. `TimeAxis::sampling` gives
+  the offset and period Elden Ring's own reader of the file takes from them: the offset and 24 hours when the flag is
+  set, no offset and the stored period when it is clear. The game samples a field's values at the hour, wrapped by the
+  period, less the offset, so a file of offset 6.5 keys 6:30 at time 0. Elden Ring's 448 files all set the flag with a
+  period of 24 and an offset of 6.5 (407), 7 (33) or 4.5 (8); Sekiro's 248 version 5 files store an offset of 0 (69 with
+  a period of 24). `tests/gparam_census.rs` asserts those counts. Breaking: `Gparam` has a new public field.
+
 ## 0.10.2 (2026-10-29)
 
 - `dcx::encode`: a Kraken payload is compressed one 256 KiB block at a time and the blocks are concatenated, so every

@@ -7,11 +7,11 @@
 //! used here: a *group* (SoulsFormats: param; the older SoulsFormats: group) holds *fields* (param). All offsets are from
 //! the file's start:
 //!
-//! - `"f\0i\0l\0t\0"`, then the version (u32), a zero byte, a flag byte (kept), two zero bytes;
+//! - `"f\0i\0l\0t\0"`, then the version (u32), a zero byte, the time-offset flag byte, two zero bytes;
 //! - the group count, `count14` (kept), the offsets of the group offsets, the group records, the field offsets, the field
 //!   records, the value arrays and the value ID arrays; the offset of an opaque block (`data30`), the count of the opaque
-//!   extras, the offsets of those and of their IDs; a float (`unk40`); the offsets of the comment tables (versions 3 and
-//!   later); a float (`unk50`, version 5 and later);
+//!   extras, the offsets of those and of their IDs; the time offset (a float); the offsets of the comment tables
+//!   (versions 3 and later); the time period (a float, version 5 and later): [`TimeAxis`];
 //! - a group record: the field count, the offset of its field offsets (from the field-offsets base), its key and name
 //!   (NUL-terminated UTF-16, one after the other);
 //! - a field record: the offset of its values (from the values base), the offset of its IDs (from the IDs base), then
@@ -41,8 +41,38 @@ pub struct Gparam {
     pub version: u32,
     /// The groups, in file order.
     pub groups: Vec<Group>,
+    /// The time axis the values' times of day are on (version 5 and later; `None` before).
+    pub time: Option<TimeAxis>,
     /// What the file stores that is not read.
     pub unread: Unread,
+}
+
+/// The header's time axis (version 5 and later): how the hour of the day maps onto the times a field's values are keyed
+/// by.
+///
+/// Elden Ring's reader of the file takes these three words and samples a field at a time it derives from the hour with
+/// the offset and period [`sampling`](Self::sampling) gives. Elden Ring's files store the flag set, a period of 24 and an
+/// offset of 4.5, 6.5 or 7 hours: in a file of offset 6.5, a value keyed at 0 is the one for 6:30.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct TimeAxis {
+    /// Byte 13: non-zero when the offset applies, with a period of 24 hours whatever [`period`](Self::period) stores.
+    pub offset_flag: u8,
+    /// The float at 64: the hours after midnight at which the axis's 0 lies.
+    pub offset: f32,
+    /// The float at 80: the axis's length, used when the offset flag is clear.
+    pub period: f32,
+}
+
+impl TimeAxis {
+    /// The `(offset, period)` the game's reader takes from the header: the offset and a period of 24 hours when the
+    /// offset flag is set; no offset and the stored period when it is clear.
+    pub fn sampling(&self) -> (f32, f32) {
+        if self.offset_flag != 0 {
+            (self.offset, 24.0)
+        } else {
+            (0.0, self.period)
+        }
+    }
 }
 
 /// The parts of the file [`Gparam::read`] does not interpret.
@@ -251,7 +281,7 @@ impl Gparam {
                 format!("version {version} is not read (3, 5 and 6 are)"),
             ));
         }
-        // a zero byte, the flag byte (not read), two zero bytes
+        // a zero byte, the time-offset flag, two zero bytes
         v.expect(12, &[0])?;
         v.expect(14, &[0, 0])?;
         let int = |o: usize| -> Result<usize> {
@@ -270,6 +300,15 @@ impl Gparam {
         let wide_ids = version >= 5;
         let header = if wide_ids { 84 } else { 80 };
         v.slice(0, header)?;
+        let time = if wide_ids {
+            Some(TimeAxis {
+                offset_flag: v.u8(13)?,
+                offset: f32::from_bits(v.u32(64)?),
+                period: f32::from_bits(v.u32(80)?),
+            })
+        } else {
+            None
+        };
         // every record named is charged to the allowance, so records that name one range over and over are refused
         let budget = Budget::new(FORMAT, data.len());
         let group_table = v.slice(
@@ -313,6 +352,7 @@ impl Gparam {
         Ok(Gparam {
             version,
             groups,
+            time,
             unread,
         })
     }
@@ -568,6 +608,7 @@ mod tests {
         let mut out = Vec::new();
         out.extend(MAGIC);
         out.extend(version.to_le_bytes());
+        // the time words of an Elden Ring header: the offset flag set, 6.5 hours, a period of 24
         out.extend([0, 1, 0, 0]);
         for word in [
             groups.len() as u32,
@@ -585,12 +626,12 @@ mod tests {
         ] {
             out.extend(word.to_le_bytes());
         }
-        out.extend(0.5f32.to_le_bytes());
+        out.extend(6.5f32.to_le_bytes());
         for word in [end as u32; 3] {
             out.extend(word.to_le_bytes());
         }
         if version >= 5 {
-            out.extend(0.25f32.to_le_bytes());
+            out.extend(24.0f32.to_le_bytes());
         }
         assert_eq!(out.len(), header);
         for at in &record_at {
@@ -757,6 +798,33 @@ mod tests {
         let field = &Gparam::read(&big).unwrap().groups[0].fields[0];
         assert_eq!(field.values.len(), 300);
         assert_eq!(field.value_of(299), Some(Value::Float(299.0)));
+    }
+
+    #[test]
+    fn the_header_states_the_time_axis_from_version_five() {
+        // the words of an Elden Ring header: the flag set, an offset of 6.5 hours, a period of 24
+        let axis = TimeAxis {
+            offset_flag: 1,
+            offset: 6.5,
+            period: 24.0,
+        };
+        for version in [5, 6] {
+            let g = Gparam::read(&sample(version)).unwrap();
+            assert_eq!(g.time, Some(axis), "version {version}");
+            assert_eq!(axis.sampling(), (6.5, 24.0));
+        }
+        // version 3 stores no period, and the time words are not read
+        assert_eq!(Gparam::read(&sample(3)).unwrap().time, None);
+        // with the flag clear there is no offset, and the stored period is the axis's length
+        let mut clear = sample(5);
+        clear[13] = 0;
+        clear[80..84].copy_from_slice(&12.0f32.to_le_bytes());
+        let time = Gparam::read(&clear).unwrap().time.unwrap();
+        assert_eq!((time.offset_flag, time.offset, time.period), (0, 6.5, 12.0));
+        assert_eq!(time.sampling(), (0.0, 12.0));
+        // with it set, the stored period is not used
+        clear[13] = 1;
+        assert_eq!(Gparam::read(&clear).unwrap().time.unwrap().sampling(), (6.5, 24.0));
     }
 
     #[test]

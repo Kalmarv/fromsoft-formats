@@ -18,6 +18,7 @@ mod inputs;
 use fromsoft_formats::area::{self, DrawParamId};
 use fromsoft_formats::dcx::Decoder;
 use fromsoft_formats::emevd::Script;
+use fromsoft_formats::gparam::Gparam;
 use fromsoft_formats::gparam_events::{self, Switch};
 use fromsoft_formats::mapid::MapId;
 use fromsoft_formats::msb::{MapLayout, PartKind};
@@ -197,6 +198,58 @@ fn the_events_that_switch_a_draw_param_file_name_the_numbers_the_files_have() ->
                 assert_eq!(subs, BTreeSet::from([0, 1, 2, 3, 4, 500]));
             }
         }
+    }
+    Ok(())
+}
+
+/// Every draw-param file's time axis, tallied by version and (offset flag, offset, period): the hour at which a file's
+/// time 0 lies, and the day it wraps on. Version 3 files store none. The counts are those of an independent census that
+/// read the four header words from the bytes of every file the dictionary names.
+#[test]
+fn every_draw_param_file_states_its_time_axis() -> Result<()> {
+    for (game, data) in [(Game::Sekiro, Data::Sekiro), (Game::EldenRing, Data::Elden)] {
+        let Some((archive, dll, dictionary)) = open(game, data)? else {
+            continue;
+        };
+        let decoder = Decoder {
+            oodle: Some(&dll),
+            max_output: 1 << 30,
+        };
+        let paths: BTreeSet<&str> = dictionary
+            .names
+            .values()
+            .flatten()
+            .map(String::as_str)
+            .filter(|p| p.strip_prefix("/param/drawparam/").is_some_and(|f| f.ends_with(".gparam.dcx") && !f.contains('/')))
+            .filter(|p| archive.contains(p))
+            .collect();
+        type Axis = (u32, Option<(u8, String, String)>);
+        let mut axes: BTreeMap<Axis, usize> = BTreeMap::new();
+        for path in &paths {
+            let file = Gparam::read(&archive.read(path, &decoder)?)?;
+            let time = file
+                .time
+                .map(|t| (t.offset_flag, t.offset.to_string(), t.period.to_string()));
+            *axes.entry((file.version, time)).or_default() += 1;
+        }
+        let axis = |flag: u8, offset: &str, period: &str, n: usize| -> (Axis, usize) {
+            ((5, Some((flag, offset.into(), period.into()))), n)
+        };
+        let expected: Vec<(Axis, usize)> = match game {
+            Game::Sekiro => vec![
+                ((3, None), 5),
+                axis(0, "0", "0", 38),
+                axis(1, "0", "0", 141),
+                axis(1, "0", "24", 69),
+            ],
+            Game::EldenRing => vec![
+                axis(1, "4.5", "24", 8),
+                axis(1, "6.5", "24", 407),
+                axis(1, "7", "24", 33),
+            ],
+        };
+        let axes: Vec<_> = axes.into_iter().collect();
+        assert_eq!(axes, expected, "{}: {} files", game.name(), paths.len());
     }
     Ok(())
 }
