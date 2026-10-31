@@ -134,6 +134,7 @@ pub mod tae;
 mod tae_check;
 mod tae_write;
 pub mod tpf;
+pub mod weapon_params;
 pub mod weather_assets;
 
 mod tpf_write;
