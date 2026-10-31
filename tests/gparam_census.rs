@@ -292,3 +292,63 @@ fn installed_extra_records_retain_group_indices_ids_and_unknown_words() -> Resul
     }
     Ok(())
 }
+
+/// Independently join every Elden Ring draw-param group's raw extra record to the named native load flags.
+/// This proves decoding against stored bytes, not that Sekiro uses the same loader semantics.
+#[test]
+fn elden_ring_group_load_flags_agree_with_every_installed_extra_table() -> Result<()> {
+    let Some((archive, dll, dictionary)) = open(Game::EldenRing, Data::Elden)? else {
+        return Ok(());
+    };
+    let decoder = Decoder {
+        oodle: Some(&dll),
+        max_output: 1 << 30,
+    };
+    let paths: BTreeSet<&str> = dictionary
+        .names
+        .values()
+        .flatten()
+        .map(String::as_str)
+        .filter(|p| {
+            p.strip_prefix("/param/drawparam/")
+                .is_some_and(|f| f.ends_with(".gparam.dcx") && !f.contains('/'))
+        })
+        .filter(|p| archive.contains(p))
+        .collect();
+    assert_eq!(paths.len(), 448);
+    let mut counts = BTreeMap::<(u8, u8), usize>::new();
+    for path in &paths {
+        let bytes = archive.read(path, &decoder)?;
+        let file = Gparam::read(&bytes)?;
+        let u32_at = |at| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+        assert_eq!(u32_at(8), 5, "{path}");
+        let count = u32_at(52) as usize;
+        let table = u32_at(56) as usize;
+        for index in 0..file.groups.len() {
+            let raw = (0..count)
+                .map(|i| table + 16 * i)
+                .find(|at| u32_at(*at) as usize == index)
+                .map(|at| (bytes[at + 12], bytes[at + 13]))
+                .unwrap_or((0, 0));
+            let flags = file.group_load_flags(index as u32);
+            assert_eq!(
+                flags.fallback_rows_start_active,
+                raw.0 == 0,
+                "{path} group {index}"
+            );
+            assert_eq!(flags.force_zero_id, raw.1 != 0, "{path} group {index}");
+            assert_eq!(
+                flags.value_id(100),
+                if raw.1 == 0 { 100 } else { 0 },
+                "{path} group {index}"
+            );
+            *counts.entry(raw).or_default() += 1;
+        }
+    }
+    println!(
+        "Elden Ring load flags: {} files, {} group lookups; raw (+0c,+0d) counts {counts:?}",
+        paths.len(),
+        counts.values().sum::<usize>()
+    );
+    Ok(())
+}

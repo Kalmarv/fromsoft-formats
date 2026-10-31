@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `gparam::GroupLoadFlags`, `ParamExtra::load_flags` and `Gparam::group_load_flags` name how Elden Ring consumes the first two extra-record bytes: whether newly created fallback rows start active and whether field lookups force value ID 0. Stored fields are activated separately, including unlisted IDs whose values come from registered references; the ID list is not a complete activation mask. The raw trailing word remains available. An independent byte-table join checks every group of all 448 installed Elden Ring draw-param files.
+
 ## 0.14.0 (2026-10-30)
 
 - Breaking: `gparam::Gparam` gains the public `extras` field, so exhaustive struct literals must initialize it. The reader retains the stored group indices, ordered signed value-ID lists, and the raw version-5-and-later trailing word as `ParamExtra`; `Gparam::extra` returns the first matching group record. Empty and absent records remain distinct. All counts and offsets are checked. The existing `Unread::extras` field is now zero for supported versions because the records are decoded. Elden Ring consults these lists when choosing stored versus reference values; the reader does not infer layer activation or composition from membership. Installed-data checks compare both Ashina Castle tables against independently read extra records, and the time-axis census reads every draw-param file in both supported installs.

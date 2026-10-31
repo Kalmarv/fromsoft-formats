@@ -95,8 +95,51 @@ pub struct ParamExtra {
     pub group_index: u32,
     /// Signed value IDs in their stored order, including duplicates.
     pub ids: Vec<i32>,
-    /// The version-5-and-later word at +12, retained as bits; its meaning is not established.
+    /// The version-5-and-later word at +12, retained as bits. [`Self::load_flags`] names its low two bytes;
+    /// the remaining bytes are uninterpreted.
     pub unknown_0c: Option<u32>,
+}
+
+/// How Elden Ring's native loader uses a group's extra-record bytes, separately from its value-ID list.
+/// These control initial fallback rows and the accessor's ID lookup, not a whole-file layer mask.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct GroupLoadFlags {
+    /// Whether newly created per-ID rows start active before explicitly loaded fields are activated.
+    /// Extra byte +12 clear means active; nonzero leaves fallback rows inactive.
+    pub fallback_rows_start_active: bool,
+    /// Whether field accessors look up ID 0 regardless of the requested value ID: extra byte +13 nonzero.
+    pub force_zero_id: bool,
+}
+
+impl Default for GroupLoadFlags {
+    /// No extra record, or a version before 5: both native flag getters return zero.
+    fn default() -> Self {
+        Self {
+            fallback_rows_start_active: true,
+            force_zero_id: false,
+        }
+    }
+}
+
+impl GroupLoadFlags {
+    /// The ID Elden Ring's field accessor looks up for a requested ID.
+    pub fn value_id(self, requested: i32) -> i32 {
+        if self.force_zero_id { 0 } else { requested }
+    }
+}
+
+impl ParamExtra {
+    /// The low two bytes as Elden Ring PE 2.7.2.0 consumes them: loader `1c10460`, fallback row creation
+    /// `1c0f8b0`, and scalar accessor `1c094d0`. Any nonzero byte sets its flag, not just bit 0.
+    /// A listed stored value and an unlisted reference value are both explicitly activated by the loader;
+    /// `fallback_rows_start_active` matters to fields not explicitly loaded for that ID.
+    pub fn load_flags(&self) -> GroupLoadFlags {
+        let word = self.unknown_0c.unwrap_or(0);
+        GroupLoadFlags {
+            fallback_rows_start_active: word & 0xff == 0,
+            force_zero_id: word & 0xff00 != 0,
+        }
+    }
 }
 
 /// A group of fields (a lighting set, fog, a tone map): its key (the editor identity, `LightSet ParamEditor`) and name.
@@ -279,6 +322,13 @@ impl Gparam {
     /// `None` differs from a present record with no IDs; no composition policy is inferred from either.
     pub fn extra(&self, group_index: u32) -> Option<&ParamExtra> {
         self.extras.iter().find(|extra| extra.group_index == group_index)
+    }
+
+    /// The native load flags of the first extra record for a group index; native zero-byte defaults if absent.
+    pub fn group_load_flags(&self, group_index: u32) -> GroupLoadFlags {
+        self.extra(group_index)
+            .map(ParamExtra::load_flags)
+            .unwrap_or_default()
     }
 
     /// Read a file (already decompressed). A version other than 3, 5 and 6, or the narrow magic, is refused by name;
@@ -968,6 +1018,28 @@ mod tests {
         // a group count that its table cannot hold
         huge[16..20].copy_from_slice(&u32::MAX.to_le_bytes());
         assert!(Gparam::read(&huge).is_err());
+    }
+
+    #[test]
+    fn group_load_flags_use_bytes_independently_of_value_id_membership() {
+        let mut file = Gparam::read(&sample(5)).unwrap();
+        assert_eq!(file.group_load_flags(0), GroupLoadFlags::default());
+        assert_eq!(file.group_load_flags(99), GroupLoadFlags::default());
+        file.extras[0].unknown_0c = Some(0xabcd_0202);
+        let flags = file.group_load_flags(0);
+        assert!(!flags.fallback_rows_start_active);
+        assert!(flags.force_zero_id);
+        assert_eq!(flags.value_id(-7), 0);
+        assert_eq!(flags.value_id(100), 0);
+        file.extras[0].ids.clear();
+        assert_eq!(file.group_load_flags(0), flags, "the ID list is a separate rule");
+        file.extras[0].unknown_0c = Some(0xabcd_0000);
+        assert_eq!(file.group_load_flags(0), GroupLoadFlags::default());
+        assert_eq!(file.group_load_flags(0).value_id(-7), -7);
+        assert_eq!(
+            Gparam::read(&sample(3)).unwrap().group_load_flags(0),
+            GroupLoadFlags::default()
+        );
     }
 
     #[test]
