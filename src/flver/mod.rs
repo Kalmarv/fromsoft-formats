@@ -1089,3 +1089,11 @@ impl FaceSet {
         }
     }
 }
+
+/// Display-mask groups named by complete two-digit `#NN#` markers in a material name.
+/// Preserve order and repeated/overlapping markers. One-digit or unclosed markers name no group.
+pub fn display_marks(material:&str)->Vec<u32>{
+    material.as_bytes().windows(4).filter_map(|window|match window {
+        [b'#',a,b,b'#']if a.is_ascii_digit()&&b.is_ascii_digit()=>Some(u32::from(a.saturating_sub(b'0')).saturating_mul(10).saturating_add(u32::from(b.saturating_sub(b'0')))),_=>None,
+    }).collect()
+}
