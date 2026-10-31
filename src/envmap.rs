@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 /// A member's retained name and texture header, with no DDS payload allocation.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct MemberHeader {
-    /// The BND member path.
-    pub member: String,
+    /// The optional BND member path, as stored by the binder.
+    pub member: Option<String>,
     /// The TPF texture name.
     pub texture: String,
     /// Parsed group, state and coefficient identity.
