@@ -24,6 +24,10 @@
 //! the player's holds a single event file, in its first event slot.
 
 use crate::bytes::{Budget, View};
+
+/// Elden Ring event kind whose stored end the observed 1.17.3 transition activation reads for an incoming clip.
+/// This names the event only; resolving transition duration belongs to a source pass.
+pub const ELDEN_TRANSITION_END: i32 = 16;
 use crate::{Binder, BinderFile, Result, invalid};
 
 pub mod template;
