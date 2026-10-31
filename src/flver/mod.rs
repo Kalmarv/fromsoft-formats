@@ -4,6 +4,7 @@
 //! model back with the [`Layout`] of the file it came from (or one made for it).
 mod channel;
 pub mod gx;
+pub mod gxmd;
 mod gx_items;
 
 mod encode;
