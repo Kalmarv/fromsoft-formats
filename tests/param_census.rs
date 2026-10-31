@@ -11,7 +11,7 @@
 mod inputs;
 
 use fromsoft_formats::dcx::Decoder;
-use fromsoft_formats::game_params::param_binder;
+use fromsoft_formats::game_params::{param_binder, read_param};
 use fromsoft_formats::param::{GrassParam, Param};
 use fromsoft_formats::{Game, Install, Keys};
 use inputs::{Game as Data, Tool, install, keys, oodle};
