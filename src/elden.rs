@@ -69,13 +69,13 @@ pub(crate) fn asset_model(model: &str) -> Result<ObjectModel> {
         .ok_or_else(|| invalid("Elden Ring asset", 0, format!("asset model {model}")))?;
     let collision = [("h", Resolution::High), ("l", Resolution::Low)]
         .map(|(suffix, resolution)| CollisionSource {
-            binder: Some(format!("/asset/aeg/{group}/{lower}_{suffix}.geomhkxbnd.dcx")),
+            binder: Some(crate::paths::asset_collision(group, &lower, suffix)),
             member: format!("{lower}_{suffix}.hkx"),
             resolution,
         })
         .into();
     Ok(ObjectModel {
-        binder: format!("/asset/aeg/{group}/{lower}.geombnd.dcx"),
+        binder: crate::paths::asset_model(group, &lower),
         flver: format!("{lower}.flver"),
         collision,
     })

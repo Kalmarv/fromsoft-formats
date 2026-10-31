@@ -123,11 +123,13 @@ pub fn packages(archive: &Archive, area: &str) -> Result<Vec<Package>> {
     for state in 0..100 {
         for tier in [Tier::High, Tier::Middle, Tier::Low] {
             for part in 0..100 {
-                let path = format!(
-                    "/map/{}/{area}/{area}_envmap_{state:02}_{}_{part:02}.tpfbnd.dcx",
+                let path = crate::paths::map_environment_bundle(
                     area.get(..3)
                         .ok_or_else(|| invalid("environment package", 0, "invalid map family"))?,
-                    tier.word()
+                    area,
+                    state,
+                    tier.word(),
+                    part,
                 );
                 if archive.contains(&path) {
                     out.push(Package {

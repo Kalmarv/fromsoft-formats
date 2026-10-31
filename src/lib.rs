@@ -123,6 +123,7 @@ pub mod overworld;
 pub mod param;
 mod param_write;
 pub mod paramdef;
+pub mod paths;
 pub mod regulation;
 pub mod save;
 

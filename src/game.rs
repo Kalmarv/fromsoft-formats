@@ -57,7 +57,7 @@ impl Game {
     pub fn object_model(self, model: &str) -> crate::Result<ObjectModel> {
         match self {
             Game::Sekiro => Ok(ObjectModel {
-                binder: format!("/obj/{model}.objbnd.dcx"),
+                binder: crate::paths::object(model),
                 flver: format!("{model}.flver"),
                 collision: vec![CollisionSource {
                     binder: None,
@@ -111,10 +111,10 @@ impl Game {
     /// for what the high one lacks. A character may have none (the binder is not in the archives).
     pub fn character_texture_binders(self, owner: &str) -> Vec<String> {
         match self {
-            Game::Sekiro => vec![format!("/chr/{owner}.texbnd.dcx")],
+            Game::Sekiro => vec![crate::paths::character_texture(owner)],
             Game::EldenRing => vec![
-                format!("/chr/{owner}_h.texbnd.dcx"),
-                format!("/chr/{owner}_l.texbnd.dcx"),
+                crate::paths::character_texture_form(owner, "h"),
+                crate::paths::character_texture_form(owner, "l"),
             ],
         }
     }
