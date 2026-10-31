@@ -1,4 +1,4 @@
-//! Elden Ring environment-package identities and the MSBE box fields they accompany.
+//! Environment-package identities and the MSBS/MSBE box fields they accompany.
 //! These describe stored data; selecting quality, states and their blend is the caller's operation.
 use crate::{
     Archive, Result,
@@ -270,9 +270,109 @@ pub fn box_fields(layout: &MapLayout, region: &Region) -> Result<Option<BoxField
     }))
 }
 
+/// Stored MSBS environment-effect-box fields; their values do not select a package or a render policy.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct IrradianceBoxFields {
+    /// The stored display distance at type-data +0.
+    pub display_distance: f32,
+    /// The stored fade distance at type-data +4.
+    pub fade_distance: f32,
+    /// The stored priority byte at type-data +9.
+    pub priority: u8,
+    /// The complete terms word at type-data +0x24, including unrecognised values and bits.
+    pub terms: i32,
+    /// The stored diffuse intensity at type-data +0x28.
+    pub diffuse_intensity: f32,
+    /// The stored specular intensity at type-data +0x2c.
+    pub specular_intensity: f32,
+}
+
+/// Decode MSBS effect-box fields without interpreting the terms word. Other generations/types return `None`.
+pub fn irradiance_box_fields(layout: &MapLayout, region: &Region) -> Result<Option<IrradianceBoxFields>> {
+    if layout.generation.name != Generation::SEKIRO.name
+        || region.type_name != Some("environment_map_effect_box")
+    {
+        return Ok(None);
+    }
+    let view = View {
+        data: &region.type_data,
+        format: "MSBS environment box",
+        be: false,
+        base: 0,
+    };
+    view.slice(0, 0x34)?;
+    Ok(Some(IrradianceBoxFields {
+        display_distance: f32::from_bits(view.u32(0)?),
+        fade_distance: f32::from_bits(view.u32(4)?),
+        priority: view.u8(9)?,
+        terms: view.u32(0x24)? as i32,
+        diffuse_intensity: f32::from_bits(view.u32(0x28)?),
+        specular_intensity: f32::from_bits(view.u32(0x2c)?),
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn msbs_environment_fields_keep_unknown_terms_and_do_not_alias_msbe() {
+        let mut data = vec![0; 0x34];
+        for (at, value) in [(0, 41.5f32), (4, 3.25), (0x28, 0.625), (0x2c, 1.75)] {
+            data.get_mut(at..at + 4)
+                .expect("owned fixture")
+                .copy_from_slice(&value.to_le_bytes());
+        }
+        *data.get_mut(9).expect("owned fixture") = 13;
+        data.get_mut(0x24..0x28)
+            .expect("owned fixture")
+            .copy_from_slice(&258i32.to_le_bytes());
+        let mut region = Region {
+            index: 0,
+            name: "Env_Box007".into(),
+            type_code: 17,
+            index_in_type: 0,
+            number: 0,
+            type_name: Some("environment_map_effect_box"),
+            shape: crate::msb::RegionShape::Box {
+                width: 2.,
+                height: 4.,
+                depth: 6.,
+            },
+            position: [0.; 3],
+            rotation_degrees: [0.; 3],
+            entity_id: -1,
+            type_data: data,
+            extra_map: None,
+        };
+        let mut layout = MapLayout {
+            generation: &Generation::SEKIRO,
+            models: Vec::new(),
+            parts: Vec::new(),
+            map_offsets: Vec::new(),
+            sections: Vec::new(),
+        };
+        assert_eq!(
+            irradiance_box_fields(&layout, &region).expect("fields"),
+            Some(IrradianceBoxFields {
+                display_distance: 41.5,
+                fade_distance: 3.25,
+                priority: 13,
+                terms: 258,
+                diffuse_intensity: 0.625,
+                specular_intensity: 1.75,
+            })
+        );
+        assert!(box_fields(&layout, &region).expect("other generation").is_none());
+        layout.generation = &Generation::ELDEN_RING;
+        assert!(
+            irradiance_box_fields(&layout, &region)
+                .expect("other generation")
+                .is_none()
+        );
+        layout.generation = &Generation::SEKIRO;
+        region.type_data.truncate(0x33);
+        assert!(irradiance_box_fields(&layout, &region).is_err());
+    }
     #[test]
     fn msbe_environment_box_fields_preserve_signed_override_and_scales() {
         let mut data = vec![0; 0x2c];
