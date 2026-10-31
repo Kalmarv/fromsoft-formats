@@ -166,7 +166,7 @@ mod tests {
             data_version: 4,
             unk06: 1,
             row_size: 96,
-            rows: vec![fromsoft_formats::param::Row {
+            rows: vec![crate::param::Row {
                 id: 10300,
                 name: None,
                 data: bytes.clone(),
