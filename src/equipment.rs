@@ -542,4 +542,4 @@ mod tests {
 }
 
 /// The player model and shared animation family used by the installed initializer/protector records.
-pub const PLAYER_CHARACTER:&str="c0000";
+pub const PLAYER_CHARACTER: &str = "c0000";
