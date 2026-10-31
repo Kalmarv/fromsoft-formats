@@ -8,7 +8,7 @@
 //!
 //! Arguments as `list_binder`'s, then the map (`m11_01_00_00`) and a case-insensitive pattern the material's name or MTD
 //! path contains. The layout is `/map/mapstudio/<map>.msb.dcx`; a map piece's model `mNNNNNN` is the binder
-//! `/map/<map>/<map>_NNNNNN.mapbnd.dcx`.
+//! `<game map folder>/<map>_NNNNNN.mapbnd.dcx`; Elden Ring's map folder also includes its area group.
 #![allow(unsafe_code, reason = "opens the Oodle library the caller names")]
 
 use fromsoft_formats::flver::Model;
@@ -45,7 +45,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let Some(digits) = model.name.strip_prefix('m').filter(|d| d.len() == 6) else {
             continue;
         };
-        let path = format!("/map/{map}/{map}_{digits}.mapbnd.dcx");
+        let path = format!("{}/{map}_{digits}.mapbnd.dcx", game.map_folder(map)?);
         let Ok(bytes) = install.read(&path, &decoder) else {
             unread += 1;
             continue;
