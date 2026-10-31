@@ -13,21 +13,32 @@ pub const TRACE_SLOTS: usize = 8;
 /// Byte locations of the supported `EquipParamWeapon` fields.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WeaponLayout {
+    /// Exact supported row width in bytes.
     pub size: usize,
+    /// `equipModelId`, a u16.
     pub model: usize,
+    /// `wepmotionCategory`, a u8.
     pub motion_category: usize,
+    /// `absorpParamId`, an s32.
     pub hold_row: usize,
+    /// `spAtkcategory`, a u16 in the ER layout; not read in Sekiro's layout.
     pub sp_attack: Option<usize>,
+    /// First of eight consecutive s32 effect/head/tail triples.
     pub traces: usize,
 }
 
 /// Byte locations of the supported `WepAbsorpPosParam` fields.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HoldLayout {
+    /// Exact supported row width in bytes.
     pub size: usize,
+    /// First model's five consecutive s16 values: right, left, both, left hang, right hang.
     pub first: usize,
+    /// Number of model blocks stored by the supported layout.
     pub models: usize,
+    /// First s16 in the separate, model-ordered `leftBoth` array.
     pub left_both: usize,
+    /// First display-position byte, six per model; absent from Sekiro's layout.
     pub shown: Option<usize>,
 }
 
@@ -74,19 +85,28 @@ pub fn layouts(game: Game) -> (WeaponLayout, HoldLayout) {
 /// One stored `traceSfxId`, `traceDmyIdHead`, `traceDmyIdTail` triple.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct Trace {
+    /// `traceSfxId`, including nonpositive values that name no effect.
     pub effect: i32,
+    /// `traceDmyIdHead`, as stored.
     pub head: i32,
+    /// `traceDmyIdTail`, as stored.
     pub tail: i32,
 }
 
 /// Supported fields of one weapon row; even trace slots that name no effect are retained.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct WeaponRow {
+    /// The PARAM row identifier.
     pub row: i32,
+    /// `equipModelId`.
     pub model: u16,
+    /// `wepmotionCategory`.
     pub motion_category: u8,
+    /// `absorpParamId`, naming a hold-parameter row.
     pub hold_row: i32,
+    /// `spAtkcategory` where the supported layout reads it.
     pub sp_attack_category: Option<u16>,
+    /// All eight trace slots in stored order, without filtering inactive effects.
     pub traces: [Trace; TRACE_SLOTS],
 }
 
@@ -138,16 +158,22 @@ impl WeaponLayout {
     }
 }
 
-/// Stored `dispPosType` meaning. Unknown values survive as their original byte.
+/// Stored `dispPosType` meaning. The names follow the stock slots' dummy associations and observed held models;
+/// they do not establish model visibility or attachment fallback. Unknown values survive as their original byte.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum DisplayPosition {
+    /// Stored 0: associated with right-hand polygons.
     RightHand,
+    /// Stored 1: associated with left-hand polygons.
     LeftHand,
+    /// Stored 3: associated with polygons at which models hang on the body.
     Body,
+    /// A stored byte outside the three named values.
     Other(u8),
 }
 
 impl DisplayPosition {
+    /// Name the observed values, retaining every other byte unchanged.
     pub fn of(value: u8) -> Self {
         match value {
             0 => Self::RightHand,
@@ -161,18 +187,26 @@ impl DisplayPosition {
 /// One hold field, preserving its signed dummy value. No socket fallback or visibility is inferred.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct Hold {
+    /// The signed dummy-polygon reference, including zero and negative sentinels.
     pub dummy: i16,
+    /// ER's associated display-position field; the Sekiro layout has none.
     pub shown: Option<DisplayPosition>,
 }
 
 /// Six authored ways to hold one model, in model order in the returned table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct Holds {
+    /// `right_<model>` and its display-position byte.
     pub right: Hold,
+    /// `left_<model>` and its display-position byte.
     pub left: Hold,
+    /// `both_<model>` and its display-position byte.
     pub both: Hold,
+    /// `leftHang_<model>` and its display-position byte.
     pub left_hang: Hold,
+    /// `rightHang_<model>` and its display-position byte.
     pub right_hang: Hold,
+    /// `leftBoth_<model>` and its display-position byte.
     pub left_both: Hold,
 }
 
