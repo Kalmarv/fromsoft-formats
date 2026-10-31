@@ -110,6 +110,7 @@ pub mod gparam_events;
 pub mod gparam_params;
 mod keys;
 pub mod mapid;
+pub mod material_events;
 pub mod matbin;
 mod matbin_write;
 pub mod messages;
