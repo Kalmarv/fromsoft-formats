@@ -5,6 +5,7 @@
 mod channel;
 pub mod gx;
 mod gx_items;
+pub mod gxmd;
 
 mod encode;
 mod vertex;
