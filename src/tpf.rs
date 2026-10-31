@@ -66,7 +66,7 @@ impl PixelFamily {
 }
 
 /// What a texture is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum TextureKind {
     /// A 2D image (stored kind 0).
     Image2D,
@@ -121,10 +121,64 @@ pub struct Package {
     /// The textures, in file order.
     pub textures: Vec<Texture>,
 }
+/// A checked package borrowing its DDS bytes; useful for metadata inspection without payload copies.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageView<'a> {
+    /// The package's flags as stored.
+    pub flags: u8,
+    /// The names' encoding as stored (1: UTF-16, else ASCII).
+    pub encoding: u8,
+    /// Zero bytes between the last name and the first DDS file: none in 288,920 of the 288,921 packages of the
+    /// installs, 272 in Sekiro's `/font/dbgfont14h.tpf.dcx`.
+    pub names_padding: usize,
+    /// The textures, in file order.
+    pub textures: Vec<TextureView<'a>>,
+}
+/// A checked texture borrowing its DDS bytes; names and optional metadata are owned.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextureView<'a> {
+    /// The texture's name as stored.
+    pub name: String,
+    /// The stored format code.
+    pub format: u8,
+    /// What the texture is.
+    pub kind: TextureKind,
+    /// The stored mipmap count.
+    pub mipmaps: u8,
+    /// The texture's flags byte as stored: 0 or 1, or 0x80 on Elden Ring's environment-probe packages (every one of the
+    /// 221,796 textures of the `*_envmap_*_middle_*.tpfbnd.dcx` binders). The reader keeps the byte and assigns it no meaning.
+    pub flags: u8,
+    /// Its optional extra data.
+    pub extra: Option<Extra>,
+    /// The DDS file, complete, starting with `DDS `.
+    pub dds: &'a [u8],
+}
 impl Package {
     /// Read a decompressed `.tpf`. Counts, offsets and sizes are bounded by the file, every payload must be a DDS file, and
     /// every byte must be accounted for (up to 15 zero bytes at the end).
     pub fn read(data: &[u8]) -> Result<Self> {
+        let view = Self::view(data)?;
+        Ok(Self {
+            flags: view.flags,
+            encoding: view.encoding,
+            names_padding: view.names_padding,
+            textures: view
+                .textures
+                .into_iter()
+                .map(|t| Texture {
+                    name: t.name,
+                    format: t.format,
+                    kind: t.kind,
+                    mipmaps: t.mipmaps,
+                    flags: t.flags,
+                    extra: t.extra,
+                    dds: t.dds.to_vec(),
+                })
+                .collect(),
+        })
+    }
+    /// Validate the complete package while borrowing every DDS payload instead of allocating copies.
+    pub fn view(data: &[u8]) -> Result<PackageView<'_>> {
         let v = View {
             data,
             format: "TPF",
@@ -209,14 +263,14 @@ impl Package {
             spans.push((name, end.saturating_sub(name)));
             names_end = names_end.max(end);
             budget.charge(offset, size)?;
-            let dds = v.slice(offset, size)?.to_vec();
+            let dds = v.slice(offset, size)?;
             if !dds.starts_with(b"DDS ") {
                 return Err(invalid("TPF", offset, "PC texture is not DDS"));
             }
             spans.push((offset, size));
             payload_start = Some(payload_start.map_or(offset, |first| first.min(offset)));
             payload_end = payload_end.max(v.at(offset, size)?);
-            textures.push(Texture {
+            textures.push(TextureView {
                 name: text,
                 format,
                 kind,
@@ -244,7 +298,7 @@ impl Package {
             return Err(invalid("TPF", logical_end, "trailing bytes"));
         }
         coverage(&v, spans, logical_end, usize::MAX)?;
-        Ok(Self {
+        Ok(PackageView {
             flags,
             encoding,
             names_padding: first.saturating_sub(names_end),
@@ -270,6 +324,29 @@ mod tests {
         assert_eq!(PixelFamily::of_code(9), Some(PixelFamily::B8G8R8A8));
         assert_eq!(PixelFamily::of_code(105), Some(PixelFamily::R8G8B8A8));
         assert!(PixelFamily::Bc7.is_compressed() && !PixelFamily::R8G8B8A8.is_compressed());
+    }
+
+    #[test]
+    fn metadata_view_borrows_dds_and_keeps_the_owned_read_identical() {
+        let data = package(0);
+        let view = Package::view(&data).expect("borrowed package");
+        let texture = view.textures.first().expect("one texture");
+        assert_eq!(
+            texture.dds.as_ptr(),
+            data.get(38..46).expect("stored DDS range").as_ptr()
+        );
+        let owned = Package::read(&data).expect("owned package");
+        let t = owned.textures.first().expect("one texture");
+        assert_eq!(
+            (
+                texture.name.as_str(),
+                texture.format,
+                texture.kind,
+                texture.mipmaps,
+                texture.dds
+            ),
+            (t.name.as_str(), t.format, t.kind, t.mipmaps, t.dds.as_slice())
+        );
     }
 
     /// A package of one ASCII-named texture whose descriptor carries `texture_flags`; its "DDS" is a stub, since only the

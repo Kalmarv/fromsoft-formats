@@ -8,6 +8,74 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
+/// A member's retained name and texture header, with no DDS payload allocation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct MemberHeader {
+    /// The BND member path.
+    pub member: String,
+    /// The TPF texture name.
+    pub texture: String,
+    /// Parsed group, state and coefficient identity.
+    pub identity: TextureIdentity,
+    /// The TPF format byte.
+    pub format: u8,
+    /// The TPF texture shape.
+    pub kind: crate::tpf::TextureKind,
+    /// The TPF stored mipmap count.
+    pub mipmaps: u8,
+}
+
+/// Metadata of one authored environment package; heavy texture bytes are not retained.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PackageInventory {
+    /// The package's archive identity.
+    pub package: Package,
+    /// Member headers, in binder/TPF order.
+    pub members: Vec<MemberHeader>,
+    /// Sum of the decompressed binder member lengths, for bounded-memory accounting.
+    pub member_bytes: usize,
+}
+
+/// Inspect one binder at a time, retaining only member names and headers. The outer DCX must be decompressed,
+/// but no DDS bytes are copied or kept in the returned catalog. No tier or state is selected.
+pub fn inventory(
+    archive: &Archive,
+    decoder: &crate::dcx::Decoder<'_>,
+    packages: &[Package],
+) -> Result<Vec<PackageInventory>> {
+    let mut out = Vec::new();
+    for package in packages {
+        let binder = crate::Binder::read(&archive.read(&package.path, decoder)?, decoder)?;
+        let mut members = Vec::new();
+        let mut member_bytes = 0usize;
+        for member in binder.files {
+            member_bytes = member_bytes
+                .checked_add(member.bytes.len())
+                .ok_or_else(|| invalid("environment catalog", 0, "member length overflow"))?;
+            for texture in crate::tpf::Package::view(&member.bytes)?.textures {
+                let identity = texture_identity(&texture.name, &package.area)?;
+                if identity.state != package.state {
+                    return Err(invalid("environment catalog", 0, "package/member state mismatch"));
+                }
+                members.push(MemberHeader {
+                    member: member.name.clone(),
+                    texture: texture.name,
+                    identity,
+                    format: texture.format,
+                    kind: texture.kind,
+                    mipmaps: texture.mipmaps,
+                });
+            }
+        }
+        out.push(PackageInventory {
+            package: package.clone(),
+            members,
+            member_bytes,
+        });
+    }
+    Ok(out)
+}
+
 /// Quality word stored in an environment binder's path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
