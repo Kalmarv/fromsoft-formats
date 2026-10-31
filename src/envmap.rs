@@ -12,11 +12,15 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Tier {
+    /// The `high` package word.
     High,
+    /// The `middle` package word.
     Middle,
+    /// The `low` package word.
     Low,
 }
 impl Tier {
+    /// The stored lower-case path word.
     pub fn word(self) -> &'static str {
         match self {
             Self::High => "high",
@@ -29,10 +33,15 @@ impl Tier {
 /// One installed package identity; a state number is not an hour.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Package {
+    /// Full map identity, such as `m10_00_00_00`.
     pub area: String,
+    /// The two-decimal package state number.
     pub state: u8,
+    /// The stored quality tier.
     pub tier: Tier,
+    /// The final two-decimal binder part number.
     pub part: u8,
+    /// The complete archive path.
     pub path: String,
 }
 
@@ -48,7 +57,8 @@ pub fn packages(archive: &Archive, area: &str) -> Result<Vec<Package>> {
             for part in 0..100 {
                 let path = format!(
                     "/map/{}/{area}/{area}_envmap_{state:02}_{}_{part:02}.tpfbnd.dcx",
-                    &area[..3],
+                    area.get(..3)
+                        .ok_or_else(|| invalid("environment package", 0, "invalid map family"))?,
                     tier.word()
                 );
                 if archive.contains(&path) {
@@ -69,11 +79,14 @@ pub fn packages(archive: &Archive, area: &str) -> Result<Vec<Package>> {
 /// A GIIV coefficient channel or a GILM reflection cube member identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct TextureIdentity {
+    /// The GIIV/GILM numeric group identity.
     pub group: u32,
+    /// The member's explicit package state number.
     pub state: u8,
     /// X/Y/Z/W are 0/1/2/3; a reflection cube has no coefficient channel.
     pub channel: Option<usize>,
 }
+/// Parse the GIIV/GILM member grammar without choosing a package state.
 pub fn texture_identity(name: &str, area: &str) -> Result<TextureIdentity> {
     let stem = name.strip_suffix(".dds").unwrap_or(name);
     let (rest, volume) = if let Some(s) = stem.strip_prefix(&format!("{area}_GIIV")) {
@@ -88,28 +101,38 @@ pub fn texture_identity(name: &str, area: &str) -> Result<TextureIdentity> {
         ));
     };
     let fields: Vec<_> = rest.split('_').collect();
-    if fields.len() != 3 || fields[1].len() != 2 {
+    let [group_text, state_text, channel_text] = fields.as_slice() else {
+        return Err(invalid(
+            "environment texture",
+            0,
+            "expected group_state_channel identity",
+        ));
+    };
+    if state_text.len() != 2
+        || !state_text.bytes().all(|b| b.is_ascii_digit())
+        || !group_text.bytes().all(|b| b.is_ascii_digit())
+    {
         return Err(invalid(
             "environment texture",
             0,
             "expected group_state_channel identity",
         ));
     }
-    let group = fields[0]
+    let group = group_text
         .parse()
         .map_err(|_| invalid("environment texture", 0, "invalid group"))?;
-    let state = fields[1]
+    let state = state_text
         .parse()
         .map_err(|_| invalid("environment texture", 0, "invalid state"))?;
     let channel = if volume {
-        Some(match fields[2] {
+        Some(match *channel_text {
             "X" => 0,
             "Y" => 1,
             "Z" => 2,
             "W" => 3,
             _ => return Err(invalid("environment texture", 0, "invalid coefficient channel")),
         })
-    } else if fields[2] == "rem" {
+    } else if *channel_text == "rem" {
         None
     } else {
         return Err(invalid("environment texture", 0, "invalid reflection suffix"));
@@ -138,13 +161,18 @@ pub fn region_identity(name: &str, prefix: &str) -> Result<u32> {
 /// Established MSBE environment-effect-box type fields. Uninterpreted bytes remain in Region::type_data.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct BoxFields {
+    /// The stored fade distance at type-data +4, in map metres.
     pub fade_distance: f32,
+    /// The stored priority byte at type-data +9.
     pub priority: u8,
     /// Signed value at type data +0x0a; -1 leaves the authored default identity in effect.
     pub group_override: i16,
+    /// The stored reflection multiplier at type-data +0x24.
     pub specular_scale: f32,
+    /// The stored diffuse multiplier at type-data +0x28.
     pub diffuse_scale: f32,
 }
+/// Decode established MSBE effect-box fields; other generations/types return `None`.
 pub fn box_fields(layout: &MapLayout, region: &Region) -> Result<Option<BoxFields>> {
     if layout.generation.name != Generation::ELDEN_RING.name
         || region.type_name != Some("environment_map_effect_box")
