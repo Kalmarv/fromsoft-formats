@@ -539,10 +539,137 @@ pub fn hit_class_name(game: crate::Game, class: i32) -> Option<&'static str> {
     })
 }
 
+/// Named meanings retained alongside a triangle's authored HitMtrlParam ID. Unknown and unbound IDs are not discarded.
+/// These distinguish the game's material classes, not a destination's collision surface vocabulary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum HitMeaning {
+    /// Stone or rock, including underwater stone.
+    Stone,
+    /// Dirt, ash, leaves, mud or snow.
+    Earth,
+    /// Wood, bamboo, tree or tatami.
+    Wood,
+    /// Grass, straw or bush.
+    Grass,
+    /// Gravel.
+    Gravel,
+    /// Iron or bell.
+    Metal,
+    /// Sand.
+    Sand,
+    /// Roof tiles.
+    RoofTile,
+    /// Ice.
+    Ice,
+    /// Water whose class explicitly says walkable, including the non-swimming slope.
+    WalkableWater,
+    /// Diveable/swimming water in Sekiro, water in Elden Ring.
+    SwimmingWater,
+    /// Sekiro's empty class, distinct from Elden Ring's differently authored `None` row.
+    Empty,
+    /// Sekiro's cloud class.
+    Cloud,
+    /// A named class with no more specific supported surface meaning.
+    Other,
+    /// A nonnegative authored ID whose class has no known meaning.
+    Unknown,
+    /// No shape-key material binding (negative ID).
+    Unbound,
+}
+
+/// Interpret the class of an authored HitMtrlParam ID (the ID modulo 100), preserving game-specific numbering.
+/// Walkable water is distinct from swimming water: class 21 is walkable in Sekiro and water in Elden Ring.
+/// The original ID remains the caller's data; this function does not replace it with a default.
+pub fn hit_meaning(game: crate::Game, id: i32) -> HitMeaning {
+    use crate::Game;
+    use HitMeaning::*;
+    if id < 0 {
+        return Unbound;
+    }
+    let class = id % 100;
+    match (game, class) {
+        (Game::Sekiro, 1 | 46) | (Game::EldenRing, 2) => Stone,
+        (Game::Sekiro, 3 | 15 | 18 | 27 | 30 | 33 | 45) | (Game::EldenRing, 5 | 44) => Earth,
+        (Game::Sekiro, 4 | 7 | 8 | 28 | 32 | 47) | (Game::EldenRing, 4 | 8) => Wood,
+        (Game::Sekiro, 5 | 9 | 10 | 31 | 37 | 38) => Grass,
+        (Game::Sekiro, 6) => Gravel,
+        (Game::Sekiro, 11 | 19) | (Game::EldenRing, 11) => Metal,
+        (Game::Sekiro, 13) | (Game::EldenRing, 3) => Sand,
+        (Game::Sekiro, 16) => RoofTile,
+        (Game::Sekiro, 34) => Ice,
+        (Game::Sekiro, 21 | 35) => WalkableWater,
+        (Game::Sekiro, 22 | 36) | (Game::EldenRing, 21) => SwimmingWater,
+        (Game::Sekiro, 29) => Empty,
+        (Game::Sekiro, 40) => Cloud,
+        _ if hit_class_name(game, class).is_some() => Other,
+        _ => Unknown,
+    }
+}
+
+/// Meaning of the MSB collision part's filter byte; the raw byte remains available for reporting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum HitFilterMeaning {
+    /// Main physical map collision (Sekiro's filters 8 and 27; Elden Ring's filter 8).
+    Physical,
+    /// Another authored filter, retained rather than treated as main physical collision.
+    Other,
+}
+
+/// Name a stored collision filter in the game's own numbering, without selecting or loading a file.
+pub fn hit_filter_meaning(game: crate::Game, filter: u8) -> HitFilterMeaning {
+    match (game, filter) {
+        (crate::Game::Sekiro, 8 | 27) | (crate::Game::EldenRing, 8) => HitFilterMeaning::Physical,
+        _ => HitFilterMeaning::Other,
+    }
+}
+
+/// Named `motionType`; the dynamic interpretation is inferred from the positive masses of type 2 bodies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum MotionKind {
+    /// Stored type 0.
+    Static,
+    /// Stored type 1.
+    Keyframed,
+    /// Stored type 2, the bodies with positive mass.
+    Dynamic,
+    /// An unrecognised authored value; the caller retains the raw value.
+    Unknown,
+}
+
+/// Name a stored body motion value without changing its pose or inferring animation.
+pub fn motion_kind(value: u64) -> MotionKind {
+    match value {
+        0 => MotionKind::Static,
+        1 => MotionKind::Keyframed,
+        2 => MotionKind::Dynamic,
+        _ => MotionKind::Unknown,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::hit_class_name;
     use crate::Game;
+
+    #[test]
+    fn collision_meanings_keep_the_game_numbering_and_unknown_values() {
+        use super::{
+            HitFilterMeaning as F, HitMeaning as H, MotionKind as M, hit_filter_meaning, hit_meaning,
+            motion_kind,
+        };
+        assert_eq!(hit_meaning(Game::Sekiro, 21), H::WalkableWater);
+        assert_eq!(hit_meaning(Game::Sekiro, 22), H::SwimmingWater);
+        assert_eq!(hit_meaning(Game::Sekiro, 36), H::SwimmingWater);
+        assert_eq!(hit_meaning(Game::EldenRing, 21), H::SwimmingWater);
+        assert_eq!(hit_meaning(Game::Sekiro, 29), H::Empty);
+        assert_eq!(hit_meaning(Game::EldenRing, 0), H::Other);
+        assert_eq!(hit_meaning(Game::EldenRing, 99), H::Unknown);
+        assert_eq!(hit_meaning(Game::Sekiro, -1), H::Unbound);
+        assert_eq!(hit_filter_meaning(Game::Sekiro, 27), F::Physical);
+        assert_eq!(hit_filter_meaning(Game::EldenRing, 27), F::Other);
+        assert_eq!(motion_kind(2), M::Dynamic);
+        assert_eq!(motion_kind(99), M::Unknown);
+    }
 
     #[test]
     fn classes_are_named_as_the_community_names_the_rows() {

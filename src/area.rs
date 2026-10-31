@@ -13,7 +13,7 @@ pub fn light_bank(
     folder: &str,
     map: &str,
 ) -> Result<Option<LightBank>> {
-    match archive.read(&format!("{folder}/{map}_0000.btl.dcx"), decoder) {
+    match archive.read(&crate::paths::light_bank(folder, map), decoder) {
         Err(Error::Missing(_)) => Ok(None),
         Err(e) => Err(e),
         Ok(bytes) => LightBank::read(&bytes).map(Some),
@@ -28,15 +28,14 @@ pub fn edge_files(
     folder: &str,
     map: &str,
 ) -> Result<Option<Vec<(String, Edges)>>> {
-    let stem = format!("{folder}/{map}");
-    let header = match archive.read(&format!("{stem}.edgebhd"), decoder) {
+    let header = match archive.read(&crate::paths::edge_header(folder, map), decoder) {
         Err(Error::Missing(_)) => return Ok(None),
         Err(e) => return Err(e),
         Ok(header) => header,
     };
     let binder = Binder::read_split(
         &header,
-        &archive.read(&format!("{stem}.edgebdt"), decoder)?,
+        &archive.read(&crate::paths::edge_data(folder, map), decoder)?,
         decoder,
     )?;
     let mut files = Vec::new();
@@ -130,7 +129,7 @@ impl DrawParamId {
 
 /// The archive path of the draw-param file `stem` (`m11_01_0720`).
 pub fn draw_param_path(stem: &str) -> String {
-    format!("/param/drawparam/{stem}.gparam.dcx")
+    crate::paths::draw_param(stem)
 }
 
 /// The draw-param files the archive holds for `area`'s map, by stem, in ID order: every `<map>_<0000..9999>` of the first
