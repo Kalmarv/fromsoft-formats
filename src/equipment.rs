@@ -87,6 +87,41 @@ pub struct OutfitLayout {
 }
 
 impl OutfitLayout {
+    /// Decode the four protector references and stored sex byte without resolving any part spelling.
+    pub fn read_initializer(self, row: &Row) -> Result<InitializerRecord> {
+        let view = crate::bytes::View {
+            data: &row.data,
+            format: "CharaInitParam",
+            be: false,
+            base: 0,
+        };
+        let mut protectors = [0; 4];
+        for (index, value) in protectors.iter_mut().enumerate() {
+            *value = i32::from_le_bytes(view.u32(view.element(32, index, 4)?)?.to_le_bytes());
+        }
+        Ok(InitializerRecord {
+            id: row.id,
+            protectors,
+            sex: view.u8(SEX)?,
+        })
+    }
+
+    /// Decode the stored model, category and gender-mode fields; no archive candidate is chosen.
+    pub fn read_protector(self, row: &Row) -> Result<ProtectorRecord> {
+        let view = crate::bytes::View {
+            data: &row.data,
+            format: "EquipParamProtector",
+            be: false,
+            base: 0,
+        };
+        Ok(ProtectorRecord {
+            id: row.id,
+            model: view.u16(self.model)?,
+            category: view.u8(self.category)?,
+            gender: view.u8(self.gender)?,
+        })
+    }
+
     /// The layout of `game`'s outfit params (Paramdex's definitions as Smithbox ships them, container-rule offsets).
     pub const fn of(game: Game) -> OutfitLayout {
         match game {
@@ -105,6 +140,38 @@ impl OutfitLayout {
                 gender: 213,
             },
         }
+    }
+}
+
+/// Supported initializer fields, before any presentation or part-level selection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct InitializerRecord {
+    /// The initializer's PARAM identifier.
+    pub id: i32,
+    /// Head, body, arms and legs, in stored slot order; negative values name no row.
+    pub protectors: [i32; 4],
+    /// `npcPlayerSex`, retained as stored without assuming its meaning for every game.
+    pub sex: u8,
+}
+
+/// Supported protector fields, without selecting any binder spelling or form.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct ProtectorRecord {
+    /// The protector's PARAM identifier.
+    pub id: i32,
+    /// `equipModelId`.
+    pub model: u16,
+    /// `equipModelCategory`.
+    pub category: u8,
+    /// `equipModelGender`, including unknown values.
+    pub gender: u8,
+}
+
+impl InitializerRecord {
+    /// Stored protector references paired with their slot names; no negative sentinel is removed.
+    pub fn slots(self) -> [(&'static str, i32); 4] {
+        let [head, body, arms, legs] = self.protectors;
+        [("hd", head), ("bd", body), ("am", arms), ("lg", legs)]
     }
 }
 
@@ -421,6 +488,34 @@ pub fn character_mesh_count(archive: &Archive, decoder: &Decoder<'_>, id: &str) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typed_initializer_and_protector_fields_keep_negative_and_unknown_values() {
+        for game in [Game::Sekiro, Game::EldenRing] {
+            let init = initializer(game, 9000, 1, 1, 79113);
+            let prot = protector(game, 79113, 1379, 2, 255);
+            let layout = OutfitLayout::of(game);
+            let row = layout.read_initializer(&init.rows[0]).unwrap();
+            assert_eq!(row.protectors, [-1, 79113, -1, -1]);
+            assert_eq!(row.sex, 1);
+            assert_eq!(row.slots()[1], ("bd", 79113));
+            assert_eq!(
+                layout.read_protector(&prot.rows[0]).unwrap(),
+                ProtectorRecord {
+                    id: 79113,
+                    model: 1379,
+                    category: 2,
+                    gender: 255
+                }
+            );
+            let mut short = init.rows[0].clone();
+            short.data.truncate(35);
+            assert!(layout.read_initializer(&short).is_err());
+            let mut short = prot.rows[0].clone();
+            short.data.truncate(layout.gender);
+            assert!(layout.read_protector(&short).is_err());
+        }
+    }
 
     /// A one-row param of `game`'s layout: `CHARACTER_INIT_PARAM` or `EQUIP_PARAM_PROTECTOR_ST`.
     fn param(game: Game, init: bool, id: i32, data: impl FnOnce(&mut Vec<u8>)) -> Param {
