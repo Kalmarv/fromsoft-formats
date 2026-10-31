@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.0 (2026-10-30)
+
+- Breaking: `gparam::Gparam` gains the public `extras` field, so exhaustive struct literals must initialize it. The reader retains the stored group indices, ordered signed value-ID lists, and the raw version-5-and-later trailing word as `ParamExtra`; `Gparam::extra` returns the first matching group record. Empty and absent records remain distinct. All counts and offsets are checked. The existing `Unread::extras` field is now zero for supported versions because the records are decoded. Elden Ring consults these lists when choosing stored versus reference values; the reader does not infer layer activation or composition from membership. Installed-data checks compare both Ashina Castle tables against independently read extra records, and the time-axis census reads every draw-param file in both supported installs.
+
 ## 0.13.0 (2026-10-30)
 
 - Breaking: `fxr::actions::WindForce` names thirteen parameters from what Elden Ring does with them: `distance_falloff`, `distance_falloff_radius`, `local`, `wave_length`, `wave_offset`, `weight`, `gust`, `gust_length`, `gust_scale`, `gust_offset`, `gust_rise`, `gust_fall` and `gust_rest`. The corresponding names returned by `params` change as well. `TRACED_PARAMS` records each new name and the fxr project's name; `library_name` maps a parameter name back to the project's. The real-data wind test checks the named values against the force field built by the game.
