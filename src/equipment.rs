@@ -204,6 +204,149 @@ pub struct OutfitParts {
     pub chosen_by_presence: Vec<PresenceChoice>,
 }
 
+/// One possible binder spelling. Presence is a file fact, not a preference.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct PartCandidate {
+    /// Part stem, without its binder extension or archive folder.
+    pub name: String,
+    /// Stored-mode-permitted spelling (`m`, `f`, or `a`).
+    pub gender: String,
+    /// Whether this is the `_l` spelling rather than the unsuffixed spelling.
+    pub low_suffix: bool,
+    /// Whether the supplied archive inventory contains the binder.
+    pub present: bool,
+}
+
+/// All supported spellings of one authored protector slot, without selecting any form.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct OutfitSlotCandidates {
+    /// Authored protector row identifier.
+    pub protector: i32,
+    /// Slot prefix (`hd`, `bd`, `am`, or `lg`).
+    pub slot: String,
+    /// Prefix established by the slot/category pair (Sekiro's face may be `fc`).
+    pub prefix: String,
+    /// Stored model identifier.
+    pub model: u16,
+    /// Stored gender mode.
+    pub gender_mode: u8,
+    /// Whether the supported mode leaves several gender spellings possible.
+    pub gender_by_presence: bool,
+    /// Every supported gender and level spelling, including absent files.
+    pub candidates: Vec<PartCandidate>,
+}
+
+/// Initializer equipment facts and file inventory, before presentation and level policy.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct OutfitCandidates {
+    /// The authored initializer identifier.
+    pub initializer: i32,
+    /// Nonempty protector slots, in initializer order.
+    pub slots: Vec<OutfitSlotCandidates>,
+    /// Unsupported fields or dangling row references; absence or ambiguity is left to a selection pass.
+    pub unresolved: Vec<String>,
+}
+
+/// Read every supported spelling and record its presence. No gender or level suffix is preferred.
+pub fn outfit_candidates(
+    game: Game,
+    initializers: &Param,
+    protectors: &Param,
+    id: i32,
+    has: impl Fn(&str) -> bool,
+) -> Result<OutfitCandidates> {
+    let layout = OutfitLayout::of(game);
+    if initializers.param_type != "CHARACTER_INIT_PARAM"
+        || (initializers.data_version, initializers.row_size) != layout.initializer
+        || protectors.param_type != "EQUIP_PARAM_PROTECTOR_ST"
+        || (protectors.data_version, protectors.row_size) != layout.protector
+    {
+        return Err(invalid(
+            "NPC outfit",
+            0,
+            format!(
+                "only {}'s CHARACTER_INIT_PARAM version {} with rows of {} bytes and EQUIP_PARAM_PROTECTOR_ST version {} with rows of {} are established",
+                game.name(),
+                layout.initializer.0,
+                layout.initializer.1,
+                layout.protector.0,
+                layout.protector.1
+            ),
+        ));
+    }
+    let init = layout.read_initializer(row(initializers, "CharaInitParam", id)?)?;
+    let sex = if game == Game::Sekiro {
+        match init.sex {
+            0 => "m",
+            1 => "f",
+            _ => return Err(invalid("NPC outfit", SEX, "unknown npcPlayerSex")),
+        }
+    } else {
+        ""
+    };
+    let mut out = OutfitCandidates {
+        initializer: id,
+        ..Default::default()
+    };
+    for (slot, equipped) in init.slots() {
+        if equipped < 0 {
+            continue;
+        }
+        let Some(row) = protectors.rows.iter().find(|row| row.id == equipped) else {
+            out.unresolved.push(format!(
+                "protector {equipped}: EquipParamProtector has no such row"
+            ));
+            continue;
+        };
+        let protector = layout.read_protector(row)?;
+        let Some(prefix) = part_prefix(game, slot, protector.category) else {
+            out.unresolved.push(format!(
+                "protector {equipped}: equipModelCategory {} is not a {slot} part",
+                protector.category
+            ));
+            continue;
+        };
+        let (genders, by_presence): (&[&str], bool) = match (game, protector.gender) {
+            (Game::Sekiro, 3) => (std::slice::from_ref(&sex), false),
+            (Game::Sekiro, 4) => (&["a"], false),
+            (Game::Sekiro, 0 | 1) => (&["m", "f", "a"], true),
+            (Game::EldenRing, 1 | 4) => (&["m"], false),
+            (Game::EldenRing, 2) => (&["f"], false),
+            (Game::EldenRing, 3) => (&["m", "f"], true),
+            _ => {
+                out.unresolved.push(format!(
+                    "protector {equipped}: unknown equipModelGender {}",
+                    protector.gender
+                ));
+                continue;
+            }
+        };
+        let mut candidates = Vec::new();
+        for gender in genders {
+            for (suffix, low_suffix) in [("_l", true), ("", false)] {
+                let name = format!("{prefix}_{gender}_{:04}{suffix}", protector.model);
+                let present = has(&name);
+                candidates.push(PartCandidate {
+                    name,
+                    gender: (*gender).to_owned(),
+                    low_suffix,
+                    present,
+                });
+            }
+        }
+        out.slots.push(OutfitSlotCandidates {
+            protector: equipped,
+            slot: slot.to_owned(),
+            prefix: prefix.to_owned(),
+            model: protector.model,
+            gender_mode: protector.gender,
+            gender_by_presence: by_presence,
+            candidates,
+        });
+    }
+    Ok(out)
+}
+
 /// The parts of initializer `id` of `initializers`, whose protectors are rows of `protectors`, for `game`; `has` says
 /// whether the archive holds the part binder of a name (`bd_m_9040_l`). The two params must be the layout of
 /// [`OutfitLayout::of`]. A slot whose protector's category is not the slot's, or whose binder the archive lacks, is
