@@ -93,6 +93,7 @@ pub mod edge;
 mod elden;
 pub mod emedf;
 pub mod emevd;
+pub mod envmap;
 mod emevd_write;
 pub mod equipment;
 pub mod eventflag;
