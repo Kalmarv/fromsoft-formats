@@ -450,6 +450,9 @@ pub fn character_mesh_count(archive: &Archive, decoder: &Decoder<'_>, id: &str) 
     Ok(meshes)
 }
 
+/// The player model and shared animation family used by the installed initializer/protector records.
+pub const PLAYER_CHARACTER: &str = "c0000";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -540,6 +543,3 @@ mod tests {
         }
     }
 }
-
-/// The player model and shared animation family used by the installed initializer/protector records.
-pub const PLAYER_CHARACTER:&str="c0000";
