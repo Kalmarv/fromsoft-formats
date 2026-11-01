@@ -15,6 +15,9 @@ use crate::{
     game::ArchivePair,
     invalid,
 };
+use primase_foundations::parallel::{Panicked, Threads};
+pub use primase_foundations::scan::Scanned;
+use primase_foundations::scan::{Extent, ExtentError, Options, scan};
 use std::{
     collections::BTreeMap,
     io::{Read, Seek, SeekFrom},
@@ -346,6 +349,82 @@ impl Archive {
     pub fn read(&self, path: &str, decoder: &Decoder<'_>) -> Result<Vec<u8>> {
         self.read_hash(self.hash(path), decoder)
     }
+    /// Every entry whose path hash `keep` accepts, each given to `visit` with the bytes [`Archive::read_hash`] returns
+    /// for it (decrypted, a DCX envelope decoded, stored padding kept) or the error it returns, on `threads` threads.
+    /// For a pass over many entries: the BDTs are read in their own order in large reads
+    /// ([`primase_foundations::scan`]) and each entry is decrypted and decoded on the thread that read it, where
+    /// [`Archive::read_hash`] per entry opens, seeks and reads in hash order. An entry stored without an envelope
+    /// reaches `visit` without a copy. Entries arrive in no particular order, each once. A panic in `visit` stops the
+    /// scan and is returned.
+    pub fn scan(
+        &self,
+        decoder: &Decoder<'_>,
+        threads: NonZeroUsize,
+        keep: impl Fn(u64) -> bool,
+        visit: impl Fn(u64, Result<&[u8]>) + Sync,
+    ) -> std::result::Result<Scanned, Panicked> {
+        // the BDT of each pair the wanted entries come from, as the scan's files
+        let mut files: Vec<PathBuf> = Vec::new();
+        let mut file_of: BTreeMap<u8, usize> = BTreeMap::new();
+        let mut hashes = Vec::new();
+        let mut extents = Vec::new();
+        for (&hash, e) in &self.entries {
+            if !keep(hash) {
+                continue;
+            }
+            let file = match file_of.get(&e.shard) {
+                Some(&f) => f,
+                None => {
+                    let Some(pair) = self.pair(e.shard) else {
+                        visit(hash, Err(invalid("BHD5", 0, "entry from an unknown archive")));
+                        continue;
+                    };
+                    files.push(self.root.join(format!("{}.bdt", pair.stem)));
+                    let f = files.len().saturating_sub(1);
+                    file_of.insert(e.shard, f);
+                    f
+                }
+            };
+            hashes.push(hash);
+            extents.push(Extent {
+                file,
+                offset: e.entry.offset,
+                len: e.entry.padded_size,
+            });
+        }
+        scan(&files, &extents, &Options::new(Threads(threads)), |i, stored| {
+            let (Some(&hash), Some(e)) = (hashes.get(i), hashes.get(i).and_then(|h| self.entries.get(h)))
+            else {
+                return;
+            };
+            let bytes = match stored {
+                Ok(b) => b,
+                Err(err) => return visit(hash, Err(stored_error(err))),
+            };
+            if let Err(err) = e.entry.decrypt(bytes) {
+                return visit(hash, Err(err));
+            }
+            if bytes.starts_with(b"DCX\0") {
+                match decoder.decode_if_dcx(bytes) {
+                    Ok(decoded) => visit(hash, Ok(&decoded)),
+                    Err(err) => visit(hash, Err(err)),
+                }
+            } else {
+                visit(hash, Ok(bytes));
+            }
+        })
+    }
+}
+
+/// A scan's refusal of an entry's stored bytes as the error [`Archive::read_stored`] gives for it: an I/O error, an
+/// entry past the end of its BDT as an unexpected end of file.
+fn stored_error(e: ExtentError) -> crate::Error {
+    let kind = match &e {
+        ExtentError::Io { source, .. } => source.kind(),
+        ExtentError::PastEnd { .. } => std::io::ErrorKind::UnexpectedEof,
+        ExtentError::NoFile { .. } => std::io::ErrorKind::NotFound,
+    };
+    crate::Error::Io(std::io::Error::new(kind, e.to_string()))
 }
 
 #[cfg(test)]
