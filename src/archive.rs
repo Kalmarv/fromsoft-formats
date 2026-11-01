@@ -363,10 +363,27 @@ impl Archive {
         keep: impl Fn(u64) -> bool,
         visit: impl Fn(u64, Result<&[u8]>) + Sync,
     ) -> std::result::Result<Scanned, Panicked> {
-        // the BDT of each pair the wanted entries come from, as the scan's files
+        self.scan_stored(threads, keep, |hash, stored| match stored {
+            Ok(bytes) if bytes.starts_with(b"DCX\0") => match decoder.decode_if_dcx(bytes) {
+                Ok(decoded) => visit(hash, Ok(&decoded)),
+                Err(err) => visit(hash, Err(err)),
+            },
+            stored => visit(hash, stored),
+        })
+    }
+    /// [`Archive::scan`] without the decoding: each entry's bytes as [`Archive::read_stored`] returns them (decrypted,
+    /// a DCX envelope kept, stored padding kept), for a pass that reads the envelopes itself.
+    pub fn scan_stored(
+        &self,
+        threads: NonZeroUsize,
+        keep: impl Fn(u64) -> bool,
+        visit: impl Fn(u64, Result<&[u8]>) + Sync,
+    ) -> std::result::Result<Scanned, Panicked> {
+        // the BDT of each pair the wanted entries come from, as the scan's files; the wanted entries in the order of
+        // their extents
         let mut files: Vec<PathBuf> = Vec::new();
         let mut file_of: BTreeMap<u8, usize> = BTreeMap::new();
-        let mut hashes = Vec::new();
+        let mut wanted = Vec::new();
         let mut extents = Vec::new();
         for (&hash, e) in &self.entries {
             if !keep(hash) {
@@ -385,7 +402,7 @@ impl Archive {
                     f
                 }
             };
-            hashes.push(hash);
+            wanted.push((hash, e));
             extents.push(Extent {
                 file,
                 offset: e.entry.offset,
@@ -393,24 +410,18 @@ impl Archive {
             });
         }
         scan(&files, &extents, &Options::new(Threads(threads)), |i, stored| {
-            let (Some(&hash), Some(e)) = (hashes.get(i), hashes.get(i).and_then(|h| self.entries.get(h)))
-            else {
-                return;
+            // `scan` names each extent by its index, and `wanted` holds their entries in the same order; any other
+            // index is a fault of the scan, which it returns as a panic
+            let Some(&(hash, e)) = wanted.get(i) else {
+                unreachable!("the scan named extent {i} of {}", wanted.len())
             };
             let bytes = match stored {
                 Ok(b) => b,
                 Err(err) => return visit(hash, Err(stored_error(err))),
             };
-            if let Err(err) = e.entry.decrypt(bytes) {
-                return visit(hash, Err(err));
-            }
-            if bytes.starts_with(b"DCX\0") {
-                match decoder.decode_if_dcx(bytes) {
-                    Ok(decoded) => visit(hash, Ok(&decoded)),
-                    Err(err) => visit(hash, Err(err)),
-                }
-            } else {
-                visit(hash, Ok(bytes));
+            match e.entry.decrypt(bytes) {
+                Ok(()) => visit(hash, Ok(bytes)),
+                Err(err) => visit(hash, Err(err)),
             }
         })
     }
