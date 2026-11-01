@@ -13,7 +13,6 @@ mod common;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-#[derive(Default)]
 struct Totals {
     files: usize,
     volumes: usize,
@@ -39,6 +38,52 @@ struct Totals {
     normals_not_against_the_cross_product: usize,
 }
 
+impl Default for Totals {
+    fn default() -> Self {
+        Self {
+            files: 0,
+            volumes: 0,
+            vertices: 0,
+            faces: 0,
+            children: BTreeMap::new(),
+            types_per_vertex: BTreeMap::new(),
+            // no density yet: any density narrows it
+            density_range: (f32::MAX, f32::MIN),
+            over_one: 0,
+            mask_differs: 0,
+            box_misses_a_vertex: 0,
+            two_children_fill: 0,
+            one_child_holds_more: 0,
+            zero_normals: 0,
+            non_unit_normals: 0,
+            normals_not_against_the_cross_product: 0,
+        }
+    }
+}
+
+impl common::Tally for Totals {
+    fn add(&mut self, other: Self) {
+        self.files += other.files;
+        self.volumes += other.volumes;
+        self.vertices += other.vertices;
+        self.faces += other.faces;
+        common::add_counts(&mut self.children, other.children);
+        common::add_counts(&mut self.types_per_vertex, other.types_per_vertex);
+        self.density_range = (
+            self.density_range.0.min(other.density_range.0),
+            self.density_range.1.max(other.density_range.1),
+        );
+        self.over_one += other.over_one;
+        self.mask_differs += other.mask_differs;
+        self.box_misses_a_vertex += other.box_misses_a_vertex;
+        self.two_children_fill += other.two_children_fill;
+        self.one_child_holds_more += other.one_child_holds_more;
+        self.zero_normals += other.zero_normals;
+        self.non_unit_normals += other.non_unit_normals;
+        self.normals_not_against_the_cross_product += other.normals_not_against_the_cross_product;
+    }
+}
+
 fn census(game: Game, data: inputs::Game) -> Result<Option<Totals>> {
     let (Some(archive), Some(dll), Some(names)) = (
         common::archive(game)?,
@@ -53,16 +98,12 @@ fn census(game: Game, data: inputs::Game) -> Result<Option<Totals>> {
         max_output: 1 << 30,
     };
     let names = NameDictionary::read_for(names, game)?;
-    let mut t = Totals {
-        density_range: (f32::MAX, f32::MIN),
-        ..Totals::default()
-    };
-    common::each_leaf(
+    let (_, t) = common::each_leaf(
         &archive,
         &names,
         &[".mapbnd.dcx", ".geombnd.dcx"],
         &decoder,
-        |label, bytes| {
+        |t: &mut Totals, label, bytes| {
             if !label.to_ascii_lowercase().ends_with(".grass") {
                 return Ok(());
             }

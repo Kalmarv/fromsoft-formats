@@ -103,6 +103,31 @@ struct Totals {
     water: usize,
 }
 
+impl common::Tally for Totals {
+    fn add(&mut self, other: Self) {
+        self.models += other.models;
+        self.materials += other.materials;
+        self.items += other.items;
+        common::add_counts(&mut self.by_item, other.by_item);
+        common::add_counts(&mut self.unnamed, other.unnamed);
+        for (slot, other) in [
+            (&mut self.emissive, other.emissive),
+            (&mut self.translucency, other.translucency),
+            (&mut self.albedo, other.albedo),
+        ] {
+            if other.0 > 0 {
+                if slot.0 == 0 {
+                    *slot = other;
+                } else {
+                    *slot = (slot.0 + other.0, slot.1.min(other.1), slot.2.max(other.2));
+                }
+            }
+        }
+        self.parallax += other.parallax;
+        self.water += other.water;
+    }
+}
+
 fn track(slot: &mut (usize, f32, f32), v: f32) {
     if slot.0 == 0 {
         slot.1 = v;
@@ -127,57 +152,62 @@ fn census(game: Game, data: inputs::Game) -> Result<Option<Totals>> {
         max_output: 1 << 30,
     };
     let names = NameDictionary::read_for(names, game)?;
-    let mut t = Totals::default();
-    common::each_leaf(&archive, &names, &SUFFIXES, &decoder, |label, bytes| {
-        if !bytes.starts_with(b"FLVER\0") {
-            return Ok(());
-        }
-        let model = Model::read(bytes).map_err(|e| format!("{label}: {e}"))?;
-        t.models += 1;
-        for m in &model.materials {
-            t.materials += 1;
-            for item in &m.gx {
-                t.items += 1;
-                let id = String::from_utf8_lossy(&item.id).into_owned();
-                match item.info() {
-                    Some(info) => {
-                        *t.by_item.entry(format!("{id}v{}", item.version)).or_default() += 1;
-                        let fields = item.fields().map_err(|e| format!("{label}: {id}: {e}"))?;
-                        assert!(
-                            fields.is_some_and(|f| f.len() <= info.words.len()),
-                            "{label}: {id}"
-                        );
-                    }
-                    None => {
-                        assert!(item.fields()?.is_none());
-                        *t.unnamed.entry(id).or_default() += 1;
+    let (_, t) = common::each_leaf(
+        &archive,
+        &names,
+        &SUFFIXES,
+        &decoder,
+        |t: &mut Totals, label, bytes| {
+            if !bytes.starts_with(b"FLVER\0") {
+                return Ok(());
+            }
+            let model = Model::read(bytes).map_err(|e| format!("{label}: {e}"))?;
+            t.models += 1;
+            for m in &model.materials {
+                t.materials += 1;
+                for item in &m.gx {
+                    t.items += 1;
+                    let id = String::from_utf8_lossy(&item.id).into_owned();
+                    match item.info() {
+                        Some(info) => {
+                            *t.by_item.entry(format!("{id}v{}", item.version)).or_default() += 1;
+                            let fields = item.fields().map_err(|e| format!("{label}: {id}: {e}"))?;
+                            assert!(
+                                fields.is_some_and(|f| f.len() <= info.words.len()),
+                                "{label}: {id}"
+                            );
+                        }
+                        None => {
+                            assert!(item.fields()?.is_none());
+                            *t.unnamed.entry(id).or_default() += 1;
+                        }
                     }
                 }
+                if let Some(v) = m.emissive_intensity()? {
+                    track(&mut t.emissive, v);
+                }
+                if let Some(v) = m.translucency_scale()? {
+                    track(&mut t.translucency, v);
+                }
+                if let Some(c) = m.albedo_colour()? {
+                    track(&mut t.albedo, c.multiplier);
+                    assert!(c.rgb.iter().all(|x| (0.0..=1.0).contains(x)), "{label}: {c:?}");
+                }
+                if let Some(p) = m.parallax()? {
+                    assert!(
+                        p.iter().all(|l| (l.offset, l.middle_height) == (0., 0.5)),
+                        "{label}: {p:?}"
+                    );
+                    t.parallax += 1;
+                }
+                if let Some(w) = m.water()? {
+                    assert_eq!(w.depth_fog_density, 1., "{label}");
+                    t.water += 1;
+                }
             }
-            if let Some(v) = m.emissive_intensity()? {
-                track(&mut t.emissive, v);
-            }
-            if let Some(v) = m.translucency_scale()? {
-                track(&mut t.translucency, v);
-            }
-            if let Some(c) = m.albedo_colour()? {
-                track(&mut t.albedo, c.multiplier);
-                assert!(c.rgb.iter().all(|x| (0.0..=1.0).contains(x)), "{label}: {c:?}");
-            }
-            if let Some(p) = m.parallax()? {
-                assert!(
-                    p.iter().all(|l| (l.offset, l.middle_height) == (0., 0.5)),
-                    "{label}: {p:?}"
-                );
-                t.parallax += 1;
-            }
-            if let Some(w) = m.water()? {
-                assert_eq!(w.depth_fog_density, 1., "{label}");
-                t.water += 1;
-            }
-        }
-        Ok(())
-    })?;
+            Ok(())
+        },
+    )?;
     Ok(Some(t))
 }
 

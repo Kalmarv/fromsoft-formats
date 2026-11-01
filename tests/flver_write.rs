@@ -341,42 +341,62 @@ fn round_trips(game: Game) -> Result<Option<(usize, usize, usize, usize)>> {
         max_output: 1 << 30,
     };
     let names = NameDictionary::read_for(names, game)?;
+    // each entry written back on the scan's threads; the totals, refusals and failures merged in hash order
+    let checked = common::scan_map(
+        &archive,
+        &decoder,
+        |hash| {
+            !names
+                .names
+                .get(&hash)
+                .and_then(|x| x.first())
+                .is_some_and(|n| n.ends_with("bdt"))
+        },
+        |hash, bytes| {
+            let mut seen = Totals::default();
+            let mut failures = Vec::new();
+            let id = format!("{}/{hash:016x}", archive.entries[&hash].shard);
+            let result = (|| -> Result<()> {
+                let bytes = bytes?;
+                if bytes.starts_with(b"BHF4") {
+                    let name = names
+                        .names
+                        .get(&hash)
+                        .and_then(|x| x.first())
+                        .ok_or("unnamed split binder")?;
+                    let payload = archive.read(&format!("{}bdt", &name[..name.len() - 3]), &decoder)?;
+                    for (i, f) in Binder::read_split(bytes, &payload, &decoder)?
+                        .files
+                        .iter()
+                        .enumerate()
+                    {
+                        visit(
+                            &f.bytes,
+                            &format!("{id}/s{i}"),
+                            &decoder,
+                            &mut seen,
+                            &mut failures,
+                            0,
+                        )?;
+                    }
+                } else {
+                    visit(bytes, &id, &decoder, &mut seen, &mut failures, 0)?;
+                }
+                Ok(())
+            })();
+            // an entry the container reader refuses has no FLVER to count
+            let refused = result.err().map(|e| format!("{id}: {e}"));
+            (seen, failures, refused)
+        },
+    )?;
     let mut seen = Totals::default();
     let mut failures = Vec::new();
-    for (&hash, entry) in &archive.entries {
-        let name = names.names.get(&hash).and_then(|x| x.first());
-        if name.is_some_and(|n| n.ends_with("bdt")) {
-            continue;
+    for (totals, failed, refused) in checked.into_values() {
+        if let Some(line) = refused {
+            println!("{line}");
         }
-        let id = format!("{}/{hash:016x}", entry.shard);
-        let result = (|| -> Result<()> {
-            let bytes = archive.read_hash(hash, &decoder)?;
-            if bytes.starts_with(b"BHF4") {
-                let name = name.ok_or("unnamed split binder")?;
-                let payload = archive.read(&format!("{}bdt", &name[..name.len() - 3]), &decoder)?;
-                for (i, f) in Binder::read_split(&bytes, &payload, &decoder)?
-                    .files
-                    .iter()
-                    .enumerate()
-                {
-                    visit(
-                        &f.bytes,
-                        &format!("{id}/s{i}"),
-                        &decoder,
-                        &mut seen,
-                        &mut failures,
-                        0,
-                    )?;
-                }
-            } else {
-                visit(&bytes, &id, &decoder, &mut seen, &mut failures, 0)?;
-            }
-            Ok(())
-        })();
-        if let Err(e) = result {
-            // an entry the container reader refuses has no FLVER to count
-            println!("{id}: {e}");
-        }
+        seen.add(&totals);
+        failures.extend(failed);
     }
     for f in failures.iter().take(40) {
         println!("FAIL {f}");
@@ -395,6 +415,15 @@ struct Totals {
     refused: usize,
     bones: usize,
     face_sets: usize,
+}
+
+impl Totals {
+    fn add(&mut self, other: &Self) {
+        self.models += other.models;
+        self.refused += other.refused;
+        self.bones += other.bones;
+        self.face_sets += other.face_sets;
+    }
 }
 
 fn visit(

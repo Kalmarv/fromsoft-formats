@@ -152,6 +152,16 @@ struct Words {
     by_field: std::collections::BTreeMap<&'static str, std::collections::BTreeMap<u32, usize>>,
 }
 
+impl common::Tally for Words {
+    fn add(&mut self, other: Self) {
+        self.banks += other.banks;
+        self.lights += other.lights;
+        for (field, values) in other.by_field {
+            common::add_counts(self.by_field.entry(field).or_default(), values);
+        }
+    }
+}
+
 impl Words {
     /// How many lights hold `value` in `field`.
     fn count(&self, field: &str, value: f32) -> usize {
@@ -191,39 +201,44 @@ fn tally(game: Game, data: inputs::Game) -> Result<Option<Words>> {
         max_output: 1 << 30,
     };
     let names = fromsoft_formats::NameDictionary::read_for(names, game)?;
-    let mut w = Words::default();
-    common::each_leaf(&archive, &names, &[".btl.dcx"], &decoder, |label, bytes| {
-        let bank = LightBank::read(bytes).map_err(|e| format!("{label}: {e}"))?;
-        w.banks += 1;
-        for l in &bank.lights {
-            w.lights += 1;
-            let mut add = |field: &'static str, bits: u32| {
-                *w.by_field.entry(field).or_default().entry(bits).or_default() += 1;
-            };
-            add("flicker_interval_min", l.flicker_interval[0].to_bits());
-            add("flicker_interval_max", l.flicker_interval[1].to_bits());
-            add("flicker_brightness", l.flicker_brightness.to_bits());
-            add("event_id", l.event_id as u32);
-            add("near_clip", l.near_clip.to_bits());
-            add("shadow_model_cull_flip", u32::from(l.shadow_model_cull_flip));
-            add("sharpness", l.sharpness.to_bits());
-            add("horizontal_angle", l.horizontal_angle.to_bits());
-            add("near_distance", l.near_distance.to_bits());
-            add("enable_distance", l.enable_distance.to_bits());
-            add("volume_density", l.volume_density.to_bits());
-            add("exposure_weight", l.exposure_weight.to_bits());
-            // the named words are not in the auxiliary map, and the words nobody names are
-            assert!(
-                [116, 120, 124, 128, 156, 164, 184, 188, 196, 208, 224]
-                    .iter()
-                    .all(|o| !l.auxiliary.contains_key(o))
-                    && l.auxiliary.contains_key(&152)
-                    && l.auxiliary.contains_key(&160),
-                "{label}"
-            );
-        }
-        Ok(())
-    })?;
+    let (_, w) = common::each_leaf(
+        &archive,
+        &names,
+        &[".btl.dcx"],
+        &decoder,
+        |w: &mut Words, label, bytes| {
+            let bank = LightBank::read(bytes).map_err(|e| format!("{label}: {e}"))?;
+            w.banks += 1;
+            for l in &bank.lights {
+                w.lights += 1;
+                let mut add = |field: &'static str, bits: u32| {
+                    *w.by_field.entry(field).or_default().entry(bits).or_default() += 1;
+                };
+                add("flicker_interval_min", l.flicker_interval[0].to_bits());
+                add("flicker_interval_max", l.flicker_interval[1].to_bits());
+                add("flicker_brightness", l.flicker_brightness.to_bits());
+                add("event_id", l.event_id as u32);
+                add("near_clip", l.near_clip.to_bits());
+                add("shadow_model_cull_flip", u32::from(l.shadow_model_cull_flip));
+                add("sharpness", l.sharpness.to_bits());
+                add("horizontal_angle", l.horizontal_angle.to_bits());
+                add("near_distance", l.near_distance.to_bits());
+                add("enable_distance", l.enable_distance.to_bits());
+                add("volume_density", l.volume_density.to_bits());
+                add("exposure_weight", l.exposure_weight.to_bits());
+                // the named words are not in the auxiliary map, and the words nobody names are
+                assert!(
+                    [116, 120, 124, 128, 156, 164, 184, 188, 196, 208, 224]
+                        .iter()
+                        .all(|o| !l.auxiliary.contains_key(o))
+                        && l.auxiliary.contains_key(&152)
+                        && l.auxiliary.contains_key(&160),
+                    "{label}"
+                );
+            }
+            Ok(())
+        },
+    )?;
     Ok(Some(w))
 }
 

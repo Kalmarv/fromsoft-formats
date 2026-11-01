@@ -55,7 +55,11 @@ impl Counts {
         self.speedtree_read += other.speedtree_read;
         for (key, n) in other.tallies {
             let total = self.tallies.entry(key).or_default();
-            *total = if key == FACE_SET_WORD_MAXIMUM { (*total).max(n) } else { *total + n };
+            *total = if key == FACE_SET_WORD_MAXIMUM {
+                (*total).max(n)
+            } else {
+                *total + n
+            };
         }
     }
 }
@@ -297,9 +301,7 @@ fn visit(
         return Err("nested binder limit".into());
     }
     if bytes.starts_with(b"FLVER\0") {
-        let want = expected
-            .get(id)
-            .ok_or_else(|| format!("unexpected FLVER {id}"))?;
+        let want = expected.get(id).ok_or_else(|| format!("unexpected FLVER {id}"))?;
         seen.push(id.to_owned());
         assert_eq!(sha(bytes), want["sha256"].as_str().ok_or("sha")?, "{id}");
         if let Some(theirs) = want.get("error") {

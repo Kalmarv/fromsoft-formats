@@ -210,6 +210,30 @@ fn every_shader_and_sampler_name_of_the_install() -> Result<()> {
     Ok(())
 }
 
+/// The models of the census, and the UV counts of their meshes by the stem of the shader each mesh's material binary
+/// names.
+#[derive(Default)]
+struct UvCounts {
+    /// UV counts and how many meshes have each, by shader stem.
+    observed: BTreeMap<String, BTreeMap<usize, usize>>,
+    models: usize,
+    speedtree: usize,
+    with_material: usize,
+    without_material: usize,
+}
+
+impl common::Tally for UvCounts {
+    fn add(&mut self, other: Self) {
+        for (stem, counts) in other.observed {
+            common::add_counts(self.observed.entry(stem).or_default(), counts);
+        }
+        self.models += other.models;
+        self.speedtree += other.speedtree;
+        self.with_material += other.with_material;
+        self.without_material += other.without_material;
+    }
+}
+
 /// The UV attributes a mesh's vertices carry (all the same on one mesh), none for a mesh without vertices.
 fn uv_count(mesh: &fromsoft_formats::flver::Mesh) -> Option<usize> {
     mesh.vertices.first().map(|v| v.uvs.len())
@@ -258,10 +282,7 @@ fn soulstructs_uv_slot_table_against_the_models() -> Result<()> {
         by_source.insert(m.source.to_lowercase(), stem(&m.shader).to_owned());
     }
     let names = NameDictionary::read_for(names, Game::EldenRing)?;
-    let mut observed: BTreeMap<String, BTreeMap<usize, usize>> = BTreeMap::new();
-    let (mut models, mut speedtree, mut with_material, mut without_material) =
-        (0usize, 0usize, 0usize, 0usize);
-    let visited = common::each_leaf(
+    let (visited, seen) = common::each_leaf(
         &archive,
         &names,
         &[
@@ -272,16 +293,16 @@ fn soulstructs_uv_slot_table_against_the_models() -> Result<()> {
             ".objbnd.dcx",
         ],
         &decoder,
-        |label, bytes| {
+        |t: &mut UvCounts, label, bytes| {
             if !bytes.starts_with(b"FLVER\0") {
                 return Ok(());
             }
             let model = Model::read(bytes).map_err(|e| format!("{label}: {e}"))?;
             if model.speedtree {
-                speedtree += 1;
+                t.speedtree += 1;
                 return Ok(());
             }
-            models += 1;
+            t.models += 1;
             for mesh in &model.meshes {
                 let Some(uvs) = uv_count(mesh) else {
                     continue;
@@ -289,15 +310,26 @@ fn soulstructs_uv_slot_table_against_the_models() -> Result<()> {
                 let material = model.materials.get(mesh.material).ok_or("mesh material")?;
                 match by_source.get(&material.mtd.to_lowercase()) {
                     Some(stem) => {
-                        with_material += 1;
-                        *observed.entry(stem.clone()).or_default().entry(uvs).or_default() += 1;
+                        t.with_material += 1;
+                        *t.observed
+                            .entry(stem.clone())
+                            .or_default()
+                            .entry(uvs)
+                            .or_default() += 1;
                     }
-                    None => without_material += 1,
+                    None => t.without_material += 1,
                 }
             }
             Ok(())
         },
     )?;
+    let UvCounts {
+        observed,
+        models,
+        speedtree,
+        with_material,
+        without_material,
+    } = seen;
     let norm = |s: &str| s.strip_suffix("_cloth").unwrap_or(s).to_owned();
     let (mut in_table, mut agreeing, mut disagreeing) = (0usize, 0usize, Vec::new());
     let (mut meshes_in_table, mut meshes_agreeing) = (0usize, 0usize);

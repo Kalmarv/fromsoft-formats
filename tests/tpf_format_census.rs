@@ -71,6 +71,17 @@ struct Totals {
     no_family: usize,
 }
 
+impl common::Tally for Totals {
+    fn add(&mut self, other: Self) {
+        self.packages += other.packages;
+        self.textures += other.textures;
+        for (code, formats) in other.by_code {
+            common::add_counts(self.by_code.entry(code).or_default(), formats);
+        }
+        self.no_family += other.no_family;
+    }
+}
+
 fn census(game: Game, data: inputs::Game) -> Result<Option<Totals>> {
     let (Some(archive), Some(dll), Some(names)) = (
         common::archive(game)?,
@@ -85,25 +96,31 @@ fn census(game: Game, data: inputs::Game) -> Result<Option<Totals>> {
         max_output: 1 << 30,
     };
     let names = NameDictionary::read_for(names, game)?;
-    let mut t = Totals::default();
-    common::each_leaf(&archive, &names, &SUFFIXES, &decoder, |label, bytes| {
-        if !bytes.starts_with(b"TPF\0") {
-            return Ok(());
-        }
-        let package = Package::read(bytes).map_err(|e| format!("{label}: {e}"))?;
-        t.packages += 1;
-        for texture in &package.textures {
-            t.textures += 1;
-            t.no_family += usize::from(texture.pixel_family().is_none());
-            let format = dds_format(&texture.dds).ok_or_else(|| format!("{label}: a short DDS header"))?;
-            *t.by_code
-                .entry(texture.format)
-                .or_default()
-                .entry(format)
-                .or_default() += 1;
-        }
-        Ok(())
-    })?;
+    let (_, t) = common::each_leaf(
+        &archive,
+        &names,
+        &SUFFIXES,
+        &decoder,
+        |t: &mut Totals, label, bytes| {
+            if !bytes.starts_with(b"TPF\0") {
+                return Ok(());
+            }
+            let package = Package::read(bytes).map_err(|e| format!("{label}: {e}"))?;
+            t.packages += 1;
+            for texture in &package.textures {
+                t.textures += 1;
+                t.no_family += usize::from(texture.pixel_family().is_none());
+                let format =
+                    dds_format(&texture.dds).ok_or_else(|| format!("{label}: a short DDS header"))?;
+                *t.by_code
+                    .entry(texture.format)
+                    .or_default()
+                    .entry(format)
+                    .or_default() += 1;
+            }
+            Ok(())
+        },
+    )?;
     Ok(Some(t))
 }
 

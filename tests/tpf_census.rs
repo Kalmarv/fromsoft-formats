@@ -1,29 +1,16 @@
 //! Whole-install PC texture-package differential against independent C# metadata.
+mod common;
 mod inputs;
 
 use fromsoft_formats::{
-    Archive, Binder, NameDictionary,
+    Binder, NameDictionary,
     dcx::Decoder,
     tpf::{Package, TextureKind},
 };
-use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
+use inputs::{Game, OracleSet, Tool, oodle, oracle};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
-#[allow(unsafe_code)]
-mod native {
-    pub fn load(
-        path: crate::inputs::OodleLibrary,
-    ) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
-        // SAFETY: caller explicitly supplies a trusted version-6 native library.
-        unsafe {
-            primase_foundations::compress::oodle::Oodle::open(
-                path.path(),
-                primase_foundations::compress::oodle::Version::V6,
-            )
-        }
-    }
-}
 fn sha(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().map(|b| format!("{b:02X}")).collect()
 }
@@ -31,7 +18,8 @@ fn visit(
     bytes: &[u8],
     id: &str,
     decoder: &Decoder<'_>,
-    expected: &mut BTreeMap<String, serde_json::Value>,
+    expected: &BTreeMap<String, serde_json::Value>,
+    seen: &mut Vec<String>,
     counts: &mut (usize, usize),
     depth: usize,
 ) -> Result<()> {
@@ -39,9 +27,8 @@ fn visit(
         return Err("nested binder limit".into());
     }
     if bytes.starts_with(b"TPF\0") {
-        let want = expected
-            .remove(id)
-            .ok_or_else(|| format!("unexpected TPF {id}"))?;
+        let want = expected.get(id).ok_or_else(|| format!("unexpected TPF {id}"))?;
+        seen.push(id.to_owned());
         assert_eq!(sha(bytes), want["sha256"].as_str().ok_or("sha field")?, "{id}");
         let package = Package::read(bytes)?;
         assert_eq!(
@@ -90,6 +77,7 @@ fn visit(
                 &format!("{id}/b{i}"),
                 decoder,
                 expected,
+                seen,
                 counts,
                 depth + 1,
             )?;
@@ -99,7 +87,7 @@ fn visit(
 }
 #[test]
 fn all_texture_packages() -> Result<()> {
-    let Some(root) = install(Game::Sekiro) else {
+    let Some(archive) = common::archive(fromsoft_formats::Game::Sekiro)? else {
         return Ok(());
     };
     let Some(oracle) = oracle(OracleSet::SoulsFormats, Game::Sekiro, "tpf") else {
@@ -111,19 +99,11 @@ fn all_texture_packages() -> Result<()> {
     let Some(dll) = oodle(Tool::Oodle6) else {
         return Ok(());
     };
-    let dll = native::load(dll)?;
+    let dll = common::oodle(dll)?;
     let decoder = Decoder {
         oodle: Some(&dll),
         max_output: 512 * 1024 * 1024,
     };
-    let Some(sekiro_keys) = inputs::keys(inputs::Game::Sekiro) else {
-        return Ok(());
-    };
-    let archive = Archive::open_game(
-        root,
-        fromsoft_formats::Game::Sekiro,
-        &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro, None)?,
-    )?;
     let names = NameDictionary::read(names)?;
     let mut expected = BTreeMap::new();
     for line in std::fs::read_to_string(oracle.join("packages.jsonl"))?.lines() {
@@ -139,38 +119,74 @@ fn all_texture_packages() -> Result<()> {
         };
         rejected.insert(format!("{shard}/{hash}"), message.to_owned());
     }
+    // each entry checked on the scan's threads against the reference; the results merged in hash order
+    struct Checked {
+        seen: Vec<String>,
+        counts: (usize, usize),
+        split: bool,
+        refused: Option<String>,
+    }
+    let checked = common::scan_map(
+        &archive,
+        &decoder,
+        |hash| {
+            !names
+                .names
+                .get(&hash)
+                .and_then(|x| x.first())
+                .is_some_and(|n| n.ends_with("bdt"))
+        },
+        |hash, bytes| {
+            let mut c = Checked {
+                seen: Vec::new(),
+                counts: (0, 0),
+                split: false,
+                refused: None,
+            };
+            let id = format!("{}/{hash:08x}", archive.entries[&hash].shard);
+            let result = (|| -> Result<()> {
+                let bytes = bytes?;
+                if bytes.starts_with(b"BHF4") {
+                    let name = names
+                        .names
+                        .get(&hash)
+                        .and_then(|x| x.first())
+                        .ok_or("unnamed split binder")?;
+                    let payload = archive.read(&format!("{}bdt", &name[..name.len() - 3]), &decoder)?;
+                    let binder = Binder::read_split(bytes, &payload, &decoder)?;
+                    for (i, f) in binder.files.iter().enumerate() {
+                        visit(
+                            &f.bytes,
+                            &format!("{id}/s{i}"),
+                            &decoder,
+                            &expected,
+                            &mut c.seen,
+                            &mut c.counts,
+                            0,
+                        )?;
+                    }
+                    c.split = true;
+                } else {
+                    visit(bytes, &id, &decoder, &expected, &mut c.seen, &mut c.counts, 0)?;
+                }
+                Ok(())
+            })();
+            c.refused = result.err().map(|e| e.to_string());
+            (id, c)
+        },
+    )?;
     let mut counts = (0, 0);
     let mut failures = Vec::new();
     let mut split = 0;
-    for (&hash, entry) in &archive.entries {
-        let name = names.names.get(&hash).and_then(|x| x.first());
-        if name.is_some_and(|n| n.ends_with("bdt")) {
-            continue;
-        }
-        let id = format!("{}/{hash:08x}", entry.shard);
-        let result = (|| -> Result<()> {
-            let bytes = archive.read_hash(hash, &decoder)?;
-            if bytes.starts_with(b"BHF4") {
-                let name = name.ok_or("unnamed split binder")?;
-                let payload = archive.read(&format!("{}bdt", &name[..name.len() - 3]), &decoder)?;
-                let binder = Binder::read_split(&bytes, &payload, &decoder)?;
-                for (i, f) in binder.files.iter().enumerate() {
-                    visit(
-                        &f.bytes,
-                        &format!("{id}/s{i}"),
-                        &decoder,
-                        &mut expected,
-                        &mut counts,
-                        0,
-                    )?;
-                }
-                split += 1;
-            } else {
-                visit(&bytes, &id, &decoder, &mut expected, &mut counts, 0)?;
+    for (id, c) in checked.into_values() {
+        for seen in c.seen {
+            if expected.remove(&seen).is_none() {
+                failures.push(format!("{seen}: checked twice"));
             }
-            Ok(())
-        })();
-        if let Err(e) = result {
+        }
+        counts = (counts.0 + c.counts.0, counts.1 + c.counts.1);
+        split += usize::from(c.split);
+        if let Some(e) = c.refused {
             // both decoders reject it: agreement on the entry, the reasons reported side by side
             if let Some(theirs) = rejected.remove(&id) {
                 println!("Agreed rejection {id}: ours {e}; reference {theirs}");
