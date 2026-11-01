@@ -222,7 +222,7 @@ dependencies = [
 [[package]]
 name = "dxcontainer"
 version = "0.4.0"
-source = "git+https://github.com/Kalmarv/dx?rev=c32a3689c6bd26a0ee0777664091f4e04843927e#c32a3689c6bd26a0ee0777664091f4e04843927e"
+source = "git+https://github.com/Kalmarv/dx?rev=39883bd084ad1db1f66416f41b25cf2529f9eec1#39883bd084ad1db1f66416f41b25cf2529f9eec1"
 dependencies = [
  "primase-foundations",
  "thiserror",
@@ -432,7 +432,7 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 [[package]]
 name = "havok-formats"
 version = "0.9.0"
-source = "git+https://github.com/Kalmarv/havok-formats?rev=f681dd1375a6d05666cc998c581defe47d326063#f681dd1375a6d05666cc998c581defe47d326063"
+source = "git+https://github.com/Kalmarv/havok-formats?rev=eb2aba273217c2ece6e5a59981ddfd6b41a02497#eb2aba273217c2ece6e5a59981ddfd6b41a02497"
 dependencies = [
  "primase-foundations",
  "thiserror",
@@ -640,8 +640,9 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "primase-foundations"
-version = "0.3.0"
-source = "git+https://github.com/Kalmarv/primase-foundations?rev=f9cf4ece1de77fce9d703c63347dd70b728b7c0e#f9cf4ece1de77fce9d703c63347dd70b728b7c0e"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8ce10679d3b7293ed544edd2db56485a7b458574d3c95084d97d27e9d7e9200"
 dependencies = [
  "flate2",
  "half",
