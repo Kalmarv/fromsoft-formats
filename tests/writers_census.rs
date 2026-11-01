@@ -25,7 +25,6 @@ mod inputs;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use fromsoft_formats::dcx::{self, Compression, Decoder, Encoder, Envelope};
@@ -424,16 +423,35 @@ fn report(game: &str, census: &mut Census<'_>) {
     }
 }
 
-/// One split binder: its index with its payload. A read the archive refuses is a failure of the census, not of the
-/// walk.
-fn split_binder(c: &mut Census<'_>, archive: &Archive, index: u64, payload: u64) {
-    let label = format!("#{index:016x}");
-    match (
-        archive.read_hash(index, c.decoder),
-        archive.read_hash(payload, c.decoder),
-    ) {
-        (Ok(index_bytes), Ok(pay)) => c.binder(&label, &index_bytes, Some(&pay), index),
-        (Err(e), _) | (_, Err(e)) => c.fail(&label, format!("archive read: {e}")),
+/// One archive entry: a split binder's index with its payload, or any other file. A read the archive refuses is a
+/// failure of the census, not of the walk.
+fn entry(
+    c: &mut Census<'_>,
+    archive: &Archive,
+    names: &NameDictionary,
+    payload_of: &BTreeMap<u64, u64>,
+    hash: u64,
+) {
+    let label = names
+        .names
+        .get(&hash)
+        .and_then(|n| n.first())
+        .cloned()
+        .unwrap_or_else(|| format!("#{hash:016x}"));
+    if let Some(&payload) = payload_of.get(&hash) {
+        let label = format!("#{hash:016x}");
+        match (
+            archive.read_hash(hash, c.decoder),
+            archive.read_hash(payload, c.decoder),
+        ) {
+            (Ok(index), Ok(pay)) => c.binder(&label, &index, Some(&pay), hash),
+            (Err(e), _) | (_, Err(e)) => c.fail(&label, format!("archive read: {e}")),
+        }
+        return;
+    }
+    match archive.read_stored(hash) {
+        Ok(stored) => c.content(&label, &stored, hash),
+        Err(e) => c.fail(&label, format!("archive read: {e}")),
     }
 }
 
@@ -468,58 +486,43 @@ fn walk(game: Game, data: Data) -> Result<Option<BTreeMap<String, usize>>> {
         }
     }
     let payloads: BTreeSet<u64> = payload_of.values().copied().collect();
-    // each worker's census, taken by a visit and put back after it, so a thread adds to one without waiting for another
-    let pool: Mutex<Vec<Census<'_>>> = Mutex::new(Vec::new());
-    let with_census = |f: &dyn Fn(&mut Census<'_>)| {
-        let taken = pool.lock().expect("only a push or a pop holds the pool").pop();
-        let mut c = taken.unwrap_or_else(|| census(&decoder, &dll));
-        f(&mut c);
-        pool.lock().expect("only a push or a pop holds the pool").push(c);
-    };
-    // the split binders, an index and its payload each: two reads per binder, the largest first so no thread is left
-    // with a large one at the end
-    let mut pairs: Vec<(usize, u64, u64)> = payload_of
+    // the largest entries first, so no thread is left with a large one at the end
+    let mut work: Vec<(usize, u64)> = archive
+        .entries
         .iter()
-        .map(|(&index, &payload)| {
-            let size =
-                archive.entries[&index].entry.padded_size + archive.entries[&payload].entry.padded_size;
-            (size, index, payload)
+        .filter(|(hash, _)| !payloads.contains(hash))
+        .map(|(&hash, e)| {
+            let pair = payload_of.get(&hash).and_then(|p| archive.entries.get(p));
+            (
+                e.entry.padded_size + pair.map_or(0, |p| p.entry.padded_size),
+                hash,
+            )
         })
         .collect();
-    pairs.sort_unstable_by(|a, b| b.cmp(a));
+    work.sort_unstable_by(|a, b| b.cmp(a));
+
     let next = AtomicUsize::new(0);
-    std::thread::scope(|scope| {
-        for _ in 0..threads().get() {
-            scope.spawn(|| {
-                while let Some(&(_, index, payload)) = pairs.get(next.fetch_add(1, Ordering::Relaxed)) {
-                    with_census(&|c| split_binder(c, &archive, index, payload));
-                }
-            });
+    let mut c = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..threads().get())
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut c = census(&decoder, &dll);
+                    while let Some(&(_, hash)) = work.get(next.fetch_add(1, Ordering::Relaxed)) {
+                        entry(&mut c, &archive, &names, &payload_of, hash);
+                    }
+                    c
+                })
+            })
+            .collect();
+        let mut total = census(&decoder, &dll);
+        for h in handles {
+            total.merge(
+                h.join()
+                    .expect("a census thread panicked: its counts would be lost"),
+            );
         }
+        total
     });
-    // every other entry in one pass over the BDTs, as stored
-    archive
-        .scan_stored(
-            threads(),
-            |hash| !payload_of.contains_key(&hash) && !payloads.contains(&hash),
-            |hash, stored| {
-                let label = names
-                    .names
-                    .get(&hash)
-                    .and_then(|n| n.first())
-                    .cloned()
-                    .unwrap_or_else(|| format!("#{hash:016x}"));
-                with_census(&|c| match &stored {
-                    Ok(bytes) => c.content(&label, bytes, hash),
-                    Err(e) => c.fail(&label, format!("archive read: {e}")),
-                });
-            },
-        )
-        .map_err(|p| p.to_string())?;
-    let mut c = census(&decoder, &dll);
-    for other in pool.into_inner().expect("no census was left held") {
-        c.merge(other);
-    }
     report(game.name(), &mut c);
     assert!(c.failures.is_empty(), "{} writer failures", c.failures.len());
     Ok(Some(c.counts))
