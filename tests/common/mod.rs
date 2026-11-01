@@ -117,3 +117,23 @@ pub fn each_leaf(
     }
     Ok(visited)
 }
+
+/// `work(hash, bytes)` for every entry of `archive` whose path hash `keep` accepts, by hash: the bytes (or the error)
+/// [`fromsoft_formats::Archive::read_hash`] gives, read in one pass over the BDTs ([`fromsoft_formats::Archive::scan`])
+/// with the decoding and `work` on [`crate::inputs::threads`] threads. For a census whose result per entry is small:
+/// the caller merges them in the order a walk of the index gives. A panic in `work` is returned as the error.
+pub fn scan_map<T: Send>(
+    archive: &fromsoft_formats::Archive,
+    decoder: &fromsoft_formats::dcx::Decoder<'_>,
+    keep: impl Fn(u64) -> bool,
+    work: impl Fn(u64, fromsoft_formats::Result<&[u8]>) -> T + Sync,
+) -> Result<std::collections::BTreeMap<u64, T>, Box<dyn std::error::Error>> {
+    let out = std::sync::Mutex::new(std::collections::BTreeMap::new());
+    archive
+        .scan(decoder, crate::inputs::threads(), keep, |hash, bytes| {
+            let t = work(hash, bytes);
+            out.lock().expect("only an insert holds the lock").insert(hash, t);
+        })
+        .map_err(|p| p.to_string())?;
+    Ok(out.into_inner().map_err(|e| e.to_string())?)
+}

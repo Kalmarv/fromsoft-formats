@@ -41,6 +41,24 @@ struct Counts {
     /// What the bones and face sets of every model read hold, by name (see [`tally`]).
     tallies: BTreeMap<&'static str, u64>,
 }
+/// The tally that keeps the largest value seen rather than a count.
+const FACE_SET_WORD_MAXIMUM: &str = "face set word +6 maximum";
+impl Counts {
+    /// Adds the counts of other models.
+    fn add(&mut self, other: Counts) {
+        self.models += other.models;
+        self.meshes += other.meshes;
+        self.normal_components += other.normal_components;
+        self.normal_changed += other.normal_changed;
+        self.normal_max_ulp = self.normal_max_ulp.max(other.normal_max_ulp);
+        self.agreed_rejections += other.agreed_rejections;
+        self.speedtree_read += other.speedtree_read;
+        for (key, n) in other.tallies {
+            let total = self.tallies.entry(key).or_default();
+            *total = if key == FACE_SET_WORD_MAXIMUM { (*total).max(n) } else { *total + n };
+        }
+    }
+}
 /// Counts the fields of `model`'s bones and face sets that the reference census does not compare: the links, the bounding
 /// box and the flags of the bones, and the word at +6 of the face sets.
 fn tally(model: &Model, counts: &mut Counts) {
@@ -147,7 +165,7 @@ fn tally(model: &Model, counts: &mut Counts) {
             maximum = maximum.max(u64::from(face.unknown_06));
         }
     }
-    let seen = counts.tallies.entry("face set word +6 maximum").or_default();
+    let seen = counts.tallies.entry(FACE_SET_WORD_MAXIMUM).or_default();
     *seen = (*seen).max(maximum);
 }
 /// Every mesh whose vertex hash differs from the reference's: collected so one run lists them all. The census visits
@@ -264,11 +282,14 @@ fn reference_normal(value: f32, counts: &mut Counts) -> Result<f32> {
     counts.normal_max_ulp = counts.normal_max_ulp.max(ulp);
     Ok(reference)
 }
+/// Checks the FLVER `bytes` (or each FLVER a BND4 of them holds) against its reference record in `expected`, adding
+/// the ids it checked to `seen` and what it read to `counts`.
 fn visit(
     bytes: &[u8],
     id: &str,
     decoder: &Decoder<'_>,
-    expected: &mut BTreeMap<String, serde_json::Value>,
+    expected: &BTreeMap<String, serde_json::Value>,
+    seen: &mut Vec<String>,
     counts: &mut Counts,
     depth: usize,
 ) -> Result<()> {
@@ -277,8 +298,9 @@ fn visit(
     }
     if bytes.starts_with(b"FLVER\0") {
         let want = expected
-            .remove(id)
+            .get(id)
             .ok_or_else(|| format!("unexpected FLVER {id}"))?;
+        seen.push(id.to_owned());
         assert_eq!(sha(bytes), want["sha256"].as_str().ok_or("sha")?, "{id}");
         if let Some(theirs) = want.get("error") {
             return match Model::read(bytes) {
@@ -409,6 +431,7 @@ fn visit(
                 &format!("{id}/b{i}"),
                 decoder,
                 expected,
+                seen,
                 counts,
                 depth + 1,
             )?;
@@ -480,38 +503,69 @@ fn flver_models(
         };
         rejected.insert(format!("{shard}/{hash}"), message.to_owned());
     }
+    // What one entry's check gives: the ids of the FLVERs it checked and what it read (kept when the entry is then
+    // refused, as a walk entry by entry keeps them), whether it was a split binder read whole, and its refusal.
+    struct Checked {
+        seen: Vec<String>,
+        counts: Counts,
+        split: bool,
+        refused: Option<String>,
+    }
+    let id_of = |hash: u64| format!("{}/{hash:0width$x}", archive.entries[&hash].shard);
+    let name_of = |hash: u64| names.names.get(&hash).and_then(|x| x.first());
+    // every entry read in one pass and checked on the scan's threads, then merged in the index's order
+    let checked = common::scan_map(
+        archive,
+        &decoder,
+        |hash| !name_of(hash).is_some_and(|n| n.ends_with("bdt")),
+        |hash, bytes| {
+            let id = id_of(hash);
+            let mut c = Checked {
+                seen: Vec::new(),
+                counts: Counts::default(),
+                split: false,
+                refused: None,
+            };
+            let result = (|| -> Result<()> {
+                let bytes = bytes?;
+                if bytes.starts_with(b"BHF4") {
+                    let name = name_of(hash).ok_or("unnamed split binder")?;
+                    let payload = archive.read(&format!("{}bdt", &name[..name.len() - 3]), &decoder)?;
+                    let binder = Binder::read_split(bytes, &payload, &decoder)?;
+                    for (i, f) in binder.files.iter().enumerate() {
+                        visit(
+                            &f.bytes,
+                            &format!("{id}/s{i}"),
+                            &decoder,
+                            &expected,
+                            &mut c.seen,
+                            &mut c.counts,
+                            0,
+                        )?;
+                    }
+                    c.split = true;
+                } else {
+                    visit(bytes, &id, &decoder, &expected, &mut c.seen, &mut c.counts, 0)?;
+                }
+                Ok(())
+            })();
+            c.refused = result.err().map(|e| e.to_string());
+            c
+        },
+    )?;
     let mut counts = Counts::default();
     let mut failures = Vec::new();
     let mut split = 0;
-    for (&hash, entry) in &archive.entries {
-        let name = names.names.get(&hash).and_then(|x| x.first());
-        if name.is_some_and(|n| n.ends_with("bdt")) {
-            continue;
-        }
-        let id = format!("{}/{hash:0width$x}", entry.shard);
-        let result = (|| -> Result<()> {
-            let bytes = archive.read_hash(hash, &decoder)?;
-            if bytes.starts_with(b"BHF4") {
-                let name = name.ok_or("unnamed split binder")?;
-                let payload = archive.read(&format!("{}bdt", &name[..name.len() - 3]), &decoder)?;
-                let binder = Binder::read_split(&bytes, &payload, &decoder)?;
-                for (i, f) in binder.files.iter().enumerate() {
-                    visit(
-                        &f.bytes,
-                        &format!("{id}/s{i}"),
-                        &decoder,
-                        &mut expected,
-                        &mut counts,
-                        0,
-                    )?;
-                }
-                split += 1;
-            } else {
-                visit(&bytes, &id, &decoder, &mut expected, &mut counts, 0)?;
+    for (hash, c) in checked {
+        let id = id_of(hash);
+        for seen in &c.seen {
+            if expected.remove(seen).is_none() {
+                failures.push(format!("{seen}: checked twice"));
             }
-            Ok(())
-        })();
-        if let Err(e) = result {
+        }
+        counts.add(c.counts);
+        split += usize::from(c.split);
+        if let Some(e) = c.refused {
             // both decoders reject it: agreement on the entry, the reasons reported side by side
             if let Some(theirs) = rejected.remove(&id) {
                 println!("Agreed rejection {id}: ours {e}; reference {theirs}");
