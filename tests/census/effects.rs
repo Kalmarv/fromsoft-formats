@@ -331,6 +331,21 @@ fn effects(bytes: &[u8], decoder: &Decoder<'_>, path: &str, f: &mut Found) -> Re
     f.report.count("effect binders", 1);
     for member in &binder.files {
         let Some(id) = member.name.as_deref().and_then(fxr::member_id) else {
+            // the binder's textures, models and animations, by extension
+            let name = member.name.as_deref().unwrap_or("");
+            let kind = name
+                .rsplit(['\\', '/'])
+                .next()
+                .unwrap_or(name)
+                .split_once('.')
+                .map_or("", |x| x.1);
+            f.report.count(
+                &format!(
+                    "effect binder members that are not effect files (.{})",
+                    kind.to_ascii_lowercase()
+                ),
+                1,
+            );
             continue;
         };
         match Fxr::read(&member.bytes) {
@@ -368,19 +383,33 @@ fn events(
             f.report.count("animation event files", 1);
             for animation in &tae.animations {
                 for event in &animation.events {
-                    let Some(fields) = effect_fields.get(&event.kind) else {
+                    // an event of a kind the template does not define may name an effect the census cannot see
+                    let Some(template) = templates.get(event.kind) else {
+                        f.report.count(
+                            &format!(
+                                "animation events of kind {} the template does not define",
+                                event.kind
+                            ),
+                            1,
+                        );
                         continue;
                     };
-                    let Some(template) = templates.get(event.kind) else {
+                    let Some(fields) = effect_fields.get(&event.kind) else {
                         continue;
                     };
                     let decoded = template.decode(&event.parameters)?;
                     for (index, label) in fields {
-                        let Some(argument) = decoded.arguments.iter().find(|a| a.index == *index) else {
-                            continue;
-                        };
-                        if let Value::Int(id) = argument.value {
-                            f.names.push((EVENTS, label.clone(), id));
+                        match decoded
+                            .arguments
+                            .iter()
+                            .find(|a| a.index == *index)
+                            .map(|a| &a.value)
+                        {
+                            Some(Value::Int(id)) => f.names.push((EVENTS, label.clone(), *id)),
+                            Some(_) => f.report.count(&format!("{label}: records holding no integer"), 1),
+                            None => f
+                                .report
+                                .count(&format!("{label}: records stored too short to hold it"), 1),
                         }
                     }
                 }
