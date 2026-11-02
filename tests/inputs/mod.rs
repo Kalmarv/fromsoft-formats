@@ -124,6 +124,12 @@ primase_testdata::inputs! {
             about: r#"the Elden Ring paramdefs (`ER/Defs`: 179 XML files, 29 with version-gated fields); tests/paramdef_census.rs"#,
             source: r#"third-party: Smithbox fdde3225's `Smithbox.Data/Assets/PARAM/ER/Defs`, read in place"#,
         },
+        Query::Oracle(OracleSet::Smithbox, Game::Elden, "param-meta") => {
+            status: Live,
+            gate: false,
+            about: r#"Smithbox's Elden Ring param meta (`ER/Param Meta`: 179 UTF-16 XML files, one per paramdef), whose fields with an `ExtRefs` to an `.fxr` path are the ones its editor opens as effect files; the effect census holds its value rule to them (tests/effect_census.rs)"#,
+            source: r#"third-party: Smithbox fdde3225's `Smithbox.Data/Assets/PARAM/ER/Param Meta`, read in place"#,
+        },
         Query::Oracle(OracleSet::Smithbox, Game::Elden, "regulations") => {
             status: Live,
             gate: false,

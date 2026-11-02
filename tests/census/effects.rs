@@ -1,12 +1,14 @@
 //! The effect census: every effect file of an install's effect binders (`/sfx/*.ffxbnd.dcx`), and for each, what in the
 //! install names it, so what starts it. Five kinds of record name effects:
 //!
-//! - a param row: a value in a field that names effects by its values (Smithbox's paramdefs type the rows): at least
-//!   three distinct values of 1,000 or more in the field are effect files, and they are at least half of its distinct
-//!   values of 1,000 or more. The rule reads no field name, so it takes the fields named for the kind of hit
-//!   (`HitEffectSfxParam.Slash_S`) as well as `Magic.castSfxId`, `Bullet.sfxId_Hit` or `SpEffectVfxParam.midstSfxId`,
-//!   and leaves the enumerations, sizes, flags and dummy polygons whose names say `sfx` and whose small values match
-//!   low effect ids by chance;
+//! - a param row: a value in a field that names effects (Smithbox's paramdefs type the rows; the table and field names
+//!   are the community's, from those paramdefs). A field names them where its name or its table's says so (`sfx` or `ffx`: `Magic.castSfxId`, `Bullet.sfxId_Hit`,
+//!   `SpEffectVfxParam.midstSfxId`, the fields of `HitEffectSfxParam` named for the kind of hit) and its values agree:
+//!   at least three distinct values of 1,000 or more in it are effect files, and they are at least half of its
+//!   distinct values of 1,000 or more. The values leave the enumerations, sizes, flags and dummy polygons whose names
+//!   say `sfx` and whose small values match low effect ids by chance; the name leaves the prices, sort keys, throw
+//!   types and message and special-effect ids whose values match effect ids by chance (in Elden Ring with its DLC,
+//!   `EquipParamAccessory.sellValue`, 3 of its 4 values of 1,000 or more; `WeatherParam.SoundId`, 3 of 3);
 //! - an animation event: a field the community's event template names `FFX ID` (event 96 "Spawn One Shot FFX", 95, 104,
 //!   110, 112, 116, 118 to 122, and the deprecated id of events 114 and 115, whose effect the param of the spell or item
 //!   gives), in every event file of the animation binders (`*.anibnd.dcx` and those inside object, part and asset binders);
@@ -16,6 +18,14 @@
 //! - an event script: an instruction argument the instruction table names `... SFX ID` (`Spawn Oneshot SFX`, `Create
 //!   Asset-following SFX`, `Set Wind SFX`), literal, or filled from the event's own arguments by an initialiser that
 //!   starts the event with them (in any script of the install).
+//!
+//! Where the configuration holds Smithbox's Elden Ring param meta, the param rule is held to it: each field the meta
+//! opens as an effect file (an `ExtRefs` to an `.fxr` path) of each table read is counted as taken by the rule too, or
+//! left by it for the reason the rule gives, and each field the rule takes that the meta does not open is named, as is
+//! each field whose values alone the rule would take but whose name does not say `sfx` or `ffx`. In Elden Ring with its
+//! DLC the rule takes 21 effect fields the meta does not open, every value of 1,000 or more in each an effect file: the
+//! 15 of `HitEffectSfxParam`, `MapMimicryEstablishmentParam.mimicrySfxId0` to `2` and `WeatherParam.SfxId`,
+//! `SfxIdOutdoor` and `WindSfxId`. (Sekiro's param meta opens no field as an effect file.)
 //!
 //! An effect none of them names is unreached: something the census does not read starts it (the game's code, a param a
 //! field name does not mark, an id computed from another), or nothing does. The census counts the effects each kind
@@ -97,6 +107,11 @@ pub fn census(game: Game) -> Result<Option<Report>> {
     let decoder = Decoder {
         oodle: Some(&dll),
         max_output: 1 << 30,
+    };
+    // Paramdex's param meta, where the configuration holds it (Elden Ring's): the fields it opens as effect files
+    let meta = match data {
+        inputs::Game::Elden => inputs::oracle(inputs::OracleSet::Smithbox, data, "param-meta"),
+        _ => None,
     };
     let names = NameDictionary::read_for(names, game)?;
     let templates = Templates::parse(&std::fs::read_to_string(template)?)?;
@@ -224,6 +239,7 @@ pub fn census(game: Game) -> Result<Option<Report>> {
         &archive,
         &decoder,
         &defs_dir,
+        meta.as_deref(),
         &holders,
         &mut report,
     )?);
@@ -489,6 +505,7 @@ fn params(
     archive: &fromsoft_formats::Archive,
     decoder: &Decoder<'_>,
     defs_dir: &std::path::Path,
+    meta_dir: Option<&std::path::Path>,
     holders: &BTreeMap<i32, Vec<String>>,
     report: &mut Report,
 ) -> Result<Vec<(u8, String, i64)>> {
@@ -504,6 +521,24 @@ fn params(
         .map(std::fs::read_to_string)
         .collect::<std::io::Result<Vec<_>>>()?;
     let defs = ParamDefs::from_xml(texts.iter().map(String::as_str))?;
+    // the param meta's effect fields by param type: a meta file is named as its paramdef is
+    let meta: Option<BTreeMap<String, BTreeSet<String>>> = match meta_dir {
+        None => None,
+        Some(dir) => {
+            let by_stem = meta_effect_fields(dir)?;
+            let mut by_type = BTreeMap::new();
+            for (file, text) in files.iter().zip(&texts) {
+                let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+                if let (Some(kind), Some(fields)) = (element_text(text, "ParamType"), by_stem.get(stem)) {
+                    by_type.insert(kind.to_owned(), fields.clone());
+                }
+            }
+            Some(by_type)
+        }
+    };
+    // the meta's effect fields of the tables read, as `param <table>.<field>`, and the fields the tables have
+    let mut meta_named: BTreeSet<String> = BTreeSet::new();
+    let mut table_fields: BTreeSet<String> = BTreeSet::new();
     // each integer field of each table: how many rows hold each value
     let mut fields: BTreeMap<String, BTreeMap<i64, u64>> = BTreeMap::new();
     for member in &binder.files {
@@ -529,8 +564,12 @@ fn params(
             }
         };
         report.count("param tables", 1);
+        if let Some(named) = meta.as_ref().and_then(|m| m.get(&stored.param_type)) {
+            meta_named.extend(named.iter().map(|f| format!("param {table}.{f}")));
+        }
         for row in typed.rows() {
             for (field, value) in row.fields() {
+                table_fields.insert(format!("param {table}.{field}"));
                 if let Some(v) = value.as_i64() {
                     *fields
                         .entry(format!("param {table}.{field}"))
@@ -543,16 +582,112 @@ fn params(
     }
     let is_effect = |v: i64| i32::try_from(v).is_ok_and(|v| holders.contains_key(&v));
     let mut named = Vec::new();
+    const META: &str = "param meta effect fields (an ExtRefs to an .fxr) of the tables read";
+    if meta.is_some() {
+        for label in meta_named.iter().filter(|l| !table_fields.contains(*l)) {
+            report.count(&format!("{META}, naming no field of the table's def: {label}"), 1);
+        }
+    }
     for (label, values) in fields {
         let large = values.keys().filter(|&&v| v >= 1000).count();
         let hits = values.keys().filter(|&&v| v >= 1000 && is_effect(v)).count();
-        if hits < 3 || hits * 2 < large {
+        let by_values = hits >= 3 && hits * 2 >= large;
+        let lower = label.to_ascii_lowercase();
+        let by_name = lower.contains("sfx") || lower.contains("ffx");
+        let taken = by_values && by_name;
+        if meta.is_some() {
+            match (meta_named.contains(&label), taken) {
+                (true, true) => report.count(&format!("{META}: taken by the rule too"), 1),
+                (true, false) if large == 0 => {
+                    report.count(&format!("{META}, left by the rule: no value of 1,000 or more"), 1);
+                }
+                (true, false) if hits < 3 => report.count(
+                    &format!("{META}, left by the rule: {hits} of its values of 1,000 or more are effect files"),
+                    1,
+                ),
+                (true, false) => report.count(
+                    &format!(
+                        "{META}, left by the rule: effect files under half of its values of 1,000 or more: {label} ({hits} of {large})"
+                    ),
+                    1,
+                ),
+                (false, true) if hits != large => report.count(
+                    &format!(
+                        "param fields the rule takes beyond the param meta that hold values of 1,000 or more no effect file has: {label} ({hits} of {large})"
+                    ),
+                    1,
+                ),
+                (false, true) => report.count(
+                    &format!(
+                        "param fields the rule takes that the param meta does not open as effect files: {label} ({hits} of {large})"
+                    ),
+                    1,
+                ),
+                (false, false) => {}
+            }
+        }
+        if by_values && !by_name {
+            report.count(
+                &format!(
+                    "param fields whose values match effect files but whose name does not say sfx or ffx: {label} ({hits} of {large})"
+                ),
+                1,
+            );
+        }
+        if !taken {
             continue;
         }
-        report.count("param fields that name effects by their values", 1);
+        report.count("param fields that name effects", 1);
         for (v, rows) in values {
             named.extend(std::iter::repeat_n((PARAMS, label.clone(), v), rows as usize));
         }
     }
     Ok(named)
+}
+
+/// The fields each param meta file (`<paramdef>.xml`, UTF-16 or UTF-8) opens as effect files: the elements of its
+/// `Field` list whose `ExtRefs` names an `.fxr` path, by the file's stem.
+fn meta_effect_fields(dir: &std::path::Path) -> Result<BTreeMap<String, BTreeSet<String>>> {
+    let mut out = BTreeMap::new();
+    for entry in std::fs::read_dir(dir)? {
+        let path = entry?.path();
+        if path.extension().is_none_or(|x| x != "xml") {
+            continue;
+        }
+        let bytes = std::fs::read(&path)?;
+        let (text, _) = match bytes.get(..2) {
+            Some([0xff, 0xfe]) => encoding_rs::UTF_16LE.decode_with_bom_removal(&bytes),
+            _ => encoding_rs::UTF_8.decode_with_bom_removal(&bytes),
+        };
+        let list = text
+            .split_once("<Field>")
+            .and_then(|(_, rest)| rest.split_once("</Field>"))
+            .map(|(list, _)| list)
+            .unwrap_or_default();
+        let mut fields = BTreeSet::new();
+        for tag in list.split('<').skip(1) {
+            let tag = tag.split_once('>').map_or(tag, |(t, _)| t);
+            let (name, attributes) = tag.split_once(char::is_whitespace).unwrap_or((tag, ""));
+            let refs = attributes
+                .split_once("ExtRefs=\"")
+                .and_then(|(_, rest)| rest.split_once('"'))
+                .map(|(refs, _)| refs);
+            if refs.is_some_and(|r| r.to_ascii_lowercase().contains(".fxr")) {
+                fields.insert(name.to_owned());
+            }
+        }
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
+            .to_owned();
+        out.insert(stem, fields);
+    }
+    Ok(out)
+}
+
+/// The text of the first `<name>...</name>` element of an XML text.
+fn element_text<'t>(text: &'t str, name: &str) -> Option<&'t str> {
+    let (_, rest) = text.split_once(&format!("<{name}>"))?;
+    rest.split_once(&format!("</{name}>")).map(|(t, _)| t.trim())
 }

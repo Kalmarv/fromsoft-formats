@@ -2,7 +2,8 @@
 //! layout and event script reads, every effect file is counted once under exactly one combination of the kinds of record
 //! that reach it (or none), and the only param tables the census goes without are the three of Sekiro's that the param
 //! reader does not read (the two behaviour banks' defaults and the menu colour table, whose headers carry format flags 1
-//! and 2). `cargo run --release --example census -- effects <game>` prints the same report and what changed since the
+//! and 2), and where Smithbox's param meta is configured, the param rule takes beyond it only fields that hold effect
+//! files alone. `cargo run --release --example census -- effects <game>` prints the same report and what changed since the
 //! last run.
 mod census;
 mod common;
@@ -46,6 +47,21 @@ fn what_starts_each_effect() -> Result<()> {
             tables,
             expected,
             "{}: param tables the census goes without",
+            game.name()
+        );
+        // the param rule against Smithbox's param meta, where it is configured: each field the meta opens is a field of
+        // its table, and each field the rule takes beyond the meta holds effect files only
+        let against_meta: Vec<&String> = report
+            .counts
+            .keys()
+            .filter(|name| {
+                name.contains("naming no field of the table's def")
+                    || name.starts_with("param fields the rule takes beyond the param meta that hold values")
+            })
+            .collect();
+        assert!(
+            against_meta.is_empty(),
+            "{}: the param rule against the param meta: {against_meta:?}",
             game.name()
         );
         let files = report.get("effect files (distinct ids)");
