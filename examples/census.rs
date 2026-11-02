@@ -1,10 +1,11 @@
 //! The census of one format in a game's install: our reader over every file, checked against the oracle the real-data
-//! tests use, with the counts and the values of each field the census follows (`tests/census`). The report is kept
-//! under the scratch root as `census/<format>-<game>.json`, and what changed since the kept one is listed.
+//! tests use, with the counts and the values of each field the census follows (`tests/census`); the effects census has
+//! no oracle: it counts what names each effect file. The report is kept under the scratch root as
+//! `census/<format>-<game>.json`, and what changed since the kept one is listed.
 //!
 //! ```text
 //! cargo run --release --example census -- <format> <game>...
-//!     formats: flver
+//!     formats: flver, effects (what starts each effect file: tests/census/effects.rs)
 //!     games:   sekiro, elden
 //! ```
 //!
@@ -27,7 +28,7 @@ use fromsoft_formats::Game;
 use std::process::ExitCode;
 use std::time::Instant;
 
-const USAGE: &str = "usage: census <format> <game>...  (formats: flver; games: sekiro, elden)";
+const USAGE: &str = "usage: census <format> <game>...  (formats: flver, effects; games: sekiro, elden)";
 
 fn main() -> ExitCode {
     match run() {
@@ -57,6 +58,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
         let start = Instant::now();
         let report = match format.as_str() {
             "flver" => census::flver::census(game)?,
+            "effects" => census::effects::census(game)?,
             _ => return Err(format!("unknown format {format}; {USAGE}").into()),
         };
         let report = report.ok_or_else(|| {

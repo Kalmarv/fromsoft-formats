@@ -3,6 +3,7 @@
 //! (`tests/flver_census.rs`); `examples/census.rs` prints it, keeps it, and lists what changed since the last run.
 #![allow(dead_code)]
 
+pub mod effects;
 pub mod flver;
 
 use std::collections::BTreeMap;
