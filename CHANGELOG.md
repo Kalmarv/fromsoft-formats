@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `Archive::open_game` accepts a path hash that a later archive pair lists again when the two entries hold the same bytes (the shorter stored copy is the start of the longer and only zero bytes follow it): the first pair's entry is the one read, and the repeat is reported in the new `Archive::repeated` (`archive::Repeated`: the hash, the pair kept and the pair that lists it again). A repeat with other bytes is still refused, naming both pairs. Elden Ring with Shadow of the Erdtree installed failed to open before this: its `DLC` index lists five of `Data3`'s entries again (the `c5550` character's anibnd, behbnd, chrbnd and two texbnds), the same DCX envelopes with `Data3`'s copies padded to sixteen bytes. `tests/dictionary_census.rs` names the five with Smithbox's file list and keeps its census of the other pairs.
 - `gparam::GroupLoadFlags`, `ParamExtra::load_flags` and `Gparam::group_load_flags` name how Elden Ring consumes the first two extra-record bytes: whether newly created fallback rows start active and whether field lookups force value ID 0. Stored fields are activated separately, including unlisted IDs whose values come from registered references; the ID list is not a complete activation mask. The raw trailing word remains available. An independent byte-table join checks every group of all 448 installed Elden Ring draw-param files.
 
 ## 0.14.0 (2026-10-30)

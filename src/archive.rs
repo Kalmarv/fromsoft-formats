@@ -10,9 +10,9 @@
 pub use crate::bhd::{PathHash, path_hash, path_hash64};
 use crate::{
     Game, Result,
-    bhd::{Entry, Header, RecordLayout, unwrap_rsa_with},
+    bhd::{Entry, Header, unwrap_rsa_with},
     dcx::Decoder,
-    game::ArchivePair,
+    game::{ArchivePair, ArchiveSet},
     invalid,
 };
 use primase_foundations::parallel::{Panicked, Threads};
@@ -187,38 +187,68 @@ impl Install {
     }
 }
 
-/// `header`, the index of `pair` whose BDT file is `bdt_size` bytes, added to `entries`. An entry that ends beyond the
-/// BDT file, or whose hash another pair of `pairs` already lists, is refused at its record in the index (offsets are
-/// those of the unwrapped index).
-fn index_pair(
-    entries: &mut BTreeMap<u64, IndexedEntry>,
-    pairs: &[ArchivePair],
-    pair: &ArchivePair,
-    header: &Header,
-    record: &RecordLayout,
-    bdt_size: u64,
-) -> Result<()> {
-    for entry in &header.entries {
-        let padded = u64::try_from(entry.padded_size).ok();
-        if padded
-            .and_then(|padded| entry.offset.checked_add(padded))
-            .is_none_or(|end| end > bdt_size)
-        {
-            return Err(invalid(
-                "BHD5",
-                entry.index_offset.saturating_add(record.offset),
-                format!(
-                    "{}.bdt entry {:#x} at {:#x} of {} bytes ends beyond the {bdt_size} bytes of the file",
-                    pair.stem, entry.hash, entry.offset, entry.padded_size
-                ),
-            ));
-        }
-        let indexed = IndexedEntry {
-            shard: pair.shard,
-            entry: entry.clone(),
-        };
-        if let Some(first) = entries.insert(entry.hash, indexed) {
-            let first_pair = pairs
+/// A path hash a later archive pair lists again, with the same bytes as the entry of the pair that listed it first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Repeated {
+    /// The path hash.
+    pub hash: u64,
+    /// The [`ArchivePair::shard`] of the pair that listed it first, whose entry is the one read.
+    pub kept: u8,
+    /// The [`ArchivePair::shard`] of the pair that lists it again.
+    pub again: u8,
+}
+/// The entries of the pairs indexed so far, and the hashes listed again with the same bytes.
+#[derive(Default)]
+struct Index {
+    entries: BTreeMap<u64, IndexedEntry>,
+    repeated: Vec<Repeated>,
+}
+impl Index {
+    /// `header`, the index of `pair` of `set` whose BDT file is `bdt_size` bytes. An entry that ends beyond the BDT
+    /// file is refused at its record in the index (offsets are those of the unwrapped index). An entry whose hash an
+    /// earlier pair lists is compared with that pair's by their stored bytes (`stored`): the same bytes, but for zero
+    /// padding after the shorter copy, are a repeat and the first entry stays; other bytes are refused at its record.
+    fn add(
+        &mut self,
+        set: &ArchiveSet,
+        pair: &ArchivePair,
+        header: &Header,
+        bdt_size: u64,
+        stored: impl Fn(&IndexedEntry) -> Result<Vec<u8>>,
+    ) -> Result<()> {
+        for entry in &header.entries {
+            let padded = u64::try_from(entry.padded_size).ok();
+            if padded
+                .and_then(|padded| entry.offset.checked_add(padded))
+                .is_none_or(|end| end > bdt_size)
+            {
+                return Err(invalid(
+                    "BHD5",
+                    entry.index_offset.saturating_add(set.record.offset),
+                    format!(
+                        "{}.bdt entry {:#x} at {:#x} of {} bytes ends beyond the {bdt_size} bytes of the file",
+                        pair.stem, entry.hash, entry.offset, entry.padded_size
+                    ),
+                ));
+            }
+            let indexed = IndexedEntry {
+                shard: pair.shard,
+                entry: entry.clone(),
+            };
+            let Some(first) = self.entries.get(&entry.hash) else {
+                self.entries.insert(entry.hash, indexed);
+                continue;
+            };
+            if same_but_padding(&stored(first)?, &stored(&indexed)?) {
+                self.repeated.push(Repeated {
+                    hash: entry.hash,
+                    kept: first.shard,
+                    again: pair.shard,
+                });
+                continue;
+            }
+            let first_pair = set
+                .pairs
                 .iter()
                 .find(|p| p.shard == first.shard)
                 .map_or("an earlier pair", |p| p.stem);
@@ -226,13 +256,30 @@ fn index_pair(
                 "BHD5",
                 entry.index_offset,
                 format!(
-                    "path hash {:#x} is listed by {} and by {first_pair}; each hash names one entry across the archives",
+                    "path hash {:#x} is listed by {} and by {first_pair} with other bytes; a hash two pairs list \
+                     names the same bytes in both",
                     entry.hash, pair.stem
                 ),
             ));
         }
+        Ok(())
     }
-    Ok(())
+}
+/// Whether two stored copies of an entry hold the same bytes: the shorter is the start of the longer, and only zero
+/// bytes (padding) follow it.
+fn same_but_padding(a: &[u8], b: &[u8]) -> bool {
+    let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+    long.strip_prefix(short)
+        .is_some_and(|rest| rest.iter().all(|&b| b == 0))
+}
+/// The stored bytes of `entry` in the BDT file of the pair `stem` under `root`, decrypted, padding kept.
+fn read_extent(root: &Path, stem: &str, entry: &Entry) -> Result<Vec<u8>> {
+    let mut f = std::fs::File::open(root.join(format!("{stem}.bdt")))?;
+    f.seek(SeekFrom::Start(entry.offset))?;
+    let mut out = vec![0; entry.padded_size];
+    f.read_exact(&mut out)?;
+    entry.decrypt(&mut out)?;
+    Ok(out)
 }
 /// An index entry and the archive pair it came from.
 #[derive(Debug)]
@@ -254,6 +301,9 @@ pub struct Archive {
     pub headers: Vec<Header>,
     /// Optional pairs the install does not hold (downloadable content not installed).
     pub absent: Vec<&'static str>,
+    /// The path hashes a later pair lists again with the same bytes, in the order they were met; the entry read is the
+    /// first pair's.
+    pub repeated: Vec<Repeated>,
 }
 impl Archive {
     /// An archive of `game` that holds nothing: for a reader that must read none of it.
@@ -264,10 +314,13 @@ impl Archive {
             entries: BTreeMap::new(),
             headers: Vec::new(),
             absent: Vec::new(),
+            repeated: Vec::new(),
         }
     }
-    /// `game`'s archives under `root`, each index unwrapped with its pair's key in `keys`. An entry hash present in
-    /// two pairs is an error.
+    /// `game`'s archives under `root`, each index unwrapped with its pair's key in `keys`. A path hash that a later pair
+    /// lists again is accepted when the two entries hold the same bytes (the shorter stored copy is the start of the
+    /// longer, and only zero bytes follow it), reported in [`Archive::repeated`] with the first pair's entry kept; with
+    /// other bytes it is an error.
     pub fn open_game(root: impl AsRef<Path>, game: Game, keys: &Keys) -> Result<Self> {
         Self::open_game_with(NonZeroUsize::MIN, root, game, keys)
     }
@@ -280,7 +333,7 @@ impl Archive {
     ) -> Result<Self> {
         let root = root.as_ref().to_path_buf();
         let set = game.archives();
-        let mut entries = BTreeMap::new();
+        let mut index = Index::default();
         let mut headers = Vec::new();
         let mut absent = Vec::new();
         for pair in set.pairs {
@@ -295,15 +348,23 @@ impl Archive {
             let plain = unwrap_rsa_with(threads, &std::fs::read(&bhd)?, n, e)?;
             let header = Header::read(&plain, &set.record)?;
             let size = std::fs::metadata(root.join(format!("{}.bdt", pair.stem)))?.len();
-            index_pair(&mut entries, set.pairs, pair, &header, &set.record, size)?;
+            index.add(set, pair, &header, size, |e| {
+                let stem = set
+                    .pairs
+                    .iter()
+                    .find(|p| p.shard == e.shard)
+                    .map_or(pair.stem, |p| p.stem);
+                read_extent(&root, stem, &e.entry)
+            })?;
             headers.push(header);
         }
         Ok(Self {
             root,
             game,
-            entries,
+            entries: index.entries,
             headers,
             absent,
+            repeated: index.repeated,
         })
     }
     /// The game these archives belong to.
@@ -333,12 +394,7 @@ impl Archive {
         let pair = self
             .pair(e.shard)
             .ok_or_else(|| invalid("BHD5", 0, "entry from an unknown archive"))?;
-        let mut f = std::fs::File::open(self.root.join(format!("{}.bdt", pair.stem)))?;
-        f.seek(SeekFrom::Start(e.entry.offset))?;
-        let mut out = vec![0; e.entry.padded_size];
-        f.read_exact(&mut out)?;
-        e.entry.decrypt(&mut out)?;
-        Ok(out)
+        read_extent(&self.root, pair.stem, &e.entry)
     }
     /// Decode a DCX envelope when present; non-DCX bytes retain their stored padding.
     pub fn read_hash(&self, hash: u64, decoder: &Decoder<'_>) -> Result<Vec<u8>> {
@@ -479,32 +535,93 @@ mod tests {
         }
     }
 
+    static PAIRS: [ArchivePair; 2] = [
+        ArchivePair::required(0, "Data0"),
+        ArchivePair::required(1, "Data1"),
+    ];
+    const SET: ArchiveSet = ArchiveSet {
+        pairs: &PAIRS,
+        hash: PathHash::Base37,
+        record: crate::bhd::RecordLayout::SEKIRO,
+    };
+
     #[test]
-    fn an_entry_beyond_the_bdt_and_a_repeated_hash_are_refused_at_their_records() {
-        let pairs = [
-            ArchivePair::required(0, "Data0"),
-            ArchivePair::required(1, "Data1"),
-        ];
-        let record = RecordLayout::SEKIRO;
-        let mut entries = BTreeMap::new();
+    fn an_entry_beyond_the_bdt_is_refused_at_its_record() {
+        let mut index = Index::default();
+        let none = |_: &IndexedEntry| -> Result<Vec<u8>> { unreachable!("no hash is listed twice") };
         let ok = header(vec![entry(5, 36, 0, 100)]);
-        index_pair(&mut entries, &pairs, &pairs[0], &ok, &record, 100).unwrap();
+        index.add(&SET, &PAIRS[0], &ok, 100, none).unwrap();
         // offset + size wrapping around u64, and plainly beyond the end
         for (offset, padded) in [(u64::MAX - 3, 16), (90, 16)] {
             let bad = header(vec![entry(6, 76, offset, padded)]);
-            let e = index_pair(&mut entries, &pairs, &pairs[1], &bad, &record, 100)
+            let e = index
+                .add(&SET, &PAIRS[1], &bad, 100, none)
                 .unwrap_err()
                 .to_string();
             assert!(e.starts_with("BHD5 at 0x54: Data1.bdt entry 0x6"), "{e}");
             assert!(e.contains("beyond the 100 bytes"), "{e}");
         }
-        let again = header(vec![entry(5, 116, 0, 1)]);
-        let e = index_pair(&mut entries, &pairs, &pairs[1], &again, &record, 100)
-            .unwrap_err()
-            .to_string();
+    }
+
+    /// A hash a later pair lists again is a repeat when the two copies hold the same bytes but for zero padding after
+    /// the shorter, as Elden Ring's `DLC` lists five of `Data3`'s entries (`Data3` padding them to sixteen bytes); the
+    /// first pair's entry is kept. Any other difference is refused, naming both pairs.
+    #[test]
+    fn a_hash_listed_again_with_the_same_bytes_is_a_repeat_and_with_other_bytes_refused() {
+        let envelope: Vec<u8> = (1..=10).collect();
+        let mut padded = envelope.clone();
+        padded.resize(16, 0);
+        // each pair's stored bytes by entry offset: Data0 pads the envelope, Data1 holds it as it is, then other bytes,
+        // then the envelope with a nonzero byte in the padding
+        let mut other = envelope.clone();
+        other[9] = 0xEE;
+        let mut dirty = padded.clone();
+        dirty[15] = 1;
+        let bytes = |e: &IndexedEntry| -> Result<Vec<u8>> {
+            Ok(match (e.shard, e.entry.offset) {
+                (0, 0) => padded.clone(),
+                (1, 0) => envelope.clone(),
+                (1, 16) => other.clone(),
+                (1, 32) => dirty.clone(),
+                at => unreachable!("no entry at {at:?}"),
+            })
+        };
+        let mut index = Index::default();
+        index
+            .add(&SET, &PAIRS[0], &header(vec![entry(5, 36, 0, 16)]), 100, bytes)
+            .unwrap();
+        index
+            .add(&SET, &PAIRS[1], &header(vec![entry(5, 36, 0, 10)]), 100, bytes)
+            .unwrap();
         assert_eq!(
-            e,
-            "BHD5 at 0x74: path hash 0x5 is listed by Data1 and by Data0; each hash names one entry across the archives"
+            index.repeated,
+            [Repeated {
+                hash: 5,
+                kept: 0,
+                again: 1
+            }]
         );
+        assert_eq!(index.entries[&5].shard, 0);
+        assert_eq!(index.entries[&5].entry.padded_size, 16);
+        for (offset, at) in [(16, 0x74), (32, 0x94)] {
+            let e = index
+                .add(
+                    &SET,
+                    &PAIRS[1],
+                    &header(vec![entry(5, at, offset, 10 + 6 * usize::from(offset == 32))]),
+                    100,
+                    bytes,
+                )
+                .unwrap_err()
+                .to_string();
+            assert_eq!(
+                e,
+                format!(
+                    "BHD5 at {at:#x}: path hash 0x5 is listed by Data1 and by Data0 with other bytes; a hash two pairs \
+                     list names the same bytes in both"
+                )
+            );
+        }
+        assert_eq!(index.repeated.len(), 1);
     }
 }

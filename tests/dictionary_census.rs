@@ -5,7 +5,9 @@
 //! in this repository.
 //!
 //! The expected numbers are a census made with an independent Python reader of the same indexes (the BHD5 tables of each
-//! install and the games' path hashes).
+//! install and the games' path hashes), made on Elden Ring before its expansion was installed: the census holds the list to
+//! every pair but `DLC`. With the expansion installed, the `DLC` index lists five of `Data3`'s entries again, which the
+//! list names.
 mod inputs;
 
 use fromsoft_formats::{Game, NameDictionary};
@@ -60,6 +62,9 @@ fn census(game: Game, data: inputs::Game) -> Result<Option<Census>> {
     ) else {
         return Ok(None);
     };
+    // the pairs the census covers: all but the expansion's (a repeated entry is kept in the pair that listed it first)
+    let base =
+        |e: &&fromsoft_formats::archive::IndexedEntry| archive.pair(e.shard).is_some_and(|p| p.stem != "DLC");
     let lines = lines(&list)?;
     let text = lines
         .iter()
@@ -68,11 +73,11 @@ fn census(game: Game, data: inputs::Game) -> Result<Option<Census>> {
         .join("\n");
     let names = NameDictionary::parse_for(&text, game)?;
     let mut c = Census {
-        entries: archive.entries.len(),
+        entries: archive.entries.values().filter(base).count(),
         named: archive
             .entries
-            .keys()
-            .filter(|h| names.names.contains_key(h))
+            .iter()
+            .filter(|(h, e)| base(e) && names.names.contains_key(h))
             .count(),
         lines: lines.len(),
         distinct: names.names.values().map(Vec::len).sum(),
@@ -82,7 +87,7 @@ fn census(game: Game, data: inputs::Game) -> Result<Option<Census>> {
     };
     for l in &lines {
         let hash = archive.hash(&l.path);
-        let entry = archive.entries.get(&hash);
+        let entry = archive.entries.get(&hash).filter(base);
         *c.flags.entry((l.validated, entry.is_some())).or_default() += 1;
         let Some(entry) = entry else {
             continue;
@@ -144,7 +149,7 @@ fn elden_rings_list_names_the_index() -> Result<()> {
     // 130,951 lines, five of them repeats of another line; five lines repeat a path the index holds
     assert_eq!((c.lines, c.distinct, c.in_index), (130_951, 130_946, 97_123));
     // the `Validated` flag is not exact: 10,467 paths marked false are in the index, 33,750 marked true are not (they belong to
-    // the expansion's archives, which this install's index lacks)
+    // the expansion's archives, which the census leaves out)
     assert_eq!(
         c.flags,
         BTreeMap::from([
@@ -158,6 +163,55 @@ fn elden_rings_list_names_the_index() -> Result<()> {
     assert_eq!(
         c.wrong_archive,
         BTreeMap::from([(("dlc".to_owned(), "data3".to_owned()), 5)])
+    );
+    Ok(())
+}
+
+/// With the expansion installed, its `DLC` index lists five of `Data3`'s entries again, the bytes the same but for the
+/// padding `Data3` gives them; the archive keeps `Data3`'s and reports the five, which the list names.
+#[test]
+fn elden_rings_expansion_lists_five_data3_entries_again() -> Result<()> {
+    let (Some(archive), Some(list)) = (
+        common::archive(Game::EldenRing)?,
+        oracle(OracleSet::Smithbox, inputs::Game::Elden, "file-dictionary.json"),
+    ) else {
+        return Ok(());
+    };
+    if archive.absent.contains(&"DLC") {
+        println!("the expansion is not installed");
+        assert!(archive.repeated.is_empty());
+        return Ok(());
+    }
+    let text = lines(&list)?
+        .iter()
+        .map(|l| l.path.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let names = NameDictionary::parse_for(&text, Game::EldenRing)?;
+    let stem = |shard| archive.pair(shard).map_or("?", |p| p.stem);
+    let mut repeated: Vec<(&str, &str, &str)> = archive
+        .repeated
+        .iter()
+        .map(|r| {
+            let path = names
+                .names
+                .get(&r.hash)
+                .and_then(|p| p.first())
+                .map_or("?", String::as_str);
+            (stem(r.kept), stem(r.again), path)
+        })
+        .collect();
+    repeated.sort_unstable();
+    println!("{repeated:?}");
+    assert_eq!(
+        repeated,
+        [
+            ("Data3", "DLC", "/chr/c5550.anibnd.dcx"),
+            ("Data3", "DLC", "/chr/c5550.behbnd.dcx"),
+            ("Data3", "DLC", "/chr/c5550.chrbnd.dcx"),
+            ("Data3", "DLC", "/chr/c5550_h.texbnd.dcx"),
+            ("Data3", "DLC", "/chr/c5550_l.texbnd.dcx"),
+        ]
     );
     Ok(())
 }
