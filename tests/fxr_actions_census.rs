@@ -12,12 +12,12 @@ use fromsoft_formats::dcx::Decoder;
 use fromsoft_formats::fxr::actions::{NAMES, Typed};
 use fromsoft_formats::fxr::resources::{ResourceKind, Resources, read_resource_list};
 use fromsoft_formats::fxr::{self, Fxr, enums};
-use fromsoft_formats::{Archive, Binder, Game, Keys, NameDictionary};
+use fromsoft_formats::{Archive, Game, Keys, NameDictionary};
 use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use std::collections::{BTreeMap, BTreeSet};
 mod common;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 /// Actions of each type over all files, from the independent walker (`census_actions.py`).
 const SEKIRO_ACTIONS: &[(i16, usize)] = &[
@@ -193,6 +193,48 @@ struct Totals {
     layouts: Layouts,
 }
 
+impl Totals {
+    /// Adds the totals of other binders to these.
+    fn add(&mut self, other: Totals) {
+        self.files += other.files;
+        for (into, from) in [
+            (&mut self.actions, other.actions),
+            (&mut self.with_extra, other.with_extra),
+        ] {
+            for (key, n) in from {
+                *into.entry(key).or_default() += n;
+            }
+        }
+        for (key, n) in other.refused {
+            *self.refused.entry(key).or_default() += n;
+        }
+        for (key, n) in other.enum_values {
+            *self.enum_values.entry(key).or_default() += n;
+        }
+        self.enum_animated += other.enum_animated;
+        for (key, n) in other.enum_unknown {
+            *self.enum_unknown.entry(key).or_default() += n;
+        }
+        self.resources.extend(other.resources);
+        for (key, (ids, animated, unset)) in other.named {
+            let slot = self.named.entry(key).or_default();
+            slot.0.extend(ids);
+            slot.1 += animated;
+            slot.2 += unset;
+        }
+        self.listed.extend(other.listed);
+        for (key, n) in other.modifiers {
+            *self.modifiers.entry(key).or_default() += n;
+        }
+        for (kind, layouts) in other.layouts {
+            let into = self.layouts.entry(kind).or_default();
+            for (layout, n) in layouts {
+                *into.entry(layout).or_default() += n;
+            }
+        }
+    }
+}
+
 #[test]
 fn every_action_of_every_effect_file_reads_as_its_typed_struct() -> Result<()> {
     for (game, data, expected, expected_extra) in [
@@ -223,99 +265,116 @@ fn every_action_of_every_effect_file_reads_as_its_typed_struct() -> Result<()> {
             .filter(|p| archive.contains(p))
             .collect();
         let mut t = Totals::default();
-        for path in paths {
-            let binder = Binder::read(&archive.read(path, &decoder)?, &decoder)?;
-            let stem = fromsoft_formats::names::stem(path).to_owned();
-            let index = Resources::index(&binder)?;
-            for member in &binder.files {
-                let name = member.name.clone().unwrap_or_default();
-                if name.to_ascii_lowercase().ends_with(".ffxreslist") {
-                    for entry in
-                        read_resource_list(&member.bytes).map_err(|e| format!("{path} {name}: {e}"))?
-                    {
-                        t.listed.push((stem.clone(), entry));
-                    }
-                }
-            }
-            t.resources.insert(stem.clone(), index);
-            for member in &binder.files {
-                let name = member.name.clone().unwrap_or_default();
-                if fxr::member_id(&name).is_none() {
-                    continue;
-                }
-                let read = match Fxr::read(&member.bytes) {
-                    Ok(f) => f,
-                    Err(e) => return Err(format!("{path} {name}: {e}").into()),
-                };
-                t.files += 1;
-                for a in read.actions() {
-                    *t.actions.entry(a.id).or_default() += 1;
-                    if a.id == 0 {
-                        continue;
-                    }
-                    *t.layouts
-                        .entry(a.id)
-                        .or_default()
-                        .entry((
-                            a.properties1.len(),
-                            a.properties2.len(),
-                            a.fields1.len(),
-                            a.fields2.len(),
-                        ))
-                        .or_default() += 1;
-                    for p in a.properties1.iter().chain(&a.properties2) {
-                        for m in &p.modifiers {
-                            match m.kind() {
-                                Ok(_) => {
-                                    *t.modifiers.entry((m.type_number(), m.components())).or_default() += 1
-                                }
-                                Err(e) => return Err(format!("{path} {name}: action {}: {e}", a.id).into()),
-                            }
+        // each binder counted on the archive's threads into totals of its own, with its refusals' lines
+        let read =
+            archive.read_each_binder(&paths, &decoder, inputs::threads(), |path, binder| -> Result<_> {
+                let binder = binder?;
+                let mut t = Totals::default();
+                let mut refusals = Vec::new();
+                let stem = fromsoft_formats::names::stem(path).to_owned();
+                let index = Resources::index(&binder)?;
+                for member in &binder.files {
+                    let name = member.name.clone().unwrap_or_default();
+                    if name.to_ascii_lowercase().ends_with(".ffxreslist") {
+                        for entry in
+                            read_resource_list(&member.bytes).map_err(|e| format!("{path} {name}: {e}"))?
+                        {
+                            t.listed.push((stem.clone(), entry));
                         }
                     }
-                    match Typed::read(a, game) {
-                        Ok(typed) => {
-                            for r in typed.resources() {
-                                let e = t.named.entry((stem.clone(), r.kind)).or_default();
-                                match r.id {
-                                    None => e.1 += 1,
-                                    Some(id) if id > 0 => {
-                                        e.0.insert(id);
+                }
+                t.resources.insert(stem.clone(), index);
+                for member in &binder.files {
+                    let name = member.name.clone().unwrap_or_default();
+                    if fxr::member_id(&name).is_none() {
+                        continue;
+                    }
+                    let read = match Fxr::read(&member.bytes) {
+                        Ok(f) => f,
+                        Err(e) => return Err(format!("{path} {name}: {e}").into()),
+                    };
+                    t.files += 1;
+                    for a in read.actions() {
+                        *t.actions.entry(a.id).or_default() += 1;
+                        if a.id == 0 {
+                            continue;
+                        }
+                        *t.layouts
+                            .entry(a.id)
+                            .or_default()
+                            .entry((
+                                a.properties1.len(),
+                                a.properties2.len(),
+                                a.fields1.len(),
+                                a.fields2.len(),
+                            ))
+                            .or_default() += 1;
+                        for p in a.properties1.iter().chain(&a.properties2) {
+                            for m in &p.modifiers {
+                                match m.kind() {
+                                    Ok(_) => {
+                                        *t.modifiers.entry((m.type_number(), m.components())).or_default() +=
+                                            1
                                     }
-                                    Some(_) => e.2 += 1,
+                                    Err(e) => {
+                                        return Err(format!("{path} {name}: action {}: {e}", a.id).into());
+                                    }
                                 }
                             }
-                            for (param, enum_name, value) in typed.enum_values() {
-                                match value {
-                                    None => t.enum_animated += 1,
-                                    Some(v) => {
-                                        *t.enum_values.entry((enum_name.to_owned(), v)).or_default() += 1;
-                                        if enums::member_name(enum_name, v).is_none() {
-                                            *t.enum_unknown
-                                                .entry((a.id, param.to_owned(), enum_name.to_owned(), v))
-                                                .or_default() += 1;
+                        }
+                        match Typed::read(a, game) {
+                            Ok(typed) => {
+                                for r in typed.resources() {
+                                    let e = t.named.entry((stem.clone(), r.kind)).or_default();
+                                    match r.id {
+                                        None => e.1 += 1,
+                                        Some(id) if id > 0 => {
+                                            e.0.insert(id);
+                                        }
+                                        Some(_) => e.2 += 1,
+                                    }
+                                }
+                                for (param, enum_name, value) in typed.enum_values() {
+                                    match value {
+                                        None => t.enum_animated += 1,
+                                        Some(v) => {
+                                            *t.enum_values.entry((enum_name.to_owned(), v)).or_default() += 1;
+                                            if enums::member_name(enum_name, v).is_none() {
+                                                *t.enum_unknown
+                                                    .entry((a.id, param.to_owned(), enum_name.to_owned(), v))
+                                                    .or_default() += 1;
+                                            }
                                         }
                                     }
                                 }
+                                if !typed.extra().is_empty() {
+                                    *t.with_extra.entry(a.id).or_default() += 1;
+                                }
                             }
-                            if !typed.extra().is_empty() {
-                                *t.with_extra.entry(a.id).or_default() += 1;
+                            Err(e) => {
+                                let reason = format!(
+                                    "{} {}: {e}",
+                                    a.id,
+                                    NAMES.iter().find(|n| n.0 == a.id).map_or("?", |n| n.1)
+                                );
+                                refusals.push((reason.clone(), format!("REFUSED {path} {name}: {reason}")));
+                                *t.refused.entry(reason).or_default() += 1;
                             }
-                        }
-                        Err(e) => {
-                            let reason = format!(
-                                "{} {}: {e}",
-                                a.id,
-                                NAMES.iter().find(|n| n.0 == a.id).map_or("?", |n| n.1)
-                            );
-                            if !t.refused.contains_key(&reason) {
-                                println!("REFUSED {path} {name}: {reason}");
-                            }
-                            *t.refused.entry(reason).or_default() += 1;
                         }
                     }
                 }
+                Ok((t, refusals))
+            })?;
+        for binder in read {
+            let (binder_totals, refusals) = binder?;
+            for (reason, line) in refusals {
+                // a reason's first refusal is printed
+                t.refused.entry(reason).or_insert_with(|| {
+                    println!("{line}");
+                    0
+                });
             }
+            t.add(binder_totals);
         }
         // the numbers the effects name, found in their own binder, else in the common ones, else in any other
         let common = ["sfxbnd_commoneffects.ffxbnd", "sfxbnd_commoneffects_dlc02.ffxbnd"];

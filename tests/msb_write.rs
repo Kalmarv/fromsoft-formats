@@ -17,7 +17,7 @@ use fromsoft_formats::{Archive, Game, Keys, NameDictionary};
 use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use std::collections::BTreeSet;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 fn put64(data: &mut [u8], offset: usize, value: usize) {
     data[offset..offset + 8].copy_from_slice(&(value as u64).to_le_bytes());
@@ -216,20 +216,29 @@ fn every_map_layout_of_the_installs_writes_back_to_its_bytes() -> Result<()> {
             .filter_map(|p| p.strip_prefix("/map/mapstudio/")?.strip_suffix(".msb.dcx"))
             .filter(|m| !m.contains('/'))
             .collect();
-        let mut written = 0;
-        for map in maps {
-            let path = format!("/map/mapstudio/{map}.msb.dcx");
-            if !archive.contains(&path) {
-                continue;
-            }
-            let bytes = archive.read(&path, &decoder)?;
-            let layout = MapLayout::read(&bytes).map_err(|e| format!("{path}: {e}"))?;
+        // each layout written back on the archive's threads
+        let paths: Vec<String> = maps
+            .iter()
+            .map(|map| format!("/map/mapstudio/{map}.msb.dcx"))
+            .filter(|p| archive.contains(p))
+            .collect();
+        let read = archive.read_each(&paths, &decoder, inputs::threads(), |path, bytes| -> Result<_> {
+            let bytes = bytes?;
+            let mut written = 0;
+            let layout = MapLayout::read(bytes).map_err(|e| format!("{path}: {e}"))?;
             let out = layout.write().map_err(|e| format!("{path}: {e}"))?;
             if out != bytes {
                 return Err(format!("{path}: write() differs from the stored bytes").into());
             }
             written += 1;
+            Ok(written)
+        })?;
+        let mut written = 0;
+        for totals in read {
+            let written_ = totals?;
+            written += written_;
         }
+
         println!(
             "{}: {written} map layouts written back byte for byte",
             game.name()

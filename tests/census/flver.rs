@@ -67,16 +67,18 @@ pub fn census(game: Game) -> Result<Option<Report>> {
         next: game == Game::EldenRing,
     };
     // What one entry's check gives: the ids of the FLVERs it checked and what it found (kept when the entry is then
-    // refused, as a walk entry by entry keeps them), and its refusal.
+    // refused, as a walk entry by entry keeps them), its refusal, and a split binder's index with the path of its payload
+    // (read in a second pass).
     struct Checked {
         seen: Vec<String>,
         report: Report,
         refused: Option<String>,
+        index: Option<(String, Vec<u8>)>,
     }
     let id_of = |hash: u64| format!("{}/{hash:0width$x}", archive.entries[&hash].shard);
     let name_of = |hash: u64| names.names.get(&hash).and_then(|x| x.first());
     // every entry read in one pass and checked on the scan's threads, then merged in the index's order
-    let checked = common::scan_map(
+    let mut checked = common::scan_map(
         &archive,
         &decoder,
         |hash| !name_of(hash).is_some_and(|n| n.ends_with("bdt")),
@@ -86,17 +88,13 @@ pub fn census(game: Game) -> Result<Option<Report>> {
                 seen: Vec::new(),
                 report: Report::default(),
                 refused: None,
+                index: None,
             };
             let result = (|| -> Result<()> {
                 let bytes = bytes?;
                 if bytes.starts_with(b"BHF4") {
                     let name = name_of(hash).ok_or("unnamed split binder")?;
-                    let payload = archive.read(&format!("{}bdt", &name[..name.len() - 3]), &decoder)?;
-                    let binder = Binder::read_split(bytes, &payload, &decoder)?;
-                    for (i, f) in binder.files.iter().enumerate() {
-                        check.visit(&f.bytes, &format!("{id}/s{i}"), &mut c.seen, &mut c.report, 0)?;
-                    }
-                    c.report.count("split binders", 1);
+                    c.index = Some((format!("{}bdt", &name[..name.len() - 3]), bytes.to_vec()));
                 } else {
                     check.visit(bytes, &id, &mut c.seen, &mut c.report, 0)?;
                 }
@@ -106,6 +104,45 @@ pub fn census(game: Game) -> Result<Option<Report>> {
             c
         },
     )?;
+    // the split binders: each payload read in one more pass and read with the index the scan kept, its members checked
+    let split: Vec<(u64, String, Vec<u8>)> = checked
+        .iter_mut()
+        .filter_map(|(&hash, c)| c.index.take().map(|(payload, index)| (hash, payload, index)))
+        .collect();
+    let by_payload: BTreeMap<&str, (u64, &[u8])> = split
+        .iter()
+        .map(|(hash, payload, index)| (payload.as_str(), (*hash, index.as_slice())))
+        .collect();
+    let members = archive.read_each(
+        split.iter().map(|(_, payload, _)| payload),
+        &decoder,
+        inputs::threads(),
+        |payload, bytes| {
+            let (hash, index) = by_payload[payload];
+            let id = id_of(hash);
+            let mut c = Checked {
+                seen: Vec::new(),
+                report: Report::default(),
+                refused: None,
+                index: None,
+            };
+            let result = (|| -> Result<()> {
+                let binder = Binder::read_split(index, bytes?, &decoder)?;
+                for (i, f) in binder.files.iter().enumerate() {
+                    check.visit(&f.bytes, &format!("{id}/s{i}"), &mut c.seen, &mut c.report, 0)?;
+                }
+                c.report.count("split binders", 1);
+                Ok(())
+            })();
+            c.refused = result.err().map(|e| e.to_string());
+            c
+        },
+    )?;
+    for ((hash, ..), c) in split.iter().zip(members) {
+        *checked
+            .get_mut(hash)
+            .ok_or("a split binder the scan did not give")? = c;
+    }
     let mut report = Report::default();
     for (hash, c) in checked {
         let id = id_of(hash);

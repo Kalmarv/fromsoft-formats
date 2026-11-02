@@ -17,7 +17,7 @@ use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use std::collections::{BTreeMap, BTreeSet};
 mod common;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 #[test]
 fn the_event_scripts_name_their_common_functions_where_the_game_puts_them() -> Result<()> {
@@ -49,8 +49,13 @@ fn the_event_scripts_name_their_common_functions_where_the_game_puts_them() -> R
             .collect();
         let (mut read, mut decided, mut undecidable) = (0, BTreeMap::<i32, usize>::new(), 0);
         let mut other = BTreeMap::<i32, usize>::new();
-        for path in paths.into_iter().filter(|p| archive.contains(p)) {
-            let rules = Rules::read(&Script::read(&archive.read(path, &decoder)?)?, game);
+        // each script's rules, read on the archive's threads
+        let paths: Vec<_> = paths.into_iter().filter(|p| archive.contains(p)).collect();
+        let read_rules = archive.read_each(&paths, &decoder, inputs::threads(), |_, bytes| -> Result<_> {
+            Ok(Rules::read(&Script::read(bytes?)?, game))
+        })?;
+        for rules in read_rules {
+            let rules = rules?;
             read += 1;
             undecidable += rules.undecidable_calls;
             for (function, n) in rules.decided {

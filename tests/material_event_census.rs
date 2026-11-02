@@ -1,14 +1,17 @@
 //! Every discovered Elden Ring character TAE's authored event 198, without interpreting its unknown ramp fields.
 //! Main character names are exhaustively probed (c0000..c9999); companion binders come from the dictionary and
-//! authored marker members. No HKX, material texture or shader is decoded. One binder is held at a time.
+//! authored marker members. No HKX, material texture or shader is decoded. Each binder is read once on the archive's
+//! threads ([`fromsoft_formats::Archive::read_each`]) and only what it holds for the census (its lines and tallies) is
+//! kept until it is visited.
 mod inputs;
 
 use fromsoft_formats::{Binder, Game, Install, Keys, NameDictionary, dcx::Decoder, tae::Tae};
-use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
+use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle, threads};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 mod common;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 fn word(bytes: &[u8], offset: usize) -> Result<u32> {
     Ok(u32::from_le_bytes(
@@ -37,6 +40,153 @@ fn event_word_views_preserve_integer_float_and_halfword_identity() -> Result<()>
     assert_eq!(units(u32::MAX)["f32_finite"], false);
     assert!(word(&[0; 3], 0).is_err());
     Ok(())
+}
+
+/// What one character binder holds: its character, the companion binders its marker members name (in member order),
+/// the lines of its import aliases and event 198 records in order, and its tallies.
+struct Binder198 {
+    character: String,
+    companions: Vec<String>,
+    lines: Vec<String>,
+    tae_files: usize,
+    events: usize,
+    imports_with_events: usize,
+    import_refusals: usize,
+    malformed: usize,
+    lengths: BTreeMap<usize, usize>,
+    histogram: Vec<BTreeMap<u32, usize>>,
+    by_row: BTreeMap<i32, Vec<BTreeMap<u32, usize>>>,
+}
+
+/// The character binder at `path`, read from `bytes`: what [`Binder198`] holds.
+fn binder198(
+    path: &str,
+    bytes: fromsoft_formats::Result<&[u8]>,
+    decoder: &Decoder<'_>,
+    material_rows: &BTreeMap<i32, Value>,
+) -> std::result::Result<Binder198, BoxError> {
+    let stem = path
+        .strip_prefix("/chr/")
+        .and_then(|p| p.strip_suffix(".anibnd.dcx"))
+        .ok_or("unexpected character binder path")?;
+    let character = stem.get(..5).ok_or("character binder name shorter than cNNNN")?;
+    let binder = Binder::read(bytes?, decoder)?;
+    let mut out = Binder198 {
+        character: character.to_owned(),
+        companions: Vec::new(),
+        lines: Vec::new(),
+        tae_files: 0,
+        events: 0,
+        imports_with_events: 0,
+        import_refusals: 0,
+        malformed: 0,
+        lengths: BTreeMap::new(),
+        histogram: vec![BTreeMap::new(); 16],
+        by_row: BTreeMap::new(),
+    };
+    let mut event_files = Vec::new();
+    for file in &binder.files {
+        let member = file.name.as_deref().unwrap_or("");
+        let leaf = member
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(member)
+            .to_ascii_lowercase();
+        if let Some(set) = leaf.strip_suffix(".txt").or_else(|| leaf.strip_suffix(".blf"))
+            && set.starts_with(&format!("{character}_"))
+        {
+            out.companions.push(format!("/chr/{set}.anibnd.dcx"));
+        }
+        if !leaf.ends_with(".tae") {
+            continue;
+        }
+        event_files.push((member.to_owned(), Tae::read_member(&binder, file)?));
+    }
+    // an import may name an animation of another event file of the binder
+    let taes: Vec<&Tae> = event_files.iter().map(|(_, t)| t).collect();
+    for (member, tae) in &event_files {
+        let member = member.as_str();
+        out.tae_files += 1;
+        for animation in &tae.animations {
+            let number = tae.number(animation);
+            match fromsoft_formats::tae::resolve(&taes, number) {
+                Ok(Some((file, resolved)))
+                    if taes[file].number(resolved) != number
+                        && resolved.events.iter().any(|event| event.kind == 198) =>
+                {
+                    out.imports_with_events += 1;
+                    out.lines.push(format!(
+                        "TAE198_IMPORT={}",
+                        json!({"binder":path,"file":member,"animation":number,
+                        "resolved_animation":taes[file].number(resolved),"scope":"alias only; excluded from authored-instance histograms"})
+                    ));
+                }
+                Err(error) => {
+                    out.import_refusals += 1;
+                    out.lines.push(format!(
+                        "TAE198_IMPORT_REFUSAL={}",
+                        json!({"binder":path,"file":member,"animation":number,
+                        "error":error.to_string(),"scope":"raw authored events below remain counted; unresolved aliases are not inferred"})
+                    ));
+                }
+                _ => {}
+            }
+            for (index, event) in animation
+                .events
+                .iter()
+                .enumerate()
+                .filter(|(_, event)| event.kind == 198)
+            {
+                out.events += 1;
+                *out.lengths.entry(event.parameters.len()).or_insert(0usize) += 1;
+                let words = event
+                    .parameters
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|bytes| u32::from_le_bytes(*bytes))
+                    .collect::<Vec<_>>();
+                let row_id = words.get(1).copied().map(|word| word as i32);
+                let mut candidates = Vec::new();
+                for (word, value) in words.iter().enumerate() {
+                    if word < out.histogram.len() {
+                        *out.histogram[word].entry(*value).or_default() += 1;
+                    }
+                    if let Some(row) = material_rows.get(&(*value as i32)) {
+                        candidates.push(json!({"byte":word*4,"row":row}));
+                    }
+                    if let Some(row) = row_id {
+                        let counts = out.by_row.entry(row).or_insert_with(|| vec![BTreeMap::new(); 16]);
+                        if word < counts.len() {
+                            *counts[word].entry(*value).or_default() += 1;
+                        }
+                    }
+                }
+                if event.parameters.len() != 64 {
+                    out.malformed += 1;
+                }
+                out.lines.push(format!(
+                    "TAE198_INSTANCE={}",
+                    json!({"binder":path,"file":member,"animation":number,"event":index,
+                    "start":event.start,"end":event.end,"byte_length":event.parameters.len(),"raw":event.parameters,
+                    "header_at_0":words.first().copied().map(units),
+                    "payload_15_at_4":words.iter().skip(1).copied().map(units).collect::<Vec<_>>(),
+                    "row_at_4":row_id.and_then(|id|material_rows.get(&id)),"row_candidates":candidates,
+                    "scope":"authored event, no ramp/target semantics inferred from field position"})
+                ));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Adds each word's value counts of `from` to those of `into`.
+fn add_words(into: &mut [BTreeMap<u32, usize>], from: Vec<BTreeMap<u32, usize>>) {
+    for (into, from) in into.iter_mut().zip(from) {
+        for (value, n) in from {
+            *into.entry(value).or_default() += n;
+        }
+    }
 }
 
 #[test]
@@ -109,6 +259,24 @@ fn every_elden_character_material_event198_payload() -> Result<()> {
             "TAE198_COVERAGE_NOTE=no UXM dictionary: exhaustive main names and their authored companions only"
         );
     }
+    // each binder read once, on the archive's threads: the list grows by the companion binders the marker members name,
+    // so it is read in rounds (the binders named, then the companions they name that no round has read), then visited
+    // in the order the list gives, the smallest path first, as a loop over it would
+    let mut read: BTreeMap<String, std::result::Result<Binder198, BoxError>> = BTreeMap::new();
+    let mut round: Vec<String> = todo.iter().cloned().collect();
+    while !round.is_empty() {
+        let binders = archive.read_each(&round, &decoder, threads(), |path, bytes| {
+            binder198(path, bytes, &decoder, &material_rows)
+        })?;
+        let mut next = BTreeSet::new();
+        for (path, binder) in round.into_iter().zip(binders) {
+            if let Ok(binder) = &binder {
+                next.extend(binder.companions.iter().filter(|c| archive.contains(c)).cloned());
+            }
+            read.insert(path, binder);
+        }
+        round = next.into_iter().filter(|c| !read.contains_key(c)).collect();
+    }
     let mut visited = BTreeSet::new();
     let mut histogram: Vec<BTreeMap<u32, usize>> = vec![BTreeMap::new(); 16];
     let mut by_row: BTreeMap<i32, Vec<BTreeMap<u32, usize>>> = BTreeMap::new();
@@ -124,119 +292,40 @@ fn every_elden_character_material_event198_payload() -> Result<()> {
         if !visited.insert(path.clone()) {
             continue;
         }
-        let stem = path
-            .strip_prefix("/chr/")
-            .and_then(|p| p.strip_suffix(".anibnd.dcx"))
-            .ok_or("unexpected character binder path")?;
-        let character = stem.get(..5).ok_or("character binder name shorter than cNNNN")?;
-        let binder = Binder::read(&archive.read(&path, &decoder)?, &decoder)?;
-        let mut local_files = 0usize;
-        let mut local_events = 0usize;
-        let mut event_files = Vec::new();
-        for file in &binder.files {
-            let member = file.name.as_deref().unwrap_or("");
-            let leaf = member
-                .rsplit(['/', '\\'])
-                .next()
-                .unwrap_or(member)
-                .to_ascii_lowercase();
-            if let Some(set) = leaf.strip_suffix(".txt").or_else(|| leaf.strip_suffix(".blf"))
-                && set.starts_with(&format!("{character}_"))
-            {
-                let companion = format!("/chr/{set}.anibnd.dcx");
-                if archive.contains(&companion) && !visited.contains(&companion) && todo.insert(companion) {
-                    marker_binders += 1;
-                }
+        let binder = read
+            .remove(&path)
+            .ok_or("a binder no round read")?
+            .map_err(|e| e as Box<dyn std::error::Error>)?;
+        for companion in binder.companions {
+            if archive.contains(&companion) && !visited.contains(&companion) && todo.insert(companion) {
+                marker_binders += 1;
             }
-            if !leaf.ends_with(".tae") {
-                continue;
-            }
-            event_files.push((member.to_owned(), Tae::read_member(&binder, file)?));
         }
-        // an import may name an animation of another event file of the binder
-        let taes: Vec<&Tae> = event_files.iter().map(|(_, t)| t).collect();
-        for (member, tae) in &event_files {
-            let member = member.as_str();
-            tae_files += 1;
-            local_files += 1;
-            for animation in &tae.animations {
-                let number = tae.number(animation);
-                match fromsoft_formats::tae::resolve(&taes, number) {
-                    Ok(Some((file, resolved)))
-                        if taes[file].number(resolved) != number
-                            && resolved.events.iter().any(|event| event.kind == 198) =>
-                    {
-                        imports_with_events += 1;
-                        println!(
-                            "TAE198_IMPORT={}",
-                            json!({"binder":path,"file":member,"animation":number,
-                            "resolved_animation":taes[file].number(resolved),"scope":"alias only; excluded from authored-instance histograms"})
-                        );
-                    }
-                    Err(error) => {
-                        import_refusals += 1;
-                        println!(
-                            "TAE198_IMPORT_REFUSAL={}",
-                            json!({"binder":path,"file":member,"animation":number,
-                            "error":error.to_string(),"scope":"raw authored events below remain counted; unresolved aliases are not inferred"})
-                        );
-                    }
-                    _ => {}
-                }
-                for (index, event) in animation
-                    .events
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, event)| event.kind == 198)
-                {
-                    events += 1;
-                    local_events += 1;
-                    *lengths.entry(event.parameters.len()).or_insert(0usize) += 1;
-                    let words = event
-                        .parameters
-                        .as_chunks::<4>()
-                        .0
-                        .iter()
-                        .map(|bytes| u32::from_le_bytes(*bytes))
-                        .collect::<Vec<_>>();
-                    let row_id = words.get(1).copied().map(|word| word as i32);
-                    let mut candidates = Vec::new();
-                    for (word, value) in words.iter().enumerate() {
-                        if word < histogram.len() {
-                            *histogram[word].entry(*value).or_default() += 1;
-                        }
-                        if let Some(row) = material_rows.get(&(*value as i32)) {
-                            candidates.push(json!({"byte":word*4,"row":row}));
-                        }
-                        if let Some(row) = row_id {
-                            let counts = by_row.entry(row).or_insert_with(|| vec![BTreeMap::new(); 16]);
-                            if word < counts.len() {
-                                *counts[word].entry(*value).or_default() += 1;
-                            }
-                        }
-                    }
-                    if event.parameters.len() != 64 {
-                        malformed += 1;
-                    }
-                    println!(
-                        "TAE198_INSTANCE={}",
-                        json!({"binder":path,"file":member,"animation":number,"event":index,
-                        "start":event.start,"end":event.end,"byte_length":event.parameters.len(),"raw":event.parameters,
-                        "header_at_0":words.first().copied().map(units),
-                        "payload_15_at_4":words.iter().skip(1).copied().map(units).collect::<Vec<_>>(),
-                        "row_at_4":row_id.and_then(|id|material_rows.get(&id)),"row_candidates":candidates,
-                        "scope":"authored event, no ramp/target semantics inferred from field position"})
-                    );
-                }
-            }
+        for line in &binder.lines {
+            println!("{line}");
+        }
+        tae_files += binder.tae_files;
+        events += binder.events;
+        imports_with_events += binder.imports_with_events;
+        import_refusals += binder.import_refusals;
+        malformed += binder.malformed;
+        for (length, n) in binder.lengths {
+            *lengths.entry(length).or_insert(0usize) += n;
+        }
+        add_words(&mut histogram, binder.histogram);
+        for (row, words) in binder.by_row {
+            add_words(
+                by_row.entry(row).or_insert_with(|| vec![BTreeMap::new(); 16]),
+                words,
+            );
         }
         let tally = characters
-            .entry(character.to_owned())
+            .entry(binder.character)
             .or_insert_with(|| json!({"binders":0,"tae_files":0,"events198":0}));
         for (key, increment) in [
             ("binders", 1),
-            ("tae_files", local_files),
-            ("events198", local_events),
+            ("tae_files", binder.tae_files),
+            ("events198", binder.events),
         ] {
             let total = tally[key].as_u64().ok_or("character tally is not an integer")? + increment as u64;
             tally[key] = json!(total);

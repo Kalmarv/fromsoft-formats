@@ -13,13 +13,13 @@ mod common;
 mod inputs;
 
 use fromsoft_formats::dcx::Decoder;
-use fromsoft_formats::{Archive, Binder, Game, NameDictionary};
+use fromsoft_formats::{Archive, Game, NameDictionary};
 use havok_formats::Tagfile;
 use havok_formats::navmesh::nav_data;
 use inputs::{Game as Data, OracleSet, Tool, oodle, oracle};
 use std::collections::BTreeSet;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 /// What the navmesh binders of one game hold.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -49,6 +49,33 @@ struct Totals {
     setups: usize,
     /// Graphs that are the cluster graph of the mesh in their file (`NavData::graph_is_cluster_graph`).
     graphs_that_are_cluster_graphs: usize,
+}
+
+impl Totals {
+    /// Adds the counts of other files to these.
+    fn add(&mut self, other: Totals) {
+        self.binders += other.binders;
+        self.unnamed_binders += other.unnamed_binders;
+        self.files += other.files;
+        self.sdk_2016 += other.sdk_2016;
+        self.sdk_2018 += other.sdk_2018;
+        self.faces += other.faces;
+        self.edges += other.edges;
+        self.user_edges += other.user_edges;
+        self.vertices += other.vertices;
+        self.clustered_faces += other.clustered_faces;
+        self.empty_meshes += other.empty_meshes;
+        self.triangles += other.triangles;
+        self.incomplete_faces += other.incomplete_faces;
+        self.graphs += other.graphs;
+        self.graph_nodes += other.graph_nodes;
+        self.graph_edges += other.graph_edges;
+        self.trees += other.trees;
+        self.tree_nodes += other.tree_nodes;
+        self.setup_arrays += other.setup_arrays;
+        self.setups += other.setups;
+        self.graphs_that_are_cluster_graphs += other.graphs_that_are_cluster_graphs;
+    }
 }
 
 /// The paths of the navmesh binders the game's maps would have, and how many its dictionary does not name.
@@ -110,52 +137,61 @@ fn totals(game: Game) -> Result<Option<Totals>> {
         unnamed_binders: unnamed,
         ..Totals::default()
     };
-    for path in &paths {
-        let bytes = archive.read(path, &decoder)?;
-        let binder = Binder::read(&bytes, &decoder)?;
-        for f in &binder.files {
-            let name = f.name.as_deref().unwrap_or("");
-            let bytes = decoder.decode_if_dcx(&f.bytes)?;
-            if !name.ends_with(".hkx") {
-                return Err(format!("{path}: {name}: a member that is not a .hkx tagfile").into());
+    // each binder's totals, read on the archive's threads and added up in path order
+    let binders = archive.read_each_binder(
+        &paths,
+        &decoder,
+        inputs::threads(),
+        |path, binder| -> Result<Totals> {
+            let mut t = Totals::default();
+            for f in &binder?.files {
+                let name = f.name.as_deref().unwrap_or("");
+                let bytes = decoder.decode_if_dcx(&f.bytes)?;
+                if !name.ends_with(".hkx") {
+                    return Err(format!("{path}: {name}: a member that is not a .hkx tagfile").into());
+                }
+                let tag = Tagfile::read(&bytes, None).map_err(|e| format!("{path}: {name}: {e}"))?;
+                let nav = nav_data(tag.root()?).map_err(|e| format!("{path}: {name}: {e}"))?;
+                match &tag.version {
+                    b"20160200" => t.sdk_2016 += 1,
+                    b"20180100" => t.sdk_2018 += 1,
+                    other => return Err(format!("{path}: {name}: SDK {other:?}").into()),
+                }
+                t.files += 1;
+                let mesh = &nav.mesh;
+                t.faces += mesh.faces.len();
+                t.edges += mesh.edges.len();
+                t.user_edges += mesh.edges.iter().filter(|e| e.user).count();
+                t.vertices += mesh.vertices.len();
+                t.clustered_faces += mesh.faces.iter().filter(|f| f.cluster.is_some()).count();
+                t.empty_meshes += usize::from(mesh.faces.is_empty());
+                for face in 0..mesh.faces.len() {
+                    let cut = mesh.triangulate(face).ok_or("a face that does not triangulate")?;
+                    t.triangles += cut.triangles.len();
+                    t.incomplete_faces += usize::from(!cut.complete);
+                }
+                if let Some(graph) = &nav.graph {
+                    t.graphs += 1;
+                    t.graph_nodes += graph.nodes.len();
+                    t.graph_edges += graph.edges.len();
+                    t.graphs_that_are_cluster_graphs += usize::from(nav.graph_is_cluster_graph());
+                }
+                if let Some(tree) = &nav.tree {
+                    t.trees += 1;
+                    t.tree_nodes += tree.nodes.len();
+                    assert!(tree.covers_faces_once(mesh.faces.len()), "{path}: {name}");
+                    assert!(tree.corner_excess(mesh) <= 1e-3, "{path}: {name}");
+                }
+                if let Some(setups) = &nav.user_edge_setups {
+                    t.setup_arrays += 1;
+                    t.setups += setups.len();
+                }
             }
-            let tag = Tagfile::read(&bytes, None).map_err(|e| format!("{path}: {name}: {e}"))?;
-            let nav = nav_data(tag.root()?).map_err(|e| format!("{path}: {name}: {e}"))?;
-            match &tag.version {
-                b"20160200" => t.sdk_2016 += 1,
-                b"20180100" => t.sdk_2018 += 1,
-                other => return Err(format!("{path}: {name}: SDK {other:?}").into()),
-            }
-            t.files += 1;
-            let mesh = &nav.mesh;
-            t.faces += mesh.faces.len();
-            t.edges += mesh.edges.len();
-            t.user_edges += mesh.edges.iter().filter(|e| e.user).count();
-            t.vertices += mesh.vertices.len();
-            t.clustered_faces += mesh.faces.iter().filter(|f| f.cluster.is_some()).count();
-            t.empty_meshes += usize::from(mesh.faces.is_empty());
-            for face in 0..mesh.faces.len() {
-                let cut = mesh.triangulate(face).ok_or("a face that does not triangulate")?;
-                t.triangles += cut.triangles.len();
-                t.incomplete_faces += usize::from(!cut.complete);
-            }
-            if let Some(graph) = &nav.graph {
-                t.graphs += 1;
-                t.graph_nodes += graph.nodes.len();
-                t.graph_edges += graph.edges.len();
-                t.graphs_that_are_cluster_graphs += usize::from(nav.graph_is_cluster_graph());
-            }
-            if let Some(tree) = &nav.tree {
-                t.trees += 1;
-                t.tree_nodes += tree.nodes.len();
-                assert!(tree.covers_faces_once(mesh.faces.len()), "{path}: {name}");
-                assert!(tree.corner_excess(mesh) <= 1e-3, "{path}: {name}");
-            }
-            if let Some(setups) = &nav.user_edge_setups {
-                t.setup_arrays += 1;
-                t.setups += setups.len();
-            }
-        }
+            Ok(t)
+        },
+    )?;
+    for binder in binders {
+        t.add(binder?);
     }
     eprintln!("{} navmesh binders: {t:?}", game.name());
     Ok(Some(t))

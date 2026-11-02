@@ -14,12 +14,12 @@ mod inputs;
 
 use fromsoft_formats::collision::read_map;
 use fromsoft_formats::dcx::Decoder;
-use fromsoft_formats::{Archive, Binder, Game, NameDictionary};
+use fromsoft_formats::{Archive, Game, NameDictionary};
 use havok_formats::{Compendium, Tagfile, extern_mesh};
 use inputs::{Game as Data, OracleSet, Tool, oodle, oracle};
 use std::collections::BTreeSet;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 /// What the `f` binders of one game hold.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -38,6 +38,22 @@ struct Totals {
     sdk_2018: usize,
     /// Triangles with a repeated corner.
     degenerate: usize,
+}
+
+impl Totals {
+    /// Adds the counts of other files to these.
+    fn add(&mut self, other: Totals) {
+        self.binders += other.binders;
+        self.unnamed_binders += other.unnamed_binders;
+        self.files += other.files;
+        self.bodies += other.bodies;
+        self.vertices += other.vertices;
+        self.triangles += other.triangles;
+        self.soup_triangles += other.soup_triangles;
+        self.sdk_2016 += other.sdk_2016;
+        self.sdk_2018 += other.sdk_2018;
+        self.degenerate += other.degenerate;
+    }
 }
 
 /// The paths of the `f` binders the game's maps would have, and those its dictionary names.
@@ -104,69 +120,78 @@ fn totals(game: Game) -> Result<Option<Totals>> {
         unnamed_binders: unnamed,
         ..Totals::default()
     };
-    for path in &paths {
-        let header = archive.read(path, &decoder)?;
-        let payload = archive.read(&path.replace(".hkxbhd", ".hkxbdt"), &decoder)?;
-        let binder = Binder::read_split(&header, &payload, &decoder)?;
-        let mut compendia = Vec::new();
-        for f in &binder.files {
-            let bytes = decoder.decode_if_dcx(&f.bytes)?;
-            if bytes.get(4..8) == Some(b"TCM0") {
-                compendia.push(Compendium::read(&bytes)?);
-            }
-        }
-        for f in &binder.files {
-            let name = f.name.as_deref().unwrap_or("");
-            if !name.ends_with(".hkx") && !name.ends_with(".hkx.dcx") {
-                continue;
-            }
-            let bytes = decoder.decode_if_dcx(&f.bytes)?;
-            // a file with its own types ignores the compendium; one without them needs the binder's
-            let comp = compendia.first();
-            let soup = read_map(&bytes, comp).map_err(|e| format!("{path}: {name}: {e}"))?;
-            assert!(
-                soup.unread_bodies.is_empty(),
-                "{path}: {name}: {:?}",
-                soup.unread_bodies
-            );
-            let tag = Tagfile::read(&bytes, comp)?;
-            let variants = tag.root()?.field("namedVariants")?.array()?;
-            let mut bodies = 0;
-            for i in 0..variants.len() {
-                let systems = variants
-                    .get(i)?
-                    .field("variant")?
-                    .dereference()?
-                    .field("systemDatas")?
-                    .array()?;
-                for j in 0..systems.len() {
-                    let cinfos = systems.get(j)?.dereference()?.field("bodyCinfos")?.array()?;
-                    for k in 0..cinfos.len() {
-                        let shape = cinfos.get(k)?.field("shape")?.dereference()?;
-                        let mesh = extern_mesh(shape).map_err(|e| format!("{path}: {name}: {e}"))?;
-                        bodies += 1;
-                        t.vertices += mesh.vertices.len();
-                        t.triangles += mesh.triangles.len();
-                        t.degenerate += mesh
-                            .triangles
-                            .iter()
-                            .filter(|[a, b, c]| a == b || b == c || a == c)
-                            .count();
-                    }
+    // each binder's totals, read on the archive's threads and added up in path order
+    let binders = archive.read_each_binder(
+        &paths,
+        &decoder,
+        inputs::threads(),
+        |path, binder| -> Result<Totals> {
+            let binder = binder?;
+            let mut t = Totals::default();
+            let mut compendia = Vec::new();
+            for f in &binder.files {
+                let bytes = decoder.decode_if_dcx(&f.bytes)?;
+                if bytes.get(4..8) == Some(b"TCM0") {
+                    compendia.push(Compendium::read(&bytes)?);
                 }
             }
-            t.bodies += bodies;
-            t.soup_triangles += soup.triangles.len();
-            assert_eq!(soup.extern_triangles, soup.triangles.len(), "{path}: {name}");
-            assert!(soup.materials.iter().all(|&m| m == -1));
-            assert_eq!(soup.unmapped, 0);
-            match &tag.version {
-                b"20160200" => t.sdk_2016 += 1,
-                b"20180100" => t.sdk_2018 += 1,
-                other => return Err(format!("{path}: {name}: SDK {other:?}").into()),
+            for f in &binder.files {
+                let name = f.name.as_deref().unwrap_or("");
+                if !name.ends_with(".hkx") && !name.ends_with(".hkx.dcx") {
+                    continue;
+                }
+                let bytes = decoder.decode_if_dcx(&f.bytes)?;
+                // a file with its own types ignores the compendium; one without them needs the binder's
+                let comp = compendia.first();
+                let soup = read_map(&bytes, comp).map_err(|e| format!("{path}: {name}: {e}"))?;
+                assert!(
+                    soup.unread_bodies.is_empty(),
+                    "{path}: {name}: {:?}",
+                    soup.unread_bodies
+                );
+                let tag = Tagfile::read(&bytes, comp)?;
+                let variants = tag.root()?.field("namedVariants")?.array()?;
+                let mut bodies = 0;
+                for i in 0..variants.len() {
+                    let systems = variants
+                        .get(i)?
+                        .field("variant")?
+                        .dereference()?
+                        .field("systemDatas")?
+                        .array()?;
+                    for j in 0..systems.len() {
+                        let cinfos = systems.get(j)?.dereference()?.field("bodyCinfos")?.array()?;
+                        for k in 0..cinfos.len() {
+                            let shape = cinfos.get(k)?.field("shape")?.dereference()?;
+                            let mesh = extern_mesh(shape).map_err(|e| format!("{path}: {name}: {e}"))?;
+                            bodies += 1;
+                            t.vertices += mesh.vertices.len();
+                            t.triangles += mesh.triangles.len();
+                            t.degenerate += mesh
+                                .triangles
+                                .iter()
+                                .filter(|[a, b, c]| a == b || b == c || a == c)
+                                .count();
+                        }
+                    }
+                }
+                t.bodies += bodies;
+                t.soup_triangles += soup.triangles.len();
+                assert_eq!(soup.extern_triangles, soup.triangles.len(), "{path}: {name}");
+                assert!(soup.materials.iter().all(|&m| m == -1));
+                assert_eq!(soup.unmapped, 0);
+                match &tag.version {
+                    b"20160200" => t.sdk_2016 += 1,
+                    b"20180100" => t.sdk_2018 += 1,
+                    other => return Err(format!("{path}: {name}: SDK {other:?}").into()),
+                }
+                t.files += 1;
             }
-            t.files += 1;
-        }
+            Ok(t)
+        },
+    )?;
+    for binder in binders {
+        t.add(binder?);
     }
     eprintln!("{} f binders: {t:?}", game.name());
     Ok(Some(t))

@@ -29,7 +29,7 @@ use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use std::collections::{BTreeMap, BTreeSet};
 mod common;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 /// What the scripts of one game came to.
 #[derive(Default)]
@@ -113,9 +113,13 @@ fn every_stock_instruction_is_typed_where_the_schema_has_it() -> Result<()> {
                 maps.insert(stem.to_owned());
             }
         }
+        // the scripts, read on the archive's threads
+        let read = archive.read_each(&event_paths, &decoder, inputs::threads(), |_, bytes| {
+            Script::read(bytes?)
+        })?;
         let mut loaded = Vec::new();
-        for path in &event_paths {
-            loaded.push((*path, Script::read(&archive.read(path, &decoder)?)?));
+        for (path, script) in event_paths.iter().zip(read) {
+            loaded.push((*path, script?));
         }
         let defined: BTreeSet<i64> = loaded.iter().flat_map(|(_, s)| &s.events).map(|e| e.id).collect();
         let mut t = Tally {

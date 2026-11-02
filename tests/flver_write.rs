@@ -356,6 +356,8 @@ fn round_trips(game: Game) -> Result<Option<(usize, usize, usize, usize)>> {
             let mut seen = Totals::default();
             let mut failures = Vec::new();
             let id = format!("{}/{hash:016x}", archive.entries[&hash].shard);
+            // a split binder's index, kept for the second pass with the path of its payload
+            let mut split = None;
             let result = (|| -> Result<()> {
                 let bytes = bytes?;
                 if bytes.starts_with(b"BHF4") {
@@ -364,21 +366,7 @@ fn round_trips(game: Game) -> Result<Option<(usize, usize, usize, usize)>> {
                         .get(&hash)
                         .and_then(|x| x.first())
                         .ok_or("unnamed split binder")?;
-                    let payload = archive.read(&format!("{}bdt", &name[..name.len() - 3]), &decoder)?;
-                    for (i, f) in Binder::read_split(bytes, &payload, &decoder)?
-                        .files
-                        .iter()
-                        .enumerate()
-                    {
-                        visit(
-                            &f.bytes,
-                            &format!("{id}/s{i}"),
-                            &decoder,
-                            &mut seen,
-                            &mut failures,
-                            0,
-                        )?;
-                    }
+                    split = Some((format!("{}bdt", &name[..name.len() - 3]), bytes.to_vec()));
                 } else {
                     visit(bytes, &id, &decoder, &mut seen, &mut failures, 0)?;
                 }
@@ -386,9 +374,57 @@ fn round_trips(game: Game) -> Result<Option<(usize, usize, usize, usize)>> {
             })();
             // an entry the container reader refuses has no FLVER to count
             let refused = result.err().map(|e| format!("{id}: {e}"));
+            (seen, failures, refused, split)
+        },
+    )?;
+    // the split binders' payloads, each read with its index in a second pass and counted under the index's hash
+    let mut checked: std::collections::BTreeMap<u64, _> = checked
+        .into_iter()
+        .map(|(hash, (seen, failures, refused, split))| (hash, ((seen, failures, refused), split)))
+        .collect();
+    let split: Vec<(u64, String, Vec<u8>)> = checked
+        .iter_mut()
+        .filter_map(|(&hash, (_, split))| split.take().map(|(payload, index)| (hash, payload, index)))
+        .collect();
+    let payloads = archive.read_each(
+        split.iter().map(|s| &s.1),
+        &decoder,
+        inputs::threads(),
+        |path, bytes| {
+            let (hash, _, index) = split.iter().find(|s| s.1 == path).expect("a payload asked for");
+            let mut seen = Totals::default();
+            let mut failures = Vec::new();
+            let id = format!("{}/{hash:016x}", archive.entries[hash].shard);
+            let result = (|| -> Result<()> {
+                for (i, f) in Binder::read_split(index, bytes?, &decoder)?
+                    .files
+                    .iter()
+                    .enumerate()
+                {
+                    visit(
+                        &f.bytes,
+                        &format!("{id}/s{i}"),
+                        &decoder,
+                        &mut seen,
+                        &mut failures,
+                        0,
+                    )?;
+                }
+                Ok(())
+            })();
+            let refused = result.err().map(|e| format!("{id}: {e}"));
             (seen, failures, refused)
         },
     )?;
+    for ((hash, _, _), read) in split.iter().zip(payloads) {
+        if let Some(entry) = checked.get_mut(hash) {
+            entry.0 = read;
+        }
+    }
+    let checked: std::collections::BTreeMap<u64, _> = checked
+        .into_iter()
+        .map(|(hash, (read, _))| (hash, read))
+        .collect();
     let mut seen = Totals::default();
     let mut failures = Vec::new();
     for (totals, failed, refused) in checked.into_values() {

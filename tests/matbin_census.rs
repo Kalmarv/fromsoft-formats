@@ -5,13 +5,13 @@
 mod inputs;
 
 use fromsoft_formats::{
-    Binder, Game,
+    Game,
     dcx::Decoder,
     matbin::{Material, Value},
 };
 use inputs::{OracleSet, Query, Tool, expect_found, oodle, oracle};
-use std::collections::BTreeMap;
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+use std::collections::{BTreeMap, BTreeSet};
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 /// A binder's members: name and decoded bytes.
 type Members = Vec<(Option<String>, Vec<u8>)>;
 mod common;
@@ -62,21 +62,30 @@ fn material_binaries_match_an_independent_reading() -> Result<()> {
         oodle: Some(&dll),
         max_output: 1 << 30,
     };
+    let records = std::fs::read_to_string(oracle.join("matbin.jsonl"))?;
+    // the binders the records name, read on the archive's threads, their members kept
+    let mut named = BTreeSet::new();
+    for line in records.lines() {
+        let record: serde_json::Value = serde_json::from_str(line)?;
+        named.insert(record["binder"].as_str().ok_or("binder")?.to_owned());
+    }
+    let read = archive.read_each_binder(
+        &named,
+        &decoder,
+        inputs::threads(),
+        |_, binder| -> Result<Members> { Ok(binder?.files.into_iter().map(|f| (f.name, f.bytes)).collect()) },
+    )?;
     let mut binders: BTreeMap<String, Members> = BTreeMap::new();
+    for (binder, members) in named.into_iter().zip(read) {
+        binders.insert(binder, members?);
+    }
     let mut position: BTreeMap<String, usize> = BTreeMap::new();
     let (mut materials, mut params, mut samplers, mut extra_floats) = (0usize, 0usize, 0usize, 0usize);
     let (mut tails, mut tail_bytes, mut truncated) = (0usize, 0usize, 0usize);
     let mut failures = Vec::new();
-    for line in std::fs::read_to_string(oracle.join("matbin.jsonl"))?.lines() {
+    for line in records.lines() {
         let record: serde_json::Value = serde_json::from_str(line)?;
         let binder = record["binder"].as_str().ok_or("binder")?.to_owned();
-        if !binders.contains_key(&binder) {
-            let b = Binder::read(&archive.read(&binder, &decoder)?, &decoder)?;
-            binders.insert(
-                binder.clone(),
-                b.files.into_iter().map(|f| (f.name, f.bytes)).collect(),
-            );
-        }
         let index = position.entry(binder.clone()).or_default();
         let (name, bytes) = &binders[&binder][*index];
         *index += 1;

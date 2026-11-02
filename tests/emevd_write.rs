@@ -15,7 +15,7 @@ use fromsoft_formats::{Archive, Game, Keys, NameDictionary};
 use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use std::collections::BTreeSet;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 /// (scripts, written byte for byte, events whose empty parameter list's offset differs), or `None` when the game is
 /// not configured.
@@ -42,15 +42,17 @@ fn round_trips(game: Game, data: Data) -> Result<Option<(usize, usize, usize)>> 
         .map(String::as_str)
         .filter(|p| p.starts_with("/event/") && p.ends_with(".emevd.dcx") && !p[7..].contains('/'))
         .collect();
-    let (mut scripts, mut exact, mut offsets) = (0, 0, 0);
-    for path in paths.into_iter().filter(|p| archive.contains(p)) {
-        let bytes = archive.read(path, &decoder)?;
-        let script = Script::read(&bytes).map_err(|e| format!("{path}: {e}"))?;
+    // each script written back on the archive's threads, the counts added up in path order
+    let paths: Vec<&str> = paths.into_iter().filter(|p| archive.contains(p)).collect();
+    let read = archive.read_each(&paths, &decoder, inputs::threads(), |path, bytes| -> Result<_> {
+        let bytes = bytes?;
+        let (mut scripts, mut exact, mut offsets) = (0, 0, 0);
+        let script = Script::read(bytes).map_err(|e| format!("{path}: {e}"))?;
         let written = script.write().map_err(|e| format!("{path}: {e}"))?;
         scripts += 1;
         if written == bytes {
             exact += 1;
-            continue;
+            return Ok((scripts, exact, offsets));
         }
         // not byte for byte: the same size, the same script, and every differing byte in the parameter-offset word of an
         // event without parameters
@@ -58,7 +60,7 @@ fn round_trips(game: Game, data: Data) -> Result<Option<(usize, usize, usize)>> 
         assert_eq!(Script::read(&written)?, script, "{path}");
         let events_at = 0x90usize;
         let mut events = BTreeSet::new();
-        for (at, (a, b)) in written.iter().zip(&bytes).enumerate() {
+        for (at, (a, b)) in written.iter().zip(bytes).enumerate() {
             if a == b {
                 continue;
             }
@@ -79,7 +81,16 @@ fn round_trips(game: Game, data: Data) -> Result<Option<(usize, usize, usize)>> 
             events.insert(event);
         }
         offsets += events.len();
+        Ok((scripts, exact, offsets))
+    })?;
+    let (mut scripts, mut exact, mut offsets) = (0, 0, 0);
+    for totals in read {
+        let (scripts_, exact_, offsets_) = totals?;
+        scripts += scripts_;
+        exact += exact_;
+        offsets += offsets_;
     }
+
     Ok(Some((scripts, exact, offsets)))
 }
 

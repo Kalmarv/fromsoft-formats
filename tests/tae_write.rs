@@ -17,7 +17,7 @@ use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 fn event(kind: i32, start: f32, end: f32, parameters: Vec<u8>) -> Event {
     Event {
@@ -228,31 +228,50 @@ fn every_event_file_of_the_installs_writes_back_to_its_bytes() -> Result<()> {
             .filter(|p| archive.contains(p))
             .collect();
         let mut distinct = BTreeSet::new();
-        for path in &paths {
-            let mut todo = vec![Binder::read(&archive.read(path, &decoder)?, &decoder)?];
-            while let Some(binder) = todo.pop() {
-                for member in &binder.files {
-                    if member.bytes.starts_with(b"BND4") {
-                        todo.push(Binder::read(&member.bytes, &decoder)?);
+        // each binder's event files at any depth, written back on the archive's threads: the content's digest and
+        // whether it wrote back to its bytes (the first of a content decides)
+        let binders =
+            archive.read_each_binder(&paths, &decoder, inputs::threads(), |path, binder| -> Result<_> {
+                let mut files = Vec::new();
+                let mut todo = vec![binder?];
+                while let Some(binder) = todo.pop() {
+                    for member in &binder.files {
+                        if member.bytes.starts_with(b"BND4") {
+                            todo.push(Binder::read(&member.bytes, &decoder)?);
+                        }
+                        let named_tae = member
+                            .name
+                            .as_deref()
+                            .is_some_and(|n| n.to_ascii_lowercase().ends_with(".tae"));
+                        if !named_tae {
+                            continue;
+                        }
+                        let written = (|| -> Result<()> {
+                            let tae = Tae::read_member(&binder, member)?;
+                            let written = tae
+                                .write()
+                                .map_err(|e| format!("{path} {:?}: {e}", member.name))?;
+                            if written != member.bytes {
+                                return Err(format!(
+                                    "{path} {:?}: write() differs from the stored bytes",
+                                    member.name
+                                )
+                                .into());
+                            }
+                            Ok(())
+                        })();
+                        files.push((
+                            Sha256::digest(&member.bytes).to_vec(),
+                            written.map_err(|e| e.to_string()),
+                        ));
                     }
-                    let named_tae = member
-                        .name
-                        .as_deref()
-                        .is_some_and(|n| n.to_ascii_lowercase().ends_with(".tae"));
-                    if !named_tae || !distinct.insert(Sha256::digest(&member.bytes).to_vec()) {
-                        continue;
-                    }
-                    let tae = Tae::read_member(&binder, member)?;
-                    let written = tae
-                        .write()
-                        .map_err(|e| format!("{path} {:?}: {e}", member.name))?;
-                    if written != member.bytes {
-                        return Err(format!(
-                            "{path} {:?}: write() differs from the stored bytes",
-                            member.name
-                        )
-                        .into());
-                    }
+                }
+                Ok(files)
+            })?;
+        for binder in binders {
+            for (digest, written) in binder? {
+                if distinct.insert(digest) {
+                    written?;
                 }
             }
         }

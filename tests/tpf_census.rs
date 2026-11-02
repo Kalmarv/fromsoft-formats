@@ -7,7 +7,7 @@ use fromsoft_formats::{
     dcx::Decoder,
     tpf::{Package, TextureKind},
 };
-use inputs::{Game, OracleSet, Tool, oodle, oracle};
+use inputs::{Game, OracleSet, Tool, oodle, oracle, threads};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -119,14 +119,16 @@ fn all_texture_packages() -> Result<()> {
         };
         rejected.insert(format!("{shard}/{hash}"), message.to_owned());
     }
-    // each entry checked on the scan's threads against the reference; the results merged in hash order
+    // each entry checked on the scan's threads against the reference (a split binder's index kept, with the path of its
+    // payload, for the second pass); the results merged in hash order
     struct Checked {
         seen: Vec<String>,
         counts: (usize, usize),
         split: bool,
         refused: Option<String>,
+        index: Option<(String, Vec<u8>)>,
     }
-    let checked = common::scan_map(
+    let mut checked = common::scan_map(
         &archive,
         &decoder,
         |hash| {
@@ -142,6 +144,7 @@ fn all_texture_packages() -> Result<()> {
                 counts: (0, 0),
                 split: false,
                 refused: None,
+                index: None,
             };
             let id = format!("{}/{hash:08x}", archive.entries[&hash].shard);
             let result = (|| -> Result<()> {
@@ -152,20 +155,7 @@ fn all_texture_packages() -> Result<()> {
                         .get(&hash)
                         .and_then(|x| x.first())
                         .ok_or("unnamed split binder")?;
-                    let payload = archive.read(&format!("{}bdt", &name[..name.len() - 3]), &decoder)?;
-                    let binder = Binder::read_split(bytes, &payload, &decoder)?;
-                    for (i, f) in binder.files.iter().enumerate() {
-                        visit(
-                            &f.bytes,
-                            &format!("{id}/s{i}"),
-                            &decoder,
-                            &expected,
-                            &mut c.seen,
-                            &mut c.counts,
-                            0,
-                        )?;
-                    }
-                    c.split = true;
+                    c.index = Some((format!("{}bdt", &name[..name.len() - 3]), bytes.to_vec()));
                 } else {
                     visit(bytes, &id, &decoder, &expected, &mut c.seen, &mut c.counts, 0)?;
                 }
@@ -175,6 +165,58 @@ fn all_texture_packages() -> Result<()> {
             (id, c)
         },
     )?;
+    // the split binders: each payload read in one more pass and read with the index the scan kept, its members checked
+    let split: Vec<(u64, String, String, Vec<u8>)> = checked
+        .iter_mut()
+        .filter_map(|(&hash, (id, c))| {
+            c.index
+                .take()
+                .map(|(payload, index)| (hash, id.clone(), payload, index))
+        })
+        .collect();
+    let by_payload: BTreeMap<&str, (&str, &[u8])> = split
+        .iter()
+        .map(|(_, id, payload, index)| (payload.as_str(), (id.as_str(), index.as_slice())))
+        .collect();
+    let members = archive.read_each(
+        split.iter().map(|(_, _, payload, _)| payload),
+        &decoder,
+        threads(),
+        |payload, bytes| {
+            let (id, index) = by_payload[payload];
+            let mut c = Checked {
+                seen: Vec::new(),
+                counts: (0, 0),
+                split: false,
+                refused: None,
+                index: None,
+            };
+            let result = (|| -> Result<()> {
+                let binder = Binder::read_split(index, bytes?, &decoder)?;
+                for (i, f) in binder.files.iter().enumerate() {
+                    visit(
+                        &f.bytes,
+                        &format!("{id}/s{i}"),
+                        &decoder,
+                        &expected,
+                        &mut c.seen,
+                        &mut c.counts,
+                        0,
+                    )?;
+                }
+                c.split = true;
+                Ok(())
+            })();
+            c.refused = result.err().map(|e| e.to_string());
+            c
+        },
+    )?;
+    for ((hash, ..), c) in split.iter().zip(members) {
+        checked
+            .get_mut(hash)
+            .ok_or("a split binder the scan did not give")?
+            .1 = c;
+    }
     let mut counts = (0, 0);
     let mut failures = Vec::new();
     let mut split = 0;

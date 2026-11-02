@@ -18,7 +18,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 mod common;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 #[test]
 fn every_event_file_of_the_animation_binders_reads_with_its_groups() -> Result<()> {
@@ -58,37 +58,51 @@ fn every_event_file_of_the_animation_binders_reads_with_its_groups() -> Result<(
             })
             .filter(|p| archive.contains(p))
             .collect();
+        // each binder's event files at any depth: the content's digest and its animations' (animations, with groups,
+        // groups, empty groups), read on the archive's threads; a content is counted once
+        let binders =
+            archive.read_each_binder(&paths, &decoder, inputs::threads(), |_, binder| -> Result<_> {
+                let mut files = Vec::new();
+                let mut todo = vec![binder?];
+                while let Some(binder) = todo.pop() {
+                    for member in &binder.files {
+                        if member.bytes.starts_with(b"BND4") {
+                            todo.push(Binder::read(&member.bytes, &decoder)?);
+                        }
+                        let named_tae = member
+                            .name
+                            .as_deref()
+                            .is_some_and(|n| n.to_ascii_lowercase().ends_with(".tae"));
+                        if !named_tae {
+                            continue;
+                        }
+                        let tae = Tae::read_member(&binder, member)?;
+                        let (mut with_groups, mut groups, mut empty) = (0, 0, 0);
+                        for animation in &tae.animations {
+                            with_groups += usize::from(!animation.event_groups.is_empty());
+                            groups += animation.event_groups.len();
+                            empty += animation
+                                .event_groups
+                                .iter()
+                                .filter(|g| g.events.is_empty())
+                                .count();
+                        }
+                        let counts = (tae.animations.len(), with_groups, groups, empty);
+                        files.push((Sha256::digest(&member.bytes).to_vec(), counts));
+                    }
+                }
+                Ok(files)
+            })?;
         let mut distinct = BTreeSet::new();
         let (mut members, mut animations, mut groups, mut empty, mut with_groups) = (0, 0, 0, 0, 0);
-        for path in &paths {
-            let mut todo = vec![Binder::read(&archive.read(path, &decoder)?, &decoder)?];
-            while let Some(binder) = todo.pop() {
-                for member in &binder.files {
-                    if member.bytes.starts_with(b"BND4") {
-                        todo.push(Binder::read(&member.bytes, &decoder)?);
-                    }
-                    let named_tae = member
-                        .name
-                        .as_deref()
-                        .is_some_and(|n| n.to_ascii_lowercase().ends_with(".tae"));
-                    if !named_tae {
-                        continue;
-                    }
-                    members += 1;
-                    let tae = Tae::read_member(&binder, member)?;
-                    if !distinct.insert(Sha256::digest(&member.bytes).to_vec()) {
-                        continue;
-                    }
-                    animations += tae.animations.len();
-                    for animation in &tae.animations {
-                        with_groups += usize::from(!animation.event_groups.is_empty());
-                        groups += animation.event_groups.len();
-                        empty += animation
-                            .event_groups
-                            .iter()
-                            .filter(|g| g.events.is_empty())
-                            .count();
-                    }
+        for binder in binders {
+            for (digest, (file_animations, file_with_groups, file_groups, file_empty)) in binder? {
+                members += 1;
+                if distinct.insert(digest) {
+                    animations += file_animations;
+                    with_groups += file_with_groups;
+                    groups += file_groups;
+                    empty += file_empty;
                 }
             }
         }

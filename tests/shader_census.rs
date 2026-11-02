@@ -23,7 +23,7 @@ use fromsoft_formats::{
 };
 use inputs::{OracleSet, Query, Tool, expect_found, oodle, oracle};
 use std::collections::{BTreeMap, BTreeSet};
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 mod common;
 
 /// The binders that hold Elden Ring's material binaries: the game's, the two expansions' and SpeedTree's.
@@ -35,12 +35,22 @@ const BINDERS: [&str; 4] = [
 ];
 
 fn materials(archive: &Archive, decoder: &Decoder<'_>) -> Result<Vec<Material>> {
+    // each binder's materials, read on the archive's threads
+    let read = archive.read_each_binder(
+        BINDERS,
+        decoder,
+        inputs::threads(),
+        |path, binder| -> Result<Vec<Material>> {
+            let mut out = Vec::new();
+            for file in &binder?.files {
+                out.push(Material::read(&file.bytes).map_err(|e| format!("{path}: {e}"))?);
+            }
+            Ok(out)
+        },
+    )?;
     let mut out = Vec::new();
-    for path in BINDERS {
-        let binder = Binder::read(&archive.read(path, decoder)?, decoder)?;
-        for file in &binder.files {
-            out.push(Material::read(&file.bytes).map_err(|e| format!("{path}: {e}"))?);
-        }
+    for binder in read {
+        out.extend(binder?);
     }
     Ok(out)
 }

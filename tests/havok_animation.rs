@@ -19,7 +19,7 @@ mod inputs;
 
 use std::collections::BTreeMap;
 
-use fromsoft_formats::{Archive, Binder, dcx::Decoder};
+use fromsoft_formats::{Archive, dcx::Decoder};
 use havok_formats::animation::{Tracks, container};
 use havok_formats::{Compendium, Tagfile};
 use inputs::{Game, Tool, install, oodle};
@@ -30,7 +30,7 @@ const KNOWN: [(&str, &str); 1] = [(
     "the binding names a skeleton the binder does not hold",
 )];
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 #[allow(unsafe_code)]
 fn native(
@@ -63,6 +63,125 @@ fn h1_every_character_animation_file_reads() -> Result<()> {
         fromsoft_formats::Game::Sekiro,
         &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro, None)?,
     )?;
+    // each character's animation binder checked on the archive's threads, its totals added up in path order
+    let paths: Vec<String> = (0..10000)
+        .map(|id| format!("/chr/c{id:04}.anibnd.dcx"))
+        .filter(|p| archive.contains(p))
+        .collect();
+    let read =
+        archive.read_each_binder(&paths, &decoder, inputs::threads(), |path, binder| -> Result<_> {
+            let mut binders = 0;
+            let mut files = 0;
+            let mut skeleton_files = 0;
+            let mut bones = 0;
+            let mut by_class = BTreeMap::<String, usize>::new();
+            let mut by_type = BTreeMap::<String, usize>::new();
+            let mut tracks = 0;
+            let mut extracted = 0;
+            let mut failures = Vec::new();
+            let binder = binder?;
+            binders += 1;
+            let compendium = match binder
+                .files
+                .iter()
+                .find(|f| f.name.as_deref().is_some_and(|n| n.ends_with(".compendium")))
+            {
+                Some(f) => Some(Compendium::read(&decoder.decode_if_dcx(&f.bytes)?)?),
+                None => None,
+            };
+            let mut skeleton_bones = BTreeMap::<String, usize>::new();
+            let mut animations = Vec::new();
+            for f in &binder.files {
+                let name = f.name.clone().unwrap_or_default();
+                if !name.to_lowercase().ends_with(".hkx") {
+                    continue;
+                }
+                files += 1;
+                let bytes = decoder.decode_if_dcx(&f.bytes)?;
+                let c = Tagfile::read(&bytes, compendium.as_ref())
+                    .map_err(|e| {
+                        let sdk = bytes
+                            .windows(4)
+                            .position(|w| w == b"SDKV")
+                            .and_then(|i| bytes.get(i + 4..i + 12))
+                            .map(|v| String::from_utf8_lossy(v).into_owned());
+                        format!("{e} (SDKV {sdk:?})")
+                    })
+                    .and_then(|tag| container(&tag).map_err(|e| e.to_string()));
+                let c = match c {
+                    Ok(c) => c,
+                    Err(e) => {
+                        failures.push(format!("{path} {name}: {e}"));
+                        continue;
+                    }
+                };
+                if !c.skeletons.is_empty() {
+                    skeleton_files += 1;
+                    if c.skeletons.len() != 1 || !c.animations.is_empty() || !c.bindings.is_empty() {
+                        failures.push(format!("{path} {name}: a skeleton file holding more"));
+                    }
+                    bones += c.skeletons[0].bones.len();
+                    skeleton_bones.insert(c.skeletons[0].name.clone(), c.skeletons[0].bones.len());
+                    continue;
+                }
+                if c.animations.len() != 1 || c.bindings.len() != 1 || c.bindings[0].animation != Some(0) {
+                    failures.push(format!(
+                        "{path} {name}: {} animations, {} bindings",
+                        c.animations.len(),
+                        c.bindings.len()
+                    ));
+                    continue;
+                }
+                animations.push((name, c));
+            }
+            for (name, c) in animations {
+                let a = &c.animations[0];
+                let b = &c.bindings[0];
+                *by_class.entry(a.class.clone()).or_default() += 1;
+                *by_type.entry(format!("{:?}", a.kind)).or_default() += 1;
+                tracks += a.transform_tracks;
+                extracted += usize::from(a.extracted_motion.is_some());
+                let mut bad = Vec::new();
+                if b.transform_track_to_bone.len() != a.transform_tracks {
+                    bad.push("track count differs from the binding's");
+                }
+                if a.annotation_tracks.len() != a.transform_tracks {
+                    bad.push("annotation tracks differ from the transform tracks");
+                }
+                match skeleton_bones.get(&b.original_skeleton_name) {
+                    None => bad.push("the binding names a skeleton the binder does not hold"),
+                    Some(&n)
+                        if b.transform_track_to_bone
+                            .iter()
+                            .any(|&i| i >= 0 && i as usize >= n) =>
+                    {
+                        bad.push("a track drives a bone outside the skeleton");
+                    }
+                    Some(_) => {}
+                }
+                if let Tracks::Spline(s) = &a.tracks
+                    && (s.block_offsets.len() != s.num_blocks as usize
+                        || s.float_block_offsets.len() != s.num_blocks as usize
+                        || s.block_offsets.iter().any(|&o| o as usize >= s.data.len()))
+                {
+                    bad.push("spline blocks do not start inside the data");
+                }
+                if !bad.is_empty() {
+                    failures.push(format!("{path} {name}: {}", bad.join("; ")));
+                }
+            }
+            Ok((
+                binders,
+                files,
+                skeleton_files,
+                bones,
+                by_class,
+                by_type,
+                tracks,
+                extracted,
+                failures,
+            ))
+        })?;
     let mut binders = 0;
     let mut files = 0;
     let mut skeleton_files = 0;
@@ -72,103 +191,24 @@ fn h1_every_character_animation_file_reads() -> Result<()> {
     let mut tracks = 0;
     let mut extracted = 0;
     let mut failures = Vec::new();
-    for id in 0..10000 {
-        let path = format!("/chr/c{id:04}.anibnd.dcx");
-        if !archive.contains(&path) {
-            continue;
+    for totals in read {
+        let (binders_, files_, skeleton_files_, bones_, by_class_, by_type_, tracks_, extracted_, failures_) =
+            totals?;
+        binders += binders_;
+        files += files_;
+        skeleton_files += skeleton_files_;
+        bones += bones_;
+        for (key, n) in by_class_ {
+            *by_class.entry(key).or_default() += n;
         }
-        binders += 1;
-        let binder = Binder::read(&archive.read(&path, &decoder)?, &decoder)?;
-        let compendium = match binder
-            .files
-            .iter()
-            .find(|f| f.name.as_deref().is_some_and(|n| n.ends_with(".compendium")))
-        {
-            Some(f) => Some(Compendium::read(&decoder.decode_if_dcx(&f.bytes)?)?),
-            None => None,
-        };
-        let mut skeleton_bones = BTreeMap::<String, usize>::new();
-        let mut animations = Vec::new();
-        for f in &binder.files {
-            let name = f.name.clone().unwrap_or_default();
-            if !name.to_lowercase().ends_with(".hkx") {
-                continue;
-            }
-            files += 1;
-            let bytes = decoder.decode_if_dcx(&f.bytes)?;
-            let c = Tagfile::read(&bytes, compendium.as_ref())
-                .map_err(|e| {
-                    let sdk = bytes
-                        .windows(4)
-                        .position(|w| w == b"SDKV")
-                        .and_then(|i| bytes.get(i + 4..i + 12))
-                        .map(|v| String::from_utf8_lossy(v).into_owned());
-                    format!("{e} (SDKV {sdk:?})")
-                })
-                .and_then(|tag| container(&tag).map_err(|e| e.to_string()));
-            let c = match c {
-                Ok(c) => c,
-                Err(e) => {
-                    failures.push(format!("{path} {name}: {e}"));
-                    continue;
-                }
-            };
-            if !c.skeletons.is_empty() {
-                skeleton_files += 1;
-                if c.skeletons.len() != 1 || !c.animations.is_empty() || !c.bindings.is_empty() {
-                    failures.push(format!("{path} {name}: a skeleton file holding more"));
-                }
-                bones += c.skeletons[0].bones.len();
-                skeleton_bones.insert(c.skeletons[0].name.clone(), c.skeletons[0].bones.len());
-                continue;
-            }
-            if c.animations.len() != 1 || c.bindings.len() != 1 || c.bindings[0].animation != Some(0) {
-                failures.push(format!(
-                    "{path} {name}: {} animations, {} bindings",
-                    c.animations.len(),
-                    c.bindings.len()
-                ));
-                continue;
-            }
-            animations.push((name, c));
+        for (key, n) in by_type_ {
+            *by_type.entry(key).or_default() += n;
         }
-        for (name, c) in animations {
-            let a = &c.animations[0];
-            let b = &c.bindings[0];
-            *by_class.entry(a.class.clone()).or_default() += 1;
-            *by_type.entry(format!("{:?}", a.kind)).or_default() += 1;
-            tracks += a.transform_tracks;
-            extracted += usize::from(a.extracted_motion.is_some());
-            let mut bad = Vec::new();
-            if b.transform_track_to_bone.len() != a.transform_tracks {
-                bad.push("track count differs from the binding's");
-            }
-            if a.annotation_tracks.len() != a.transform_tracks {
-                bad.push("annotation tracks differ from the transform tracks");
-            }
-            match skeleton_bones.get(&b.original_skeleton_name) {
-                None => bad.push("the binding names a skeleton the binder does not hold"),
-                Some(&n)
-                    if b.transform_track_to_bone
-                        .iter()
-                        .any(|&i| i >= 0 && i as usize >= n) =>
-                {
-                    bad.push("a track drives a bone outside the skeleton");
-                }
-                Some(_) => {}
-            }
-            if let Tracks::Spline(s) = &a.tracks
-                && (s.block_offsets.len() != s.num_blocks as usize
-                    || s.float_block_offsets.len() != s.num_blocks as usize
-                    || s.block_offsets.iter().any(|&o| o as usize >= s.data.len()))
-            {
-                bad.push("spline blocks do not start inside the data");
-            }
-            if !bad.is_empty() {
-                failures.push(format!("{path} {name}: {}", bad.join("; ")));
-            }
-        }
+        tracks += tracks_;
+        extracted += extracted_;
+        failures.extend(failures_);
     }
+
     println!(
         "{binders} binders, {files} hkx files, {skeleton_files} skeletons ({bones} bones), {tracks} transform tracks, \
          {extracted} with extracted motion; classes {by_class:?}; types {by_type:?}"
@@ -224,6 +264,150 @@ fn h2_every_spline_animation_decodes() -> Result<()> {
         fromsoft_formats::Game::Sekiro,
         &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro, None)?,
     )?;
+    // each character's spline animations decoded on the archive's threads, the totals added up in path order
+    let paths: Vec<String> = (0..10000)
+        .map(|id| format!("/chr/c{id:04}.anibnd.dcx"))
+        .filter(|p| archive.contains(p))
+        .collect();
+    let read =
+        archive.read_each_binder(&paths, &decoder, inputs::threads(), |path, binder| -> Result<_> {
+            let mut decoded = 0;
+            let mut blocks = 0;
+            let mut tracks = 0;
+            let mut absent_rotations = 0;
+            let mut tracks_with_reference = 0;
+            // by position component x y z: the components of the first blocks' tracks, those a track does not state, and of
+            // each the ones whose reference value is not zero (whether an absent position means the reference or zero)
+            let mut position_all = [0usize; 3];
+            let mut position_all_nonzero = [0usize; 3];
+            let mut position_absent = [0usize; 3];
+            let mut position_absent_nonzero = [0usize; 3];
+            let mut reference_not_identity = 0;
+            let mut absent_with_reference = 0;
+            let mut worst_norm = 0.0f32;
+            let mut failures = Vec::new();
+            let binder = binder?;
+            let compendium = match binder
+                .files
+                .iter()
+                .find(|f| f.name.as_deref().is_some_and(|n| n.ends_with(".compendium")))
+            {
+                Some(f) => Some(Compendium::read(&decoder.decode_if_dcx(&f.bytes)?)?),
+                None => None,
+            };
+            let mut skeletons = BTreeMap::new();
+            let mut animations = Vec::new();
+            for f in &binder.files {
+                let name = f.name.clone().unwrap_or_default();
+                if !name.to_lowercase().ends_with(".hkx") {
+                    continue;
+                }
+                let bytes = decoder.decode_if_dcx(&f.bytes)?;
+                let Ok(c) = Tagfile::read(&bytes, compendium.as_ref())
+                    .map_err(|e| e.to_string())
+                    .and_then(|tag| container(&tag).map_err(|e| e.to_string()))
+                else {
+                    continue; // H1 reports the files that do not read
+                };
+                if let Some(s) = c.skeletons.first() {
+                    skeletons.insert(s.name.clone(), s.clone());
+                } else if c.animations.len() == 1 && c.bindings.len() == 1 {
+                    animations.push((name, c));
+                }
+            }
+            for (name, c) in animations {
+                if !matches!(c.animations[0].tracks, Tracks::Spline(_)) {
+                    continue;
+                }
+                let spline = match SplineAnimation::parse(&c.animations[0]) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        failures.push(format!("{path} {name}: {e}"));
+                        continue;
+                    }
+                };
+                decoded += 1;
+                blocks += spline.blocks.len();
+                let Some(skeleton) = skeletons.get(&c.bindings[0].original_skeleton_name) else {
+                    continue;
+                };
+                for (track, &bone) in c.bindings[0].transform_track_to_bone.iter().enumerate() {
+                    if let Some(reference) = usize::try_from(bone)
+                        .ok()
+                        .and_then(|b| skeleton.reference_pose.get(b))
+                    {
+                        if let Some(t) = spline.blocks[0].get(track) {
+                            for (k, component) in [&t.position.x, &t.position.y, &t.position.z]
+                                .into_iter()
+                                .enumerate()
+                            {
+                                let nonzero = usize::from(reference.translation[k].abs() > 1e-4);
+                                position_all[k] += 1;
+                                position_all_nonzero[k] += nonzero;
+                                if matches!(component, Component::Absent) {
+                                    position_absent[k] += 1;
+                                    position_absent_nonzero[k] += nonzero;
+                                }
+                            }
+                        }
+                        let r = reference.rotation;
+                        tracks_with_reference += 1;
+                        reference_not_identity += usize::from(
+                            (r[3].abs() - 1.0).abs() > 1e-4 || r[0].abs() + r[1].abs() + r[2].abs() > 1e-4,
+                        );
+                    }
+                    if let (Some(Rotation::Absent), Some(reference)) = (
+                        spline.blocks[0].get(track).map(|t| &t.rotation),
+                        usize::try_from(bone)
+                            .ok()
+                            .and_then(|b| skeleton.reference_pose.get(b)),
+                    ) {
+                        absent_rotations += 1;
+                        let r = reference.rotation;
+                        if (r[3].abs() - 1.0).abs() > 1e-4 || r[0].abs() + r[1].abs() + r[2].abs() > 1e-4 {
+                            absent_with_reference += 1;
+                        }
+                    }
+                }
+                tracks += c.animations[0].transform_tracks * spline.blocks.len();
+                for time in [0.0, c.animations[0].duration / 2.0, c.animations[0].duration] {
+                    match spline.pose_at(time, &c.bindings[0], skeleton, ABSENT) {
+                        Err(e) => failures.push(format!("{path} {name}: at {time}: {e}")),
+                        Ok(pose) => {
+                            for t in &pose {
+                                let finite = t
+                                    .translation
+                                    .iter()
+                                    .chain(&t.rotation)
+                                    .chain(&t.scale)
+                                    .all(|v| v.is_finite());
+                                let norm = t.rotation.iter().map(|v| v * v).sum::<f32>().sqrt();
+                                worst_norm = worst_norm.max((norm - 1.0).abs());
+                                if !finite {
+                                    failures.push(format!("{path} {name}: a pose at {time} is not finite"));
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Ok((
+                decoded,
+                blocks,
+                tracks,
+                absent_rotations,
+                tracks_with_reference,
+                position_all,
+                position_all_nonzero,
+                position_absent,
+                position_absent_nonzero,
+                reference_not_identity,
+                absent_with_reference,
+                worst_norm,
+                failures,
+            ))
+        })?;
     let mut decoded = 0;
     let mut blocks = 0;
     let mut tracks = 0;
@@ -239,118 +423,45 @@ fn h2_every_spline_animation_decodes() -> Result<()> {
     let mut absent_with_reference = 0;
     let mut worst_norm = 0.0f32;
     let mut failures = Vec::new();
-    for id in 0..10000 {
-        let path = format!("/chr/c{id:04}.anibnd.dcx");
-        if !archive.contains(&path) {
-            continue;
+    for totals in read {
+        let (
+            decoded_,
+            blocks_,
+            tracks_,
+            absent_rotations_,
+            tracks_with_reference_,
+            position_all_,
+            position_all_nonzero_,
+            position_absent_,
+            position_absent_nonzero_,
+            reference_not_identity_,
+            absent_with_reference_,
+            worst_norm_,
+            failures_,
+        ) = totals?;
+        decoded += decoded_;
+        blocks += blocks_;
+        tracks += tracks_;
+        absent_rotations += absent_rotations_;
+        tracks_with_reference += tracks_with_reference_;
+        for (a, b) in position_all.iter_mut().zip(position_all_) {
+            *a += b;
         }
-        let binder = Binder::read(&archive.read(&path, &decoder)?, &decoder)?;
-        let compendium = match binder
-            .files
-            .iter()
-            .find(|f| f.name.as_deref().is_some_and(|n| n.ends_with(".compendium")))
-        {
-            Some(f) => Some(Compendium::read(&decoder.decode_if_dcx(&f.bytes)?)?),
-            None => None,
-        };
-        let mut skeletons = BTreeMap::new();
-        let mut animations = Vec::new();
-        for f in &binder.files {
-            let name = f.name.clone().unwrap_or_default();
-            if !name.to_lowercase().ends_with(".hkx") {
-                continue;
-            }
-            let bytes = decoder.decode_if_dcx(&f.bytes)?;
-            let Ok(c) = Tagfile::read(&bytes, compendium.as_ref())
-                .map_err(|e| e.to_string())
-                .and_then(|tag| container(&tag).map_err(|e| e.to_string()))
-            else {
-                continue; // H1 reports the files that do not read
-            };
-            if let Some(s) = c.skeletons.first() {
-                skeletons.insert(s.name.clone(), s.clone());
-            } else if c.animations.len() == 1 && c.bindings.len() == 1 {
-                animations.push((name, c));
-            }
+        for (a, b) in position_all_nonzero.iter_mut().zip(position_all_nonzero_) {
+            *a += b;
         }
-        for (name, c) in animations {
-            if !matches!(c.animations[0].tracks, Tracks::Spline(_)) {
-                continue;
-            }
-            let spline = match SplineAnimation::parse(&c.animations[0]) {
-                Ok(s) => s,
-                Err(e) => {
-                    failures.push(format!("{path} {name}: {e}"));
-                    continue;
-                }
-            };
-            decoded += 1;
-            blocks += spline.blocks.len();
-            let Some(skeleton) = skeletons.get(&c.bindings[0].original_skeleton_name) else {
-                continue;
-            };
-            for (track, &bone) in c.bindings[0].transform_track_to_bone.iter().enumerate() {
-                if let Some(reference) = usize::try_from(bone)
-                    .ok()
-                    .and_then(|b| skeleton.reference_pose.get(b))
-                {
-                    if let Some(t) = spline.blocks[0].get(track) {
-                        for (k, component) in [&t.position.x, &t.position.y, &t.position.z]
-                            .into_iter()
-                            .enumerate()
-                        {
-                            let nonzero = usize::from(reference.translation[k].abs() > 1e-4);
-                            position_all[k] += 1;
-                            position_all_nonzero[k] += nonzero;
-                            if matches!(component, Component::Absent) {
-                                position_absent[k] += 1;
-                                position_absent_nonzero[k] += nonzero;
-                            }
-                        }
-                    }
-                    let r = reference.rotation;
-                    tracks_with_reference += 1;
-                    reference_not_identity += usize::from(
-                        (r[3].abs() - 1.0).abs() > 1e-4 || r[0].abs() + r[1].abs() + r[2].abs() > 1e-4,
-                    );
-                }
-                if let (Some(Rotation::Absent), Some(reference)) = (
-                    spline.blocks[0].get(track).map(|t| &t.rotation),
-                    usize::try_from(bone)
-                        .ok()
-                        .and_then(|b| skeleton.reference_pose.get(b)),
-                ) {
-                    absent_rotations += 1;
-                    let r = reference.rotation;
-                    if (r[3].abs() - 1.0).abs() > 1e-4 || r[0].abs() + r[1].abs() + r[2].abs() > 1e-4 {
-                        absent_with_reference += 1;
-                    }
-                }
-            }
-            tracks += c.animations[0].transform_tracks * spline.blocks.len();
-            for time in [0.0, c.animations[0].duration / 2.0, c.animations[0].duration] {
-                match spline.pose_at(time, &c.bindings[0], skeleton, ABSENT) {
-                    Err(e) => failures.push(format!("{path} {name}: at {time}: {e}")),
-                    Ok(pose) => {
-                        for t in &pose {
-                            let finite = t
-                                .translation
-                                .iter()
-                                .chain(&t.rotation)
-                                .chain(&t.scale)
-                                .all(|v| v.is_finite());
-                            let norm = t.rotation.iter().map(|v| v * v).sum::<f32>().sqrt();
-                            worst_norm = worst_norm.max((norm - 1.0).abs());
-                            if !finite {
-                                failures.push(format!("{path} {name}: a pose at {time} is not finite"));
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
+        for (a, b) in position_absent.iter_mut().zip(position_absent_) {
+            *a += b;
         }
+        for (a, b) in position_absent_nonzero.iter_mut().zip(position_absent_nonzero_) {
+            *a += b;
+        }
+        reference_not_identity += reference_not_identity_;
+        absent_with_reference += absent_with_reference_;
+        worst_norm = worst_norm.max(worst_norm_);
+        failures.extend(failures_);
     }
+
     println!(
         "{decoded} spline animations decoded: {blocks} blocks, {tracks} track-blocks; worst rotation norm error \
          {worst_norm}; {absent_rotations} absent rotations, {absent_with_reference} of them on a bone whose reference \

@@ -8,7 +8,7 @@ mod inputs;
 
 use fromsoft_formats::{Game, btl::LightBank, dcx::Decoder};
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 mod common;
 
 #[test]
@@ -32,13 +32,20 @@ fn every_light_bank_matches_an_independent_reading() -> Result<()> {
         let (mut banks, mut lights, mut agreed_rejections) = (0usize, 0usize, 0usize);
         let mut version_15 = Vec::new();
         let mut failures = Vec::new();
-        for line in std::fs::read_to_string(oracle.join("btl.jsonl"))?.lines() {
+        // the reference's rows as text (parsed one at a time, where each is compared), and the banks they name
+        let text = std::fs::read_to_string(oracle.join("btl.jsonl"))?;
+        let mut paths = Vec::new();
+        for line in text.lines() {
             let record: serde_json::Value = serde_json::from_str(line)?;
-            let path = record["path"].as_str().ok_or("path")?;
-            let bank = match (
-                LightBank::read(&archive.read(path, &decoder)?),
-                record.get("error"),
-            ) {
+            paths.push(record["path"].as_str().ok_or("path")?.to_owned());
+        }
+        // each bank read on the archive's threads: its reading, or the archive's error
+        let read = archive.read_each(&paths, &decoder, inputs::threads(), |_, bytes| {
+            bytes.map(LightBank::read)
+        })?;
+        for ((line, path), bank) in text.lines().zip(&paths).zip(read) {
+            let record: serde_json::Value = serde_json::from_str(line)?;
+            let bank = match (bank?, record.get("error")) {
                 (Err(e), Some(reason)) => {
                     // both refuse it: agreement; the reasons are each reader's own words
                     println!("AGREED REJECTION {path}: ours {e}; reference {reason}");

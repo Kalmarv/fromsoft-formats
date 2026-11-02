@@ -24,7 +24,7 @@ use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use std::collections::{BTreeMap, BTreeSet};
 mod common;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 /// The layouts of every map the game's dictionary names and its archive holds, by map name.
 fn layouts(game: Game) -> Result<Option<(Archive, BTreeMap<String, MapLayout>)>> {
@@ -54,12 +54,20 @@ fn layouts(game: Game) -> Result<Option<(Archive, BTreeMap<String, MapLayout>)>>
         .filter_map(|p| p.strip_prefix("/map/mapstudio/")?.strip_suffix(".msb.dcx"))
         .filter(|m| !m.contains('/'))
         .collect();
+    // every layout the archives hold, read on the archive's threads
+    let maps: Vec<&str> = maps
+        .into_iter()
+        .filter(|map| archive.contains(&format!("/map/mapstudio/{map}.msb.dcx")))
+        .collect();
+    let read = archive.read_each(
+        maps.iter().map(|map| format!("/map/mapstudio/{map}.msb.dcx")),
+        &decoder,
+        inputs::threads(),
+        |_, bytes| MapLayout::read(bytes?),
+    )?;
     let mut out = BTreeMap::new();
-    for map in maps {
-        let path = format!("/map/mapstudio/{map}.msb.dcx");
-        if archive.contains(&path) {
-            out.insert(map.to_owned(), MapLayout::read(&archive.read(&path, &decoder)?)?);
-        }
+    for (map, layout) in maps.into_iter().zip(read) {
+        out.insert(map.to_owned(), layout?);
     }
     Ok(Some((archive, out)))
 }

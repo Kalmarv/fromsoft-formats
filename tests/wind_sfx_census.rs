@@ -19,7 +19,7 @@ use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use std::collections::{BTreeMap, BTreeSet};
 mod common;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 #[test]
 fn wind_sfx_regions_of_both_installs() -> Result<()> {
@@ -61,14 +61,19 @@ fn wind_sfx_regions_of_both_installs() -> Result<()> {
             .filter_map(|p| p.strip_prefix("/map/mapstudio/")?.strip_suffix(".msb.dcx"))
             .filter(|m| !m.contains('/'))
             .collect();
-        let (mut count, mut with, mut own, mut to_area, mut unnamed) = (0, 0, 0, 0, 0);
-        let mut by_effect = BTreeMap::new();
-        for map in maps {
-            let path = format!("/map/mapstudio/{map}.msb.dcx");
-            if !archive.contains(&path) {
-                continue;
-            }
-            let layout = MapLayout::read(&archive.read(&path, &decoder)?)?;
+        // each layout counted on the archive's threads, the totals added up in path order
+        let paths: Vec<String> = maps
+            .iter()
+            .map(|map| format!("/map/mapstudio/{map}.msb.dcx"))
+            .filter(|p| archive.contains(p))
+            .collect();
+        let read = archive.read_each(&paths, &decoder, inputs::threads(), |path, bytes| -> Result<_> {
+            let map = path
+                .trim_start_matches("/map/mapstudio/")
+                .trim_end_matches(".msb.dcx");
+            let layout = MapLayout::read(bytes?)?;
+            let (mut count, mut with, mut own, mut to_area, mut unnamed) = (0, 0, 0, 0, 0);
+            let mut by_effect = BTreeMap::new();
             let all = layout.map_regions()?;
             let mut here = 0;
             for region in &all {
@@ -94,7 +99,22 @@ fn wind_sfx_regions_of_both_installs() -> Result<()> {
             }
             count += here;
             with += usize::from(here > 0);
+            Ok((count, with, own, to_area, unnamed, by_effect))
+        })?;
+        let (mut count, mut with, mut own, mut to_area, mut unnamed) = (0, 0, 0, 0, 0);
+        let mut by_effect = BTreeMap::new();
+        for totals in read {
+            let (count_, with_, own_, to_area_, unnamed_, by_effect_) = totals?;
+            count += count_;
+            with += with_;
+            own += own_;
+            to_area += to_area_;
+            unnamed += unnamed_;
+            for (key, n) in by_effect_ {
+                *by_effect.entry(key).or_default() += n;
+            }
         }
+
         println!(
             "{}: {count} wind SFX regions in {with} maps; index names itself {own}, a wind area {to_area}, none \
              {unnamed}; effects {by_effect:?}",

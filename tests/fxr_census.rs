@@ -15,13 +15,13 @@ mod inputs;
 
 use fromsoft_formats::dcx::Decoder;
 use fromsoft_formats::fxr::{self, Function, Fxr, Light, Property, Revision};
-use fromsoft_formats::{Archive, Binder, Game, Keys, NameDictionary};
+use fromsoft_formats::{Archive, Game, Keys, NameDictionary};
 use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 mod common;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 /// A property against the library's reading of it: a number or array (constant), or a function with keyframes.
 fn property_matches(p: &Property, v: &Value, scale: f64) -> bool {
@@ -266,6 +266,52 @@ struct Totals {
     rotated_lights: usize,
 }
 
+impl Totals {
+    /// Adds the totals of other binders to these.
+    fn add(&mut self, other: Totals) {
+        self.binders += other.binders;
+        self.members += other.members;
+        self.fxr_files += other.fxr_files;
+        self.other_members += other.other_members;
+        self.ids.extend(other.ids);
+        for (key, n) in other.actions {
+            *self.actions.entry(key).or_default() += n;
+        }
+        self.point_lights += other.point_lights;
+        self.point_files += other.point_files;
+        self.spot_lights += other.spot_lights;
+        self.spot_files += other.spot_files;
+        self.light_shafts += other.light_shafts;
+        self.legacy_lights += other.legacy_lights;
+        self.spawns += other.spawns;
+        self.colour_components += other.colour_components;
+        self.colour_not_255ths += other.colour_not_255ths;
+        self.colours_without_value += other.colours_without_value;
+        self.own_spawns += other.own_spawns;
+        self.spawn_mismatches += other.spawn_mismatches;
+        self.spawns_not_active_in_state_zero += other.spawns_not_active_in_state_zero;
+        for (key, n) in other.refused {
+            *self.refused.entry(key).or_default() += n;
+        }
+        self.not_in_oracle += other.not_in_oracle;
+        self.action_mismatches.extend(other.action_mismatches);
+        self.light_mismatches.extend(other.light_mismatches);
+        self.reference_mismatches += other.reference_mismatches;
+        self.id_mismatches += other.id_mismatches;
+        self.lights_not_selected_in_state_zero += other.lights_not_selected_in_state_zero;
+        for (key, n) in other.layouts {
+            *self.layouts.entry(key).or_default() += n;
+        }
+        self.max_depth = self.max_depth.max(other.max_depth);
+        self.properties += other.properties;
+        self.bounds_not_extremes += other.bounds_not_extremes;
+        self.placeholders_with_content += other.placeholders_with_content;
+        self.transforms += other.transforms;
+        self.unmapped_multi_config_nodes += other.unmapped_multi_config_nodes;
+        self.rotated_lights += other.rotated_lights;
+    }
+}
+
 fn tally_nodes(totals: &mut Totals, node: &fxr::Node) -> Result<()> {
     if node.configs.len() > 1 && node.state_configs().is_none() {
         totals.unmapped_multi_config_nodes += 1;
@@ -358,180 +404,192 @@ fn every_effect_file_reads_and_its_lights_agree_with_the_fxr_library() -> Result
             );
         }
         let mut t = Totals::default();
-        for path in paths {
-            let binder = Binder::read(&archive.read(path, &decoder)?, &decoder)?;
-            t.binders += 1;
-            let stem = fromsoft_formats::names::stem(path);
-            for member in &binder.files {
-                t.members += 1;
-                let name = member.name.clone().unwrap_or_default();
-                let Some(id) = fxr::member_id(&name) else {
-                    t.other_members += 1;
-                    continue;
-                };
-                t.fxr_files += 1;
-                t.ids.insert(id);
-                let read = match Fxr::read(&member.bytes) {
-                    Ok(f) => f,
-                    Err(e) => {
-                        let reason = e.to_string();
-                        println!("REFUSED {path} {name}: {reason}");
-                        *t.refused.entry(reason.chars().take(60).collect()).or_default() += 1;
+        // each binder counted on the archive's threads into totals of its own, with the lines it prints
+        let read =
+            archive.read_each_binder(&paths, &decoder, inputs::threads(), |path, binder| -> Result<_> {
+                let binder = binder?;
+                let mut t = Totals::default();
+                let mut lines = Vec::new();
+                t.binders += 1;
+                let stem = fromsoft_formats::names::stem(path);
+                for member in &binder.files {
+                    t.members += 1;
+                    let name = member.name.clone().unwrap_or_default();
+                    let Some(id) = fxr::member_id(&name) else {
+                        t.other_members += 1;
                         continue;
-                    }
-                };
-                if read.id != id {
-                    t.id_mismatches += 1;
-                }
-                if read.references.iter().copied().collect::<BTreeSet<_>>() != read.spawned() {
-                    t.reference_mismatches += 1;
-                }
-                // the spawn actions with their places: every SFXReference once, in a config or among a node's own actions
-                let spawns = read.spawns().map_err(|e| format!("{path} {name}: {e}"))?;
-                let stored = read
-                    .actions()
-                    .iter()
-                    .filter(|a| a.id == fxr::SFX_REFERENCE)
-                    .count();
-                if spawns.len() != stored
-                    || spawns.iter().map(|s| s.effect).collect::<BTreeSet<_>>() != read.spawned()
-                {
-                    t.spawn_mismatches += 1;
-                }
-                t.spawns += spawns.len();
-                t.own_spawns += spawns.iter().filter(|s| s.config.is_none()).count();
-                for s in &spawns {
-                    s.local_matrix(0).map_err(|e| format!("{path} {name}: {e}"))?;
-                    t.spawns_not_active_in_state_zero += usize::from(!s.active_in_state(0));
-                }
-                tally(&mut t, &read);
-                tally_nodes(&mut t, &read.root).map_err(|e| format!("{path} {name}: {e}"))?;
-                let lights = read.lights().map_err(|e| format!("{path} {name}: {e}"))?;
-                let file = name.rsplit(['\\', '/']).next().unwrap_or(&name).to_owned();
-                // layouts of every light action, including a refusal by counts
-                for a in read.actions() {
-                    if a.id == fxr::POINT_LIGHT || a.id == fxr::SPOT_LIGHT {
-                        *t.layouts
-                            .entry((
-                                a.properties1.len(),
-                                a.properties2.len(),
-                                a.fields1.len(),
-                                a.fields2.len(),
-                            ))
-                            .or_default() += 1;
-                    }
-                    if a.id == fxr::LIGHT_SHAFT {
-                        t.light_shafts += 1;
-                    }
-                }
-                let (mut points, mut spots) = (0, 0);
-                for l in &lights {
-                    // the diffuse colour at its first keyframe and where it settles: whole numbers of 255ths
-                    let diffuse = match &l.light {
-                        Light::Point(p) => &p.diffuse_color,
-                        Light::Spot(s) => &s.diffuse_color,
                     };
-                    let first = diffuse
-                        .constant()
-                        .or_else(|| diffuse.keyframes().and_then(|k| k.values.first().cloned()));
-                    for value in [first, diffuse.settled()] {
-                        match value {
-                            None => t.colours_without_value += 1,
-                            Some(v) => {
-                                for c in &v[..3] {
-                                    t.colour_components += 1;
-                                    t.colour_not_255ths +=
-                                        usize::from((c * 255.0 - (c * 255.0).round()).abs() > 2e-3);
+                    t.fxr_files += 1;
+                    t.ids.insert(id);
+                    let read = match Fxr::read(&member.bytes) {
+                        Ok(f) => f,
+                        Err(e) => {
+                            let reason = e.to_string();
+                            lines.push(format!("REFUSED {path} {name}: {reason}"));
+                            *t.refused.entry(reason.chars().take(60).collect()).or_default() += 1;
+                            continue;
+                        }
+                    };
+                    if read.id != id {
+                        t.id_mismatches += 1;
+                    }
+                    if read.references.iter().copied().collect::<BTreeSet<_>>() != read.spawned() {
+                        t.reference_mismatches += 1;
+                    }
+                    // the spawn actions with their places: every SFXReference once, in a config or among a node's own actions
+                    let spawns = read.spawns().map_err(|e| format!("{path} {name}: {e}"))?;
+                    let stored = read
+                        .actions()
+                        .iter()
+                        .filter(|a| a.id == fxr::SFX_REFERENCE)
+                        .count();
+                    if spawns.len() != stored
+                        || spawns.iter().map(|s| s.effect).collect::<BTreeSet<_>>() != read.spawned()
+                    {
+                        t.spawn_mismatches += 1;
+                    }
+                    t.spawns += spawns.len();
+                    t.own_spawns += spawns.iter().filter(|s| s.config.is_none()).count();
+                    for s in &spawns {
+                        s.local_matrix(0).map_err(|e| format!("{path} {name}: {e}"))?;
+                        t.spawns_not_active_in_state_zero += usize::from(!s.active_in_state(0));
+                    }
+                    tally(&mut t, &read);
+                    tally_nodes(&mut t, &read.root).map_err(|e| format!("{path} {name}: {e}"))?;
+                    let lights = read.lights().map_err(|e| format!("{path} {name}: {e}"))?;
+                    let file = name.rsplit(['\\', '/']).next().unwrap_or(&name).to_owned();
+                    // layouts of every light action, including a refusal by counts
+                    for a in read.actions() {
+                        if a.id == fxr::POINT_LIGHT || a.id == fxr::SPOT_LIGHT {
+                            *t.layouts
+                                .entry((
+                                    a.properties1.len(),
+                                    a.properties2.len(),
+                                    a.fields1.len(),
+                                    a.fields2.len(),
+                                ))
+                                .or_default() += 1;
+                        }
+                        if a.id == fxr::LIGHT_SHAFT {
+                            t.light_shafts += 1;
+                        }
+                    }
+                    let (mut points, mut spots) = (0, 0);
+                    for l in &lights {
+                        // the diffuse colour at its first keyframe and where it settles: whole numbers of 255ths
+                        let diffuse = match &l.light {
+                            Light::Point(p) => &p.diffuse_color,
+                            Light::Spot(s) => &s.diffuse_color,
+                        };
+                        let first = diffuse
+                            .constant()
+                            .or_else(|| diffuse.keyframes().and_then(|k| k.values.first().cloned()));
+                        for value in [first, diffuse.settled()] {
+                            match value {
+                                None => t.colours_without_value += 1,
+                                Some(v) => {
+                                    for c in &v[..3] {
+                                        t.colour_components += 1;
+                                        t.colour_not_255ths +=
+                                            usize::from((c * 255.0 - (c * 255.0).round()).abs() > 2e-3);
+                                    }
                                 }
                             }
                         }
-                    }
-                    match &l.light {
-                        Light::Point(p) => {
-                            points += 1;
-                            if p.revision == Revision::Legacy {
-                                t.legacy_lights += 1;
+                        match &l.light {
+                            Light::Point(p) => {
+                                points += 1;
+                                if p.revision == Revision::Legacy {
+                                    t.legacy_lights += 1;
+                                }
                             }
+                            Light::Spot(_) => spots += 1,
                         }
-                        Light::Spot(_) => spots += 1,
-                    }
-                    if !l.active_in_state(0) {
-                        t.lights_not_selected_in_state_zero += 1;
-                    }
-                    let chain = l
-                        .static_transforms(0)
-                        .map_err(|e| format!("{path} {name}: {e}"))?;
-                    if chain.iter().any(|s| s.rotation_degrees.iter().any(|&r| r != 0.0)) {
-                        t.rotated_lights += 1;
-                    }
-                }
-                t.point_lights += points;
-                t.spot_lights += spots;
-                t.point_files += usize::from(points > 0);
-                t.spot_files += usize::from(spots > 0);
-                // the library
-                let Some(w) = oracle_lines.get(&(stem.clone(), file.clone())) else {
-                    t.not_in_oracle += 1;
-                    continue;
-                };
-                if w.get("error").is_some() {
-                    continue;
-                }
-                // action counts: the library walks the tree's actions
-                let mut ours: BTreeMap<String, usize> = BTreeMap::new();
-                for a in read.actions() {
-                    *ours.entry(a.id.to_string()).or_default() += 1;
-                }
-                let theirs: BTreeMap<String, usize> = w["counts"]
-                    .as_object()
-                    .unwrap()
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.as_u64().unwrap() as usize))
-                    .collect();
-                // the library models some actions as structure (the state-config map 199, the spawned effect 132, the
-                // level-of-detail thresholds 133), adds a termination (700) where a file has none and has no type 0
-                // (the empty placeholder); every other type is one action in both
-                let structural = ["0", "132", "133", "199", "700"];
-                ours.retain(|k, _| !structural.contains(&k.as_str()));
-                let theirs: BTreeMap<String, usize> = theirs
-                    .into_iter()
-                    .filter(|(k, _)| !structural.contains(&k.as_str()))
-                    .collect();
-                if ours != theirs {
-                    t.action_mismatches.push(format!("{stem}/{file}"));
-                }
-                // every light of ours pairs with a light of the library that agrees on every field, each used once
-                let mut want: Vec<&Value> = w["lights"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .filter(|l| l["type"] != 10003)
-                    .collect();
-                if want.len() != lights.len() {
-                    t.light_mismatches.push(format!(
-                        "{stem}/{file}: {} lights, the library reads {}",
-                        lights.len(),
-                        want.len()
-                    ));
-                    continue;
-                }
-                for g in &lights {
-                    let mut last = String::new();
-                    let found = want.iter().position(|w| match light_matches(&g.light, w, true) {
-                        Ok(()) => true,
-                        Err(fields) => {
-                            last = fields;
-                            false
+                        if !l.active_in_state(0) {
+                            t.lights_not_selected_in_state_zero += 1;
                         }
-                    });
-                    match found {
-                        Some(i) => {
-                            want.swap_remove(i);
+                        let chain = l
+                            .static_transforms(0)
+                            .map_err(|e| format!("{path} {name}: {e}"))?;
+                        if chain.iter().any(|s| s.rotation_degrees.iter().any(|&r| r != 0.0)) {
+                            t.rotated_lights += 1;
                         }
-                        None => t.light_mismatches.push(format!("{stem}/{file}: {last}")),
+                    }
+                    t.point_lights += points;
+                    t.spot_lights += spots;
+                    t.point_files += usize::from(points > 0);
+                    t.spot_files += usize::from(spots > 0);
+                    // the library
+                    let Some(w) = oracle_lines.get(&(stem.clone(), file.clone())) else {
+                        t.not_in_oracle += 1;
+                        continue;
+                    };
+                    if w.get("error").is_some() {
+                        continue;
+                    }
+                    // action counts: the library walks the tree's actions
+                    let mut ours: BTreeMap<String, usize> = BTreeMap::new();
+                    for a in read.actions() {
+                        *ours.entry(a.id.to_string()).or_default() += 1;
+                    }
+                    let theirs: BTreeMap<String, usize> = w["counts"]
+                        .as_object()
+                        .unwrap()
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.as_u64().unwrap() as usize))
+                        .collect();
+                    // the library models some actions as structure (the state-config map 199, the spawned effect 132, the
+                    // level-of-detail thresholds 133), adds a termination (700) where a file has none and has no type 0
+                    // (the empty placeholder); every other type is one action in both
+                    let structural = ["0", "132", "133", "199", "700"];
+                    ours.retain(|k, _| !structural.contains(&k.as_str()));
+                    let theirs: BTreeMap<String, usize> = theirs
+                        .into_iter()
+                        .filter(|(k, _)| !structural.contains(&k.as_str()))
+                        .collect();
+                    if ours != theirs {
+                        t.action_mismatches.push(format!("{stem}/{file}"));
+                    }
+                    // every light of ours pairs with a light of the library that agrees on every field, each used once
+                    let mut want: Vec<&Value> = w["lights"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .filter(|l| l["type"] != 10003)
+                        .collect();
+                    if want.len() != lights.len() {
+                        t.light_mismatches.push(format!(
+                            "{stem}/{file}: {} lights, the library reads {}",
+                            lights.len(),
+                            want.len()
+                        ));
+                        continue;
+                    }
+                    for g in &lights {
+                        let mut last = String::new();
+                        let found = want.iter().position(|w| match light_matches(&g.light, w, true) {
+                            Ok(()) => true,
+                            Err(fields) => {
+                                last = fields;
+                                false
+                            }
+                        });
+                        match found {
+                            Some(i) => {
+                                want.swap_remove(i);
+                            }
+                            None => t.light_mismatches.push(format!("{stem}/{file}: {last}")),
+                        }
                     }
                 }
+                Ok((t, lines))
+            })?;
+        for binder in read {
+            let (binder_totals, lines) = binder?;
+            for line in lines {
+                println!("{line}");
             }
+            t.add(binder_totals);
         }
         println!(
             "{}: {} binders, {} members ({} effect files, {} others), {} ids, {} point lights in {} files, {} spot lights in {} files, {} light shafts, {} legacy-layout, {} refused {:?}, not in the library's list {}, action-count mismatches {}, light mismatches {}, header-list mismatches {}, id mismatches {}, lights not chosen by state 0 {}, tree depth {}, {} properties, bounds not the extremes {}, configs with a static transform {}, multi-config nodes without a state map {}, lights with a rotated transform above them {}",

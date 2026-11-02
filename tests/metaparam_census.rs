@@ -13,7 +13,7 @@ use fromsoft_formats::dcx::Decoder;
 use fromsoft_formats::metaparam::Metaparam;
 use fromsoft_formats::{Archive, Binder};
 use inputs::{Game, Tool, install, oodle};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 mod common;
 
 #[test]
@@ -126,22 +126,31 @@ fn every_elden_ring_metaparam_matches_an_independent_reading() {
         max_output: u32::MAX as usize,
     };
     let leaf = |n: &str| n.rsplit(['\\', '/']).next().unwrap_or(n).to_owned();
-    let mut binders: BTreeMap<String, BTreeMap<String, Vec<u8>>> = BTreeMap::new();
-    let (mut compared, mut failures) = (0usize, Vec::new());
-    for line in std::fs::read_to_string(format.join("metaparam.jsonl"))
-        .unwrap()
+    let records = std::fs::read_to_string(format.join("metaparam.jsonl")).unwrap();
+    // the binders the records name, read on the archive's threads, their bundles kept by name
+    let named: BTreeSet<String> = records
         .lines()
-    {
-        let record: serde_json::Value = serde_json::from_str(line).unwrap();
-        let binder = record["binder"].as_str().unwrap().to_owned();
-        let bundles = binders.entry(binder.clone()).or_insert_with(|| {
-            Binder::read(&archive.read(&binder, &decoder).unwrap(), &decoder)
+        .map(|line| {
+            let record: serde_json::Value = serde_json::from_str(line).unwrap();
+            record["binder"].as_str().unwrap().to_owned()
+        })
+        .collect();
+    let read = archive
+        .read_each_binder(&named, &decoder, inputs::threads(), |_, binder| {
+            binder
                 .unwrap()
                 .files
                 .into_iter()
                 .map(|f| (leaf(f.name.as_deref().unwrap_or("")), f.bytes))
-                .collect()
-        });
+                .collect::<BTreeMap<String, Vec<u8>>>()
+        })
+        .unwrap();
+    let binders: BTreeMap<String, BTreeMap<String, Vec<u8>>> = named.into_iter().zip(read).collect();
+    let (mut compared, mut failures) = (0usize, Vec::new());
+    for line in records.lines() {
+        let record: serde_json::Value = serde_json::from_str(line).unwrap();
+        let binder = record["binder"].as_str().unwrap().to_owned();
+        let bundles = &binders[&binder];
         let bundle = leaf(record["bundle"].as_str().unwrap());
         let name = record["name"].as_str().unwrap();
         let member = Binder::read(&bundles[&bundle], &decoder)

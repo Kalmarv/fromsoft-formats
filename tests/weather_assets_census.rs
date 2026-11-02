@@ -31,7 +31,7 @@ use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use std::collections::{BTreeMap, BTreeSet};
 mod common;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 /// The sky maps the base game's archives hold a layout for.
 const SKY_MAPS: [&str; 18] = [
@@ -269,20 +269,28 @@ fn weather_assets_and_limits_of_the_install() -> Result<()> {
     );
 
     // every named asset is placed by its sky map's layout
-    let mut held = Vec::new();
-    for (map, assets) in &by_map {
-        let path = format!("/map/mapstudio/{map}.msb.dcx");
-        if !archive.contains(&path) {
-            continue;
-        }
-        held.push(map.as_str());
-        let layout = MapLayout::read(&archive.read(&path, &decoder)?)?;
-        let placed: BTreeSet<String> = layout
-            .parts
-            .iter()
-            .filter_map(|p| p.model.map(|i| layout.models[i].name.to_ascii_uppercase()))
-            .collect();
-        let missing: Vec<_> = assets.iter().filter(|a| !placed.contains(*a)).collect();
+    let held: Vec<&str> = by_map
+        .keys()
+        .map(String::as_str)
+        .filter(|map| archive.contains(&format!("/map/mapstudio/{map}.msb.dcx")))
+        .collect();
+    // each sky map's placed models, read on the archive's threads
+    let read = archive.read_each(
+        held.iter().map(|map| format!("/map/mapstudio/{map}.msb.dcx")),
+        &decoder,
+        inputs::threads(),
+        |_, bytes| -> Result<BTreeSet<String>> {
+            let layout = MapLayout::read(bytes?)?;
+            Ok(layout
+                .parts
+                .iter()
+                .filter_map(|p| p.model.map(|i| layout.models[i].name.to_ascii_uppercase()))
+                .collect())
+        },
+    )?;
+    for (map, placed) in held.iter().zip(read) {
+        let placed = placed?;
+        let missing: Vec<_> = by_map[*map].iter().filter(|a| !placed.contains(*a)).collect();
         assert!(missing.is_empty(), "{map}: {missing:?}");
     }
     assert_eq!(held, SKY_MAPS);

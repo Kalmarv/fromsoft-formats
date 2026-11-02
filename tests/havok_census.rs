@@ -18,11 +18,11 @@
 //! Runs where the install, its keys and the Oodle library are configured; otherwise it does nothing.
 mod inputs;
 
-use fromsoft_formats::{Binder, Game, Install, Keys, dcx::Decoder};
+use fromsoft_formats::{Game, Install, Keys, dcx::Decoder};
 use havok_formats::{Compendium, Tagfile};
 use std::collections::{BTreeMap, BTreeSet};
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 mod common;
 
 /// The binder kinds a character has, and the variants of the animation and behavior binders.
@@ -78,15 +78,26 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>) -> Result<()> {
     );
     let mut ext: BTreeMap<(String, String), (usize, BTreeSet<String>)> = BTreeMap::new();
     let mut shown = BTreeSet::new();
-    for id in ids {
+    // each sampled binder read on the archive's threads: its members by extension and its lines (a class's fields
+    // printed the first time the class is seen), in the order of the samples
+    let mut wanted = Vec::new();
+    for id in &ids {
         for kind in KINDS {
             for variant in VARIANTS {
                 let name = format!("{id}{variant}.{kind}");
                 let path = format!("/chr/{name}.dcx");
-                if !archive.contains(&path) {
-                    continue;
+                if archive.contains(&path) {
+                    wanted.push((id, kind, name, path));
                 }
-                let binder = Binder::read(&archive.read(&path, decoder)?, decoder)?;
+            }
+        }
+    }
+    let read = archive.read_each_binder(wanted.iter().map(|w| &w.3), decoder, inputs::threads(), |path, binder| {
+        let (id, kind, name, _) = wanted.iter().find(|w| w.3 == path).ok_or("a binder not asked for")?;
+        let (id, kind) = (*id, *kind);
+        let binder = binder?;
+        let mut ext: BTreeMap<(String, String), (usize, BTreeSet<String>)> = BTreeMap::new();
+        let mut lines: Vec<(Option<String>, String)> = Vec::new();
                 for f in &binder.files {
                     let leaf = f
                         .name
@@ -98,7 +109,7 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>) -> Result<()> {
                     let e = leaf.rsplit_once('.').map_or("", |(_, e)| e).to_ascii_lowercase();
                     let entry = ext.entry((kind.to_owned(), e)).or_default();
                     entry.0 += 1;
-                    entry.1.insert(id.clone());
+                    entry.1.insert(id.to_string());
                 }
                 let compendium = match binder.files.iter().find(|f| {
                     f.name
@@ -134,7 +145,7 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>) -> Result<()> {
                     let tag = match Tagfile::read(&bytes, compendium.as_ref()) {
                         Ok(tag) => tag,
                         Err(e) => {
-                            println!("HAVOKERR {} {id} {name} {leaf} {}", game.name(), e.detail);
+                            lines.push((None, format!("HAVOKERR {} {id} {name} {leaf} {}", game.name(), e.detail)));
                             continue;
                         }
                     };
@@ -142,13 +153,13 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>) -> Result<()> {
                     for item in tag.items.iter().skip(1) {
                         if let Some(t) = tag.types.get(item.type_index) {
                             *classes.entry(t.name.as_str()).or_default() += 1;
-                            if interesting(&t.name) && shown.insert(t.name.clone()) {
-                                println!(
+                            if interesting(&t.name) {
+                                lines.push((Some(t.name.clone()), format!(
                                     "CLASS {} {} fields {:?}",
                                     game.name(),
                                     t.name,
                                     t.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>()
-                                );
+                                )));
                             }
                         }
                     }
@@ -171,7 +182,7 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>) -> Result<()> {
                                         _ => None,
                                     })
                                     .collect();
-                                println!(
+                                lines.push((None, format!(
                                     "PHYSICS {} {id} {leaf} cloths {} sim_cloths {} particles {} fixed {} poses {} sets {} \
                                      unread_sets {unread:?} ragdolls {} ragdoll_bones {} constraints {}",
                                     game.name(),
@@ -188,9 +199,9 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>) -> Result<()> {
                                         .map(|r| r.skeleton.bones.len())
                                         .sum::<usize>(),
                                     physics.constraints.len(),
-                                );
+                                )));
                             }
-                            Err(e) => println!("PHYSICSERR {} {id} {leaf} {e}", game.name()),
+                            Err(e) => lines.push((None, format!("PHYSICSERR {} {id} {leaf} {e}", game.name()))),
                         }
                     }
                     let key = classes
@@ -202,11 +213,23 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>) -> Result<()> {
                     entry.0 += 1;
                 }
                 for (classes, (members, example)) in groups {
-                    println!(
+                    lines.push((None, format!(
                         "HAVOK {} {id} {name} members {members} classes [{classes}] example {example}",
                         game.name()
-                    );
+                    )));
                 }
+                    Ok::<_, Box<dyn std::error::Error + Send + Sync>>((ext, lines))
+    })?;
+    for binder in read {
+        let (binder_ext, lines) = binder?;
+        for ((kind, e), (members, characters)) in binder_ext {
+            let entry = ext.entry((kind, e)).or_default();
+            entry.0 += members;
+            entry.1.extend(characters);
+        }
+        for (class, line) in lines {
+            if class.is_none_or(|class| shown.insert(class)) {
+                println!("{line}");
             }
         }
     }

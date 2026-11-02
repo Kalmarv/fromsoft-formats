@@ -16,7 +16,7 @@ use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use std::collections::BTreeSet;
 mod common;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 #[test]
 fn every_fmg_of_the_installs_reads() -> Result<()> {
@@ -47,13 +47,21 @@ fn every_fmg_of_the_installs_reads() -> Result<()> {
             .filter(|p| p.starts_with("/msg/") && p.ends_with(".msgbnd.dcx"))
             .collect();
         let (mut read, mut entries) = (0, 0);
-        for path in paths.into_iter().filter(|p| archive.contains(p)) {
-            let binder = Binder::read(&archive.read(path, &decoder)?, &decoder)?;
-            for file in &binder.files {
+        // each binder's text files and their entries, read on the archive's threads
+        let paths: Vec<_> = paths.into_iter().filter(|p| archive.contains(p)).collect();
+        let binders = archive.read_each(&paths, &decoder, inputs::threads(), |_, bytes| -> Result<_> {
+            let (mut read, mut entries) = (0, 0);
+            for file in &Binder::read(bytes?, &decoder)?.files {
                 let fmg = Fmg::read(&decoder.decode_if_dcx(&file.bytes)?)?;
                 read += 1;
                 entries += fmg.entries.len();
             }
+            Ok((read, entries))
+        })?;
+        for binder in binders {
+            let (files, strings) = binder?;
+            read += files;
+            entries += strings;
         }
         assert_eq!((read, entries), (files, strings), "{}", game.name());
     }

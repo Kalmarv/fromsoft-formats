@@ -25,7 +25,7 @@ use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use std::collections::BTreeSet;
 mod common;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 fn defs(dir: &std::path::Path) -> Result<ParamDefs> {
     let mut files: Vec<_> = std::fs::read_dir(dir)?
@@ -121,14 +121,16 @@ fn effect_references_of_both_installs() -> Result<()> {
             .filter_map(|p| p.strip_prefix("/map/mapstudio/")?.strip_suffix(".msb.dcx"))
             .filter(|m| !m.contains('/'))
             .collect();
-        let (mut sfx, mut sfx_maps, mut off, mut second_set) = (0, 0, 0, 0);
-        let (mut aeg, mut none, mut named, mut absent, mut others) = (0, 0, 0, 0, 0);
-        for map in maps {
-            let path = format!("/map/mapstudio/{map}.msb.dcx");
-            if !archive.contains(&path) {
-                continue;
-            }
-            let layout = MapLayout::read(&archive.read(&path, &decoder)?)?;
+        // each layout counted on the archive's threads, the totals added up in path order
+        let paths: Vec<String> = maps
+            .iter()
+            .map(|map| format!("/map/mapstudio/{map}.msb.dcx"))
+            .filter(|p| archive.contains(p))
+            .collect();
+        let read = archive.read_each(&paths, &decoder, inputs::threads(), |_, bytes| -> Result<_> {
+            let layout = MapLayout::read(bytes?)?;
+            let (mut sfx, mut sfx_maps, mut off, mut second_set) = (0, 0, 0, 0);
+            let (mut aeg, mut none, mut named, mut absent, mut others) = (0, 0, 0, 0, 0);
             let mut here = 0;
             for region in layout.map_regions()? {
                 match layout.sfx_region(&region)? {
@@ -165,7 +167,23 @@ fn effect_references_of_both_installs() -> Result<()> {
                     _ => assert_eq!(rel, None, "{} {:?}", game.name(), part.kind),
                 }
             }
+            Ok((sfx, sfx_maps, off, second_set, aeg, none, named, absent, others))
+        })?;
+        let (mut sfx, mut sfx_maps, mut off, mut second_set) = (0, 0, 0, 0);
+        let (mut aeg, mut none, mut named, mut absent, mut others) = (0, 0, 0, 0, 0);
+        for totals in read {
+            let (sfx_, sfx_maps_, off_, second_set_, aeg_, none_, named_, absent_, others_) = totals?;
+            sfx += sfx_;
+            sfx_maps += sfx_maps_;
+            off += off_;
+            second_set += second_set_;
+            aeg += aeg_;
+            none += none_;
+            named += named_;
+            absent += absent_;
+            others += others_;
         }
+
         println!(
             "{}: {sfx} SFX regions in {sfx_maps} maps, {off} start disabled, {second_set} with the second byte; \
              AEG assets {aeg}: {none} without, {named} with a row, {absent} naming an absent row; {others} other asset models",

@@ -12,12 +12,12 @@ mod inputs;
 
 use fromsoft_formats::dcx::Decoder;
 use fromsoft_formats::tae::{self, Tae};
-use fromsoft_formats::{Archive, Binder, Game, Keys, NameDictionary};
+use fromsoft_formats::{Archive, Game, Keys, NameDictionary};
 use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use std::collections::BTreeSet;
 mod common;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 /// The file name after the last separator, lowercased, without its extension.
 fn stem(name: &str) -> String {
@@ -53,23 +53,32 @@ fn the_players_clips_find_their_records_by_binder_slot() -> Result<()> {
             .filter(|p| p.starts_with("/chr/c0000") && p.ends_with(".anibnd.dcx"))
             .filter(|p| archive.contains(p))
             .collect();
-        let (mut files, mut names) = (Vec::new(), BTreeSet::<String>::new());
-        for path in &paths {
-            let binder = Binder::read(&archive.read(path, &decoder)?, &decoder)?;
-            for member in &binder.files {
-                let Some(name) = member.name.as_deref().map(str::to_ascii_lowercase) else {
-                    continue;
-                };
-                if name.ends_with(".tae") {
-                    files.push(Tae::read_member(&binder, member)?);
-                } else if name.ends_with(".hkx") {
-                    // a clip `aGGG_NNNNNN`; the variants `aGGG_NNNNNN_N` are other files
-                    let stem = stem(&name);
-                    if stem.len() == 11 && tae::clip_animation_id(&stem).is_some() {
-                        names.insert(stem);
+        // each binder's event files and clip names, read on the archive's threads
+        let binders =
+            archive.read_each_binder(&paths, &decoder, inputs::threads(), |_, binder| -> Result<_> {
+                let binder = binder?;
+                let (mut files, mut names) = (Vec::new(), Vec::new());
+                for member in &binder.files {
+                    let Some(name) = member.name.as_deref().map(str::to_ascii_lowercase) else {
+                        continue;
+                    };
+                    if name.ends_with(".tae") {
+                        files.push(Tae::read_member(&binder, member)?);
+                    } else if name.ends_with(".hkx") {
+                        // a clip `aGGG_NNNNNN`; the variants `aGGG_NNNNNN_N` are other files
+                        let stem = stem(&name);
+                        if stem.len() == 11 && tae::clip_animation_id(&stem).is_some() {
+                            names.push(stem);
+                        }
                     }
                 }
-            }
+                Ok((files, names))
+            })?;
+        let (mut files, mut names) = (Vec::new(), BTreeSet::<String>::new());
+        for binder in binders {
+            let (binder_files, binder_names) = binder?;
+            files.extend(binder_files);
+            names.extend(binder_names);
         }
         let located = names
             .iter()

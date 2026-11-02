@@ -19,7 +19,7 @@ use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 const XML: &str = r#"<event_template game="SDT">
 	<event id="8" name="Thing"><u8 assert="0"/><s16 name="Row" ref="SpEffectParam"/><aob length="2"/></event>
@@ -150,30 +150,47 @@ fn every_event_of_the_installs_keeps_the_templates_asserts() -> Result<()> {
             })
             .filter(|p| archive.contains(p))
             .collect();
+        // each binder's event files at any depth, checked on the archive's threads: the content's digest and its
+        // check (counted for the first of a content, as is its error)
+        let binders =
+            archive.read_each_binder(&paths, &decoder, inputs::threads(), |path, binder| -> Result<_> {
+                let mut files = Vec::new();
+                let mut todo = vec![binder?];
+                while let Some(binder) = todo.pop() {
+                    for member in &binder.files {
+                        if member.bytes.starts_with(b"BND4") {
+                            todo.push(Binder::read(&member.bytes, &decoder)?);
+                        }
+                        let named_tae = member
+                            .name
+                            .as_deref()
+                            .is_some_and(|n| n.to_ascii_lowercase().ends_with(".tae"));
+                        if !named_tae {
+                            continue;
+                        }
+                        let check = Tae::read_member(&binder, member)
+                            .map_err(|e| e.to_string())
+                            .and_then(|tae| {
+                                tae.check_templates(&templates)
+                                    .map_err(|e| format!("{path} {:?}: {e}", member.name))
+                            })
+                            .map(|check| (check.events, check.templated, check.asserted_fields));
+                        files.push((Sha256::digest(&member.bytes).to_vec(), check));
+                    }
+                }
+                Ok(files)
+            })?;
         let mut distinct = BTreeSet::new();
         let mut total = TemplateCheck::default();
-        for path in &paths {
-            let mut todo = vec![Binder::read(&archive.read(path, &decoder)?, &decoder)?];
-            while let Some(binder) = todo.pop() {
-                for member in &binder.files {
-                    if member.bytes.starts_with(b"BND4") {
-                        todo.push(Binder::read(&member.bytes, &decoder)?);
-                    }
-                    let named_tae = member
-                        .name
-                        .as_deref()
-                        .is_some_and(|n| n.to_ascii_lowercase().ends_with(".tae"));
-                    if !named_tae || !distinct.insert(Sha256::digest(&member.bytes).to_vec()) {
-                        continue;
-                    }
-                    let tae = Tae::read_member(&binder, member)?;
-                    let check = tae
-                        .check_templates(&templates)
-                        .map_err(|e| format!("{path} {:?}: {e}", member.name))?;
-                    total.events += check.events;
-                    total.templated += check.templated;
-                    total.asserted_fields += check.asserted_fields;
+        for binder in binders {
+            for (digest, check) in binder? {
+                if !distinct.insert(digest) {
+                    continue;
                 }
+                let (events, templated, asserted_fields) = check?;
+                total.events += events;
+                total.templated += templated;
+                total.asserted_fields += asserted_fields;
             }
         }
         println!(

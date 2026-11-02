@@ -23,12 +23,10 @@ mod inputs;
 
 use fromsoft_formats::collision::{BodyGeometry, read_bodies, read_map};
 use fromsoft_formats::dcx::Decoder;
-use fromsoft_formats::{Archive, Binder, Game, NameDictionary};
+use fromsoft_formats::{Binder, Game, NameDictionary};
 use havok_formats::{BoundsCheck, Compendium, CustomKind, SimdCheck, Tagfile, compressed_mesh};
 use inputs::{Game as Data, OracleSet, Tool, oodle, oracle};
 use std::collections::BTreeMap;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -126,15 +124,8 @@ fn walk(bytes: &[u8], compendium: Option<&Compendium>) -> Result<(Counts, usize)
     Ok((counts, extern_only))
 }
 
-/// One binder's tagfiles, walked and through the reader that fits its kind.
-fn read_binder(archive: &Archive, decoder: &Decoder<'_>, path: &str, map: bool) -> Result<Totals> {
-    let header = archive.read(path, decoder)?;
-    let binder = if map {
-        let payload = archive.read(&path.replace(".hkxbhd", ".hkxbdt"), decoder)?;
-        Binder::read_split(&header, &payload, decoder)?
-    } else {
-        Binder::read(&header, decoder)?
-    };
+/// One binder's tagfiles, walked and through the reader that fits its kind (a map's or an object's).
+fn read_binder(binder: &Binder, decoder: &Decoder<'_>, path: &str, map: bool) -> Result<Totals> {
     let mut compendia = Vec::new();
     let mut members = Vec::new();
     for f in &binder.files {
@@ -204,39 +195,35 @@ fn totals(game: Game) -> Result<Option<Totals>> {
         .collect();
     binders.sort();
     binders.dedup();
-    let next = AtomicUsize::new(0);
-    let total = Mutex::new(Totals::default());
-    let failures = Mutex::new(Vec::new());
-    let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).min(8);
-    std::thread::scope(|scope| {
-        for _ in 0..threads {
-            scope.spawn(|| {
-                let decoder = Decoder {
-                    oodle: Some(&dll),
-                    max_output: 1 << 30,
-                };
-                let mut mine = Totals::default();
-                loop {
-                    let i = next.fetch_add(1, Ordering::Relaxed);
-                    let Some((path, map)) = binders.get(i) else {
-                        break;
-                    };
-                    match read_binder(&archive, &decoder, path, *map) {
-                        Ok(t) => mine.merge(t),
-                        Err(e) => failures.lock().unwrap().push(format!("{path}: {e}")),
-                    }
-                }
-                total.lock().unwrap().merge(mine);
-            });
+    let decoder = Decoder {
+        oodle: Some(&dll),
+        max_output: 1 << 30,
+    };
+    // each binder read and walked on the archive's threads, its totals added up in path order
+    let read = archive.read_each_binder(
+        binders.iter().map(|b| &b.0),
+        &decoder,
+        inputs::threads(),
+        |path, binder| {
+            let map = kind(game, path) == Some(true);
+            binder
+                .map_err(|e| e.to_string())
+                .and_then(|binder| read_binder(&binder, &decoder, path, map).map_err(|e| e.to_string()))
+        },
+    )?;
+    let mut total = Totals::default();
+    let mut failures = Vec::new();
+    for ((path, _), binder) in binders.iter().zip(read) {
+        match binder {
+            Ok(t) => total.merge(t),
+            Err(e) => failures.push(format!("{path}: {e}")),
         }
-    });
-    let failures = failures.into_inner().unwrap();
+    }
     assert!(
         failures.is_empty(),
         "{} binders failed: {failures:#?}",
         failures.len()
     );
-    let total = total.into_inner().unwrap();
     eprintln!(
         "{} bounding-volume trees: {} binders, {total:?}",
         game.name(),

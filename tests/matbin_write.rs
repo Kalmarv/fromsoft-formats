@@ -8,12 +8,12 @@ mod common;
 mod inputs;
 
 use fromsoft_formats::{
-    Binder, Game,
+    Game,
     dcx::Decoder,
     matbin::{Material, Value},
 };
 use inputs::{Tool, oodle};
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 #[test]
 fn elden_ring_material_binaries_write_back_to_their_bytes() -> Result<()> {
@@ -25,40 +25,63 @@ fn elden_ring_material_binaries_write_back_to_their_bytes() -> Result<()> {
         oodle: Some(&dll),
         max_output: 1 << 30,
     };
+    // each binder's materials written back on the archive's threads, the counts added up in order
+    let read = archive.read_each_binder(
+        [
+            "/material/allmaterial.matbinbnd.dcx",
+            "/material/allmaterial_dlc01.matbinbnd.dcx",
+            "/material/allmaterial_dlc02.matbinbnd.dcx",
+            "/material/speedtree.matbinbnd.dcx",
+        ],
+        &decoder,
+        inputs::threads(),
+        |_, binder| -> Result<_> {
+            let binder = binder?;
+            let (mut materials, mut params, mut samplers, mut tails, mut tail_bytes) =
+                (0usize, 0usize, 0usize, 0usize, 0usize);
+            let (mut extended, mut truncated) = (0usize, 0usize);
+            for file in binder.files.iter().filter(|f| f.bytes.starts_with(b"MAB\0")) {
+                let name = file.name.clone().unwrap_or_default();
+                let m = Material::read(&file.bytes).map_err(|e| format!("{name}: {e}"))?;
+                let written = m.write().map_err(|e| format!("{name}: {e}"))?;
+                if written != file.bytes {
+                    return Err(format!("{name}: write() differs from the stored bytes").into());
+                }
+                materials += 1;
+                params += m.params.len();
+                samplers += m.samplers.len();
+                tails += usize::from(!m.unreferenced_tail.is_empty());
+                tail_bytes += m.unreferenced_tail.len();
+                extended += m
+                    .params
+                    .iter()
+                    .filter(|p| matches!(p.value, Value::Float3(_, Some(_))))
+                    .count();
+                truncated += m
+                    .params
+                    .iter()
+                    .filter(|p| matches!(p.value, Value::Truncated { .. }))
+                    .count();
+            }
+            Ok((
+                materials, params, samplers, tails, tail_bytes, extended, truncated,
+            ))
+        },
+    )?;
     let (mut materials, mut params, mut samplers, mut tails, mut tail_bytes) =
         (0usize, 0usize, 0usize, 0usize, 0usize);
     let (mut extended, mut truncated) = (0usize, 0usize);
-    for path in [
-        "/material/allmaterial.matbinbnd.dcx",
-        "/material/allmaterial_dlc01.matbinbnd.dcx",
-        "/material/allmaterial_dlc02.matbinbnd.dcx",
-        "/material/speedtree.matbinbnd.dcx",
-    ] {
-        let binder = Binder::read(&archive.read(path, &decoder)?, &decoder)?;
-        for file in binder.files.iter().filter(|f| f.bytes.starts_with(b"MAB\0")) {
-            let name = file.name.clone().unwrap_or_default();
-            let m = Material::read(&file.bytes).map_err(|e| format!("{name}: {e}"))?;
-            let written = m.write().map_err(|e| format!("{name}: {e}"))?;
-            if written != file.bytes {
-                return Err(format!("{name}: write() differs from the stored bytes").into());
-            }
-            materials += 1;
-            params += m.params.len();
-            samplers += m.samplers.len();
-            tails += usize::from(!m.unreferenced_tail.is_empty());
-            tail_bytes += m.unreferenced_tail.len();
-            extended += m
-                .params
-                .iter()
-                .filter(|p| matches!(p.value, Value::Float3(_, Some(_))))
-                .count();
-            truncated += m
-                .params
-                .iter()
-                .filter(|p| matches!(p.value, Value::Truncated { .. }))
-                .count();
-        }
+    for totals in read {
+        let (materials_, params_, samplers_, tails_, tail_bytes_, extended_, truncated_) = totals?;
+        materials += materials_;
+        params += params_;
+        samplers += samplers_;
+        tails += tails_;
+        tail_bytes += tail_bytes_;
+        extended += extended_;
+        truncated += truncated_;
     }
+
     println!(
         "materials {materials}, parameters {params}, samplers {samplers}, tails {tails} ({tail_bytes} bytes), \
          float3 stored with five floats {extended}, stored shorter than their type {truncated}"

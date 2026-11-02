@@ -16,13 +16,13 @@ mod inputs;
 use fromsoft_formats::dcx::Decoder;
 use fromsoft_formats::fxr::actions::Typed;
 use fromsoft_formats::fxr::{self, Function, Fxr, Param, Property};
-use fromsoft_formats::{Archive, Binder, Game, Keys, NameDictionary};
+use fromsoft_formats::{Archive, Game, Keys, NameDictionary};
 use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 mod common;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 fn numbers(a: &Value) -> Option<Vec<f64>> {
     match a {
@@ -388,40 +388,50 @@ fn typed_parameters_agree_with_the_fxr_library() -> Result<()> {
                 v,
             );
         }
+        // each binder's typed actions beside the library's, read on the archive's threads
+        let read =
+            archive.read_each_binder(&paths, &decoder, inputs::threads(), |path, binder| -> Result<_> {
+                let binder = binder?;
+                let mut collected = Vec::new();
+                let mut refused = 0usize;
+                let stem = fromsoft_formats::names::stem(path);
+                for member in &binder.files {
+                    let name = member.name.clone().unwrap_or_default();
+                    if fxr::member_id(&name).is_none() {
+                        continue;
+                    }
+                    let file = name.rsplit(['\\', '/']).next().unwrap_or(&name).to_owned();
+                    let Some(line) = lines.get(&(stem.to_owned(), file.clone())) else {
+                        continue;
+                    };
+                    if line.get("error").is_some() {
+                        refused += 1;
+                        continue;
+                    }
+                    let read = Fxr::read(&member.bytes)?;
+                    let mut ours: Vec<Typed> = Vec::new();
+                    for a in read.actions() {
+                        if a.id != 0 {
+                            ours.push(Typed::read(a, game)?);
+                        }
+                    }
+                    let theirs: Vec<Value> = line["actions"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .filter(|a| !a.is_null() && a["type"] != 0)
+                        .cloned()
+                        .collect();
+                    collected.push((format!("{path} {file}"), ours, theirs));
+                }
+                Ok((collected, refused))
+            })?;
         let mut collected: Vec<(String, Vec<Typed>, Vec<Value>)> = Vec::new();
         let mut refused = 0usize;
-        for path in paths {
-            let binder = Binder::read(&archive.read(path, &decoder)?, &decoder)?;
-            let stem = fromsoft_formats::names::stem(path);
-            for member in &binder.files {
-                let name = member.name.clone().unwrap_or_default();
-                if fxr::member_id(&name).is_none() {
-                    continue;
-                }
-                let file = name.rsplit(['\\', '/']).next().unwrap_or(&name).to_owned();
-                let Some(line) = lines.get(&(stem.to_owned(), file.clone())) else {
-                    continue;
-                };
-                if line.get("error").is_some() {
-                    refused += 1;
-                    continue;
-                }
-                let read = Fxr::read(&member.bytes)?;
-                let mut ours: Vec<Typed> = Vec::new();
-                for a in read.actions() {
-                    if a.id != 0 {
-                        ours.push(Typed::read(a, game)?);
-                    }
-                }
-                let theirs: Vec<Value> = line["actions"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .filter(|a| !a.is_null() && a["type"] != 0)
-                    .cloned()
-                    .collect();
-                collected.push((format!("{path} {file}"), ours, theirs));
-            }
+        for binder in read {
+            let (binder_collected, binder_refused) = binder?;
+            collected.extend(binder_collected);
+            refused += binder_refused;
         }
         let files = collected.len();
         // the types the library models one for one: the same number of actions in all the files together
@@ -565,122 +575,143 @@ fn keyframed_properties_evaluate_as_the_fxr_library_does() -> Result<()> {
                 .push(v);
         }
         let total: usize = wanted.values().map(Vec::len).sum();
-        let (mut matched, mut points, mut worst) = (0usize, 0usize, 0.0f64);
-        let mut by_function: BTreeMap<String, usize> = BTreeMap::new();
-        let mut failures: Vec<String> = Vec::new();
-        for path in paths {
-            let binder = Binder::read(&archive.read(path, &decoder)?, &decoder)?;
-            let stem = fromsoft_formats::names::stem(path);
-            for member in &binder.files {
-                let name = member.name.clone().unwrap_or_default();
-                if fxr::member_id(&name).is_none() {
-                    continue;
-                }
-                let file = name.rsplit(['\\', '/']).next().unwrap_or(&name).to_owned();
-                let Some(records) = wanted.get(&(stem.to_owned(), file.clone())) else {
-                    continue;
-                };
-                let read = Fxr::read(&member.bytes)?;
-                let typed: Vec<Typed> = read
-                    .actions()
-                    .into_iter()
-                    .filter(|a| a.id != 0)
-                    .map(|a| Typed::read(a, game))
-                    .collect::<std::result::Result<_, _>>()?;
-                for rec in records {
-                    let ty = rec["type"].as_i64().unwrap();
-                    let pname = rec["name"].as_str().unwrap();
-                    let frames = rec["keyframes"].as_array().unwrap();
-                    let candidates = typed
-                        .iter()
-                        .filter(|t| i64::from(t.id()) == ty)
-                        .flat_map(|t| t.params())
-                        .filter_map(|(n, p)| match p {
-                            Param::Property(prop) if n == pname => Some(prop.clone()),
-                            _ => None,
-                        });
-                    let found = candidates.into_iter().find(|p| {
-                        p.keyframes().is_some_and(|k| {
-                            k.positions.len() == frames.len()
-                                && frames.iter().enumerate().all(|(i, f)| {
-                                    let (a, b) = if p.function == Function::Bezier {
-                                        ("p1", "p2")
-                                    } else {
-                                        ("t1", "t2")
-                                    };
-                                    let tangents = k.tangents.as_ref().is_none_or(|t| {
-                                        numbers(&f[a]) == Some(floats(&t.first[i]))
-                                            && numbers(&f[b]) == Some(floats(&t.second[i]))
-                                    });
-                                    f["position"].as_f64() == Some(f64::from(k.positions[i]))
-                                        && f["value"]
-                                            .as_f64()
-                                            .map(|v| vec![v])
-                                            .or_else(|| numbers(&f["value"]))
-                                            == Some(floats(&k.values[i]))
-                                        && tangents
-                                })
-                        }) && p.looped == rec["loop"].as_bool().unwrap_or(false)
-                            && format!("{:?}", p.function)
-                                == rec["function"]
-                                    .as_i64()
-                                    .map(|f| {
-                                        [
-                                            "Zero", "One", "Constant", "Stepped", "Linear", "Bezier",
-                                            "Hermite",
-                                        ][usize::try_from(f).unwrap()]
-                                    })
-                                    .unwrap_or("")
-                    });
-                    let Some(p) = found else {
-                        if failures.len() < 20 {
-                            failures.push(format!(
-                                "{path} {file}: no property {ty}/{pname} with the library's keyframes"
-                            ));
-                        }
+        // each binder's properties against the library's keyframes, on the archive's threads; the first 20 failures
+        // over all binders are kept, in path order
+        let read =
+            archive.read_each_binder(&paths, &decoder, inputs::threads(), |path, binder| -> Result<_> {
+                let binder = binder?;
+                let (mut matched, mut points, mut worst) = (0usize, 0usize, 0.0f64);
+                let mut by_function: BTreeMap<String, usize> = BTreeMap::new();
+                let mut failures: Vec<String> = Vec::new();
+                let stem = fromsoft_formats::names::stem(path);
+                for member in &binder.files {
+                    let name = member.name.clone().unwrap_or_default();
+                    if fxr::member_id(&name).is_none() {
+                        continue;
+                    }
+                    let file = name.rsplit(['\\', '/']).next().unwrap_or(&name).to_owned();
+                    let Some(records) = wanted.get(&(stem.to_owned(), file.clone())) else {
                         continue;
                     };
-                    matched += 1;
-                    *by_function.entry(format!("{:?}", p.function)).or_default() += 1;
-                    for pt in rec["points"].as_array().unwrap() {
-                        let x = pt[0].as_f64().unwrap();
-                        let want = numbers(&pt[1]).unwrap();
-                        // a probe at a whole number of loop durations, rounded to the nearest f32, may wrap where the
-                        // library's double does not (a key at the duration is one such place)
-                        if p.looped {
-                            let duration = frames
-                                .iter()
-                                .filter_map(|f| f["position"].as_f64())
-                                .fold(0.0f64, f64::max);
-                            let turns = x / duration;
-                            if duration > 0.0 && (turns - turns.round()).abs() * duration < 1e-6 {
-                                continue;
-                            }
-                        }
-                        let got = p.value_at(x as f32);
-                        points += 1;
-                        for (g, w) in got.iter().zip(&want) {
-                            let scale = frames
-                                .iter()
-                                .filter_map(|f| numbers(&f["value"]))
-                                .flatten()
-                                .fold(1.0f64, |m, v| m.max(v.abs()));
-                            let err = (f64::from(*g) - w).abs() / w.abs().max(scale);
-                            worst = worst.max(err);
-                            // Hermite is the game's own function; the library's is an approximation of it (0.5% at the worst)
-                            let allowed = if p.function == Function::Hermite {
-                                6e-3
-                            } else {
-                                2e-4
-                            };
-                            if err > allowed && failures.len() < 20 {
+                    let read = Fxr::read(&member.bytes)?;
+                    let typed: Vec<Typed> = read
+                        .actions()
+                        .into_iter()
+                        .filter(|a| a.id != 0)
+                        .map(|a| Typed::read(a, game))
+                        .collect::<std::result::Result<_, _>>()?;
+                    for rec in records {
+                        let ty = rec["type"].as_i64().unwrap();
+                        let pname = rec["name"].as_str().unwrap();
+                        let frames = rec["keyframes"].as_array().unwrap();
+                        let candidates = typed
+                            .iter()
+                            .filter(|t| i64::from(t.id()) == ty)
+                            .flat_map(|t| t.params())
+                            .filter_map(|(n, p)| match p {
+                                Param::Property(prop) if n == pname => Some(prop.clone()),
+                                _ => None,
+                            });
+                        let found = candidates.into_iter().find(|p| {
+                            p.keyframes().is_some_and(|k| {
+                                k.positions.len() == frames.len()
+                                    && frames.iter().enumerate().all(|(i, f)| {
+                                        let (a, b) = if p.function == Function::Bezier {
+                                            ("p1", "p2")
+                                        } else {
+                                            ("t1", "t2")
+                                        };
+                                        let tangents = k.tangents.as_ref().is_none_or(|t| {
+                                            numbers(&f[a]) == Some(floats(&t.first[i]))
+                                                && numbers(&f[b]) == Some(floats(&t.second[i]))
+                                        });
+                                        f["position"].as_f64() == Some(f64::from(k.positions[i]))
+                                            && f["value"]
+                                                .as_f64()
+                                                .map(|v| vec![v])
+                                                .or_else(|| numbers(&f["value"]))
+                                                == Some(floats(&k.values[i]))
+                                            && tangents
+                                    })
+                            }) && p.looped == rec["loop"].as_bool().unwrap_or(false)
+                                && format!("{:?}", p.function)
+                                    == rec["function"]
+                                        .as_i64()
+                                        .map(|f| {
+                                            [
+                                                "Zero", "One", "Constant", "Stepped", "Linear", "Bezier",
+                                                "Hermite",
+                                            ][usize::try_from(f).unwrap()]
+                                        })
+                                        .unwrap_or("")
+                        });
+                        let Some(p) = found else {
+                            if failures.len() < 20 {
                                 failures.push(format!(
-                                    "{path} {file}: {ty}/{pname} ({:?}) at {x}: {g} against {w}",
-                                    p.function
+                                    "{path} {file}: no property {ty}/{pname} with the library's keyframes"
                                 ));
+                            }
+                            continue;
+                        };
+                        matched += 1;
+                        *by_function.entry(format!("{:?}", p.function)).or_default() += 1;
+                        for pt in rec["points"].as_array().unwrap() {
+                            let x = pt[0].as_f64().unwrap();
+                            let want = numbers(&pt[1]).unwrap();
+                            // a probe at a whole number of loop durations, rounded to the nearest f32, may wrap where the
+                            // library's double does not (a key at the duration is one such place)
+                            if p.looped {
+                                let duration = frames
+                                    .iter()
+                                    .filter_map(|f| f["position"].as_f64())
+                                    .fold(0.0f64, f64::max);
+                                let turns = x / duration;
+                                if duration > 0.0 && (turns - turns.round()).abs() * duration < 1e-6 {
+                                    continue;
+                                }
+                            }
+                            let got = p.value_at(x as f32);
+                            points += 1;
+                            for (g, w) in got.iter().zip(&want) {
+                                let scale = frames
+                                    .iter()
+                                    .filter_map(|f| numbers(&f["value"]))
+                                    .flatten()
+                                    .fold(1.0f64, |m, v| m.max(v.abs()));
+                                let err = (f64::from(*g) - w).abs() / w.abs().max(scale);
+                                worst = worst.max(err);
+                                // Hermite is the game's own function; the library's is an approximation of it (0.5% at the worst)
+                                let allowed = if p.function == Function::Hermite {
+                                    6e-3
+                                } else {
+                                    2e-4
+                                };
+                                if err > allowed && failures.len() < 20 {
+                                    failures.push(format!(
+                                        "{path} {file}: {ty}/{pname} ({:?}) at {x}: {g} against {w}",
+                                        p.function
+                                    ));
+                                }
                             }
                         }
                     }
+                }
+                Ok((matched, points, worst, by_function, failures))
+            })?;
+        let (mut matched, mut points, mut worst) = (0usize, 0usize, 0.0f64);
+        let mut by_function: BTreeMap<String, usize> = BTreeMap::new();
+        let mut failures: Vec<String> = Vec::new();
+        for binder in read {
+            let (binder_matched, binder_points, binder_worst, binder_functions, binder_failures) = binder?;
+            matched += binder_matched;
+            points += binder_points;
+            worst = worst.max(binder_worst);
+            for (function, n) in binder_functions {
+                *by_function.entry(function).or_default() += n;
+            }
+            for failure in binder_failures {
+                if failures.len() < 20 {
+                    failures.push(failure);
                 }
             }
         }

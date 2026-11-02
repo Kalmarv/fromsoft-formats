@@ -30,7 +30,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 mod common;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 /// What a game's events hold, read through its templates.
 #[derive(Default)]
@@ -211,6 +211,33 @@ impl Second {
     }
 }
 
+impl Totals {
+    /// Adds the totals of other files to these.
+    fn add(&mut self, other: Totals) {
+        self.files += other.files;
+        self.events += other.events;
+        self.with_template += other.with_template;
+        for (kind, n) in other.without_template {
+            *self.without_template.entry(kind).or_default() += n;
+        }
+        self.kinds_in_data.extend(other.kinds_in_data);
+        self.asserted += other.asserted;
+        self.short += other.short;
+        self.short_with_a_named_field_missing += other.short_with_a_named_field_missing;
+        self.trailing_nonzero += other.trailing_nonzero;
+        for (key, n) in other.words {
+            *self.words.entry(key).or_default() += n;
+        }
+        self.listed += other.listed;
+        for (key, n) in other.unlisted {
+            *self.unlisted.entry(key).or_default() += n;
+        }
+        if let (Some(into), Some(from)) = (&mut self.second, other.second) {
+            into.add(from);
+        }
+    }
+}
+
 /// What the stored events say about soulstruct's table.
 #[derive(Default)]
 struct SecondTotals {
@@ -227,6 +254,23 @@ struct SecondTotals {
 }
 
 impl SecondTotals {
+    /// Adds what other files' events say to these.
+    fn add(&mut self, other: SecondTotals) {
+        self.listed += other.listed;
+        self.with_class += other.with_class;
+        self.only_soulstruct_seen.extend(other.only_soulstruct_seen);
+        for (kind, (events, outside)) in other.outside {
+            let slot = self.outside.entry(kind).or_default();
+            slot.0 += events;
+            slot.1 += outside;
+        }
+        for (key, words) in other.words {
+            for (a, b) in self.words.entry(key).or_default().iter_mut().zip(words) {
+                *a += b;
+            }
+        }
+    }
+
     fn observe(&mut self, second: &Second, kind: i32, parameters: &[u8]) {
         let Some(listed) = second.events.get(&kind) else {
             return;
@@ -316,66 +360,86 @@ fn census(game: Game, data: Data) -> Result<Option<(Totals, Templates)>> {
         second: second.as_ref().map(|_| SecondTotals::default()),
         ..Totals::default()
     };
-    let mut distinct = BTreeSet::new();
-    for path in &paths {
-        let mut todo = vec![Binder::read(&archive.read(path, &decoder)?, &decoder)?];
-        while let Some(binder) = todo.pop() {
-            for member in &binder.files {
-                if member.bytes.starts_with(b"BND4") {
-                    todo.push(Binder::read(&member.bytes, &decoder)?);
-                }
-                let named_tae = member
-                    .name
-                    .as_deref()
-                    .is_some_and(|n| n.to_ascii_lowercase().ends_with(".tae"));
-                if !named_tae {
-                    continue;
-                }
-                let tae = Tae::read_member(&binder, member)?;
-                if !distinct.insert(Sha256::digest(&member.bytes).to_vec()) {
-                    continue;
-                }
-                t.files += 1;
-                for animation in &tae.animations {
-                    for event in &animation.events {
-                        t.events += 1;
-                        t.kinds_in_data.insert(event.kind);
-                        if let (Some(second), Some(totals)) = (&second, &mut t.second) {
-                            totals.observe(second, event.kind, &event.parameters);
-                        }
-                        let Some(template) = templates.get(event.kind) else {
-                            *t.without_template.entry(event.kind).or_default() += 1;
-                            continue;
+    // each binder's event files at any depth, counted on the archive's threads: the content's digest and its totals (a
+    // content counted once, and only its template's refusal stops the census)
+    let binders =
+        archive.read_each_binder(&paths, &decoder, inputs::threads(), |_, binder| -> Result<_> {
+            let mut files = Vec::new();
+            let mut todo = vec![binder?];
+            while let Some(binder) = todo.pop() {
+                for member in &binder.files {
+                    if member.bytes.starts_with(b"BND4") {
+                        todo.push(Binder::read(&member.bytes, &decoder)?);
+                    }
+                    let named_tae = member
+                        .name
+                        .as_deref()
+                        .is_some_and(|n| n.to_ascii_lowercase().ends_with(".tae"));
+                    if !named_tae {
+                        continue;
+                    }
+                    let tae = Tae::read_member(&binder, member)?;
+                    let counted = (|| -> Result<Totals> {
+                        let mut t = Totals {
+                            files: 1,
+                            second: second.as_ref().map(|_| SecondTotals::default()),
+                            ..Totals::default()
                         };
-                        t.with_template += 1;
-                        let decoded = template.decode(&event.parameters)?;
-                        t.trailing_nonzero += usize::from(decoded.trailing_nonzero);
-                        if !decoded.missing.is_empty() {
-                            t.short += 1;
-                            t.short_with_a_named_field_missing +=
-                                usize::from(decoded.missing.iter().any(|f| !f.is_padding()));
-                        }
-                        for a in &decoded.arguments {
-                            t.asserted += usize::from(a.field.assert.is_some());
-                            match &a.value {
-                                Value::Word(_) => {
-                                    *t.words.entry((event.kind, a.index)).or_default() += 1;
+                        for animation in &tae.animations {
+                            for event in &animation.events {
+                                t.events += 1;
+                                t.kinds_in_data.insert(event.kind);
+                                if let (Some(second), Some(totals)) = (&second, &mut t.second) {
+                                    totals.observe(second, event.kind, &event.parameters);
                                 }
-                                Value::Int(v) if !a.field.entries.is_empty() => {
-                                    t.listed += 1;
-                                    if a.field.entry(*v).is_none() {
-                                        *t.unlisted.entry((event.kind, a.index)).or_default() += 1;
+                                let Some(template) = templates.get(event.kind) else {
+                                    *t.without_template.entry(event.kind).or_default() += 1;
+                                    continue;
+                                };
+                                t.with_template += 1;
+                                let decoded = template.decode(&event.parameters)?;
+                                t.trailing_nonzero += usize::from(decoded.trailing_nonzero);
+                                if !decoded.missing.is_empty() {
+                                    t.short += 1;
+                                    t.short_with_a_named_field_missing +=
+                                        usize::from(decoded.missing.iter().any(|f| !f.is_padding()));
+                                }
+                                for a in &decoded.arguments {
+                                    t.asserted += usize::from(a.field.assert.is_some());
+                                    match &a.value {
+                                        Value::Word(_) => {
+                                            *t.words.entry((event.kind, a.index)).or_default() += 1;
+                                        }
+                                        Value::Int(v) if !a.field.entries.is_empty() => {
+                                            t.listed += 1;
+                                            if a.field.entry(*v).is_none() {
+                                                *t.unlisted.entry((event.kind, a.index)).or_default() += 1;
+                                            }
+                                        }
+                                        Value::Bool(_)
+                                        | Value::Int(_)
+                                        | Value::Unsigned(_)
+                                        | Value::Float(_)
+                                        | Value::Bytes(_) => {}
                                     }
                                 }
-                                Value::Bool(_)
-                                | Value::Int(_)
-                                | Value::Unsigned(_)
-                                | Value::Float(_)
-                                | Value::Bytes(_) => {}
                             }
                         }
-                    }
+                        Ok(t)
+                    })();
+                    files.push((
+                        Sha256::digest(&member.bytes).to_vec(),
+                        counted.map_err(|e| e.to_string()),
+                    ));
                 }
+            }
+            Ok(files)
+        })?;
+    let mut distinct = BTreeSet::new();
+    for binder in binders {
+        for (digest, counted) in binder? {
+            if distinct.insert(digest) {
+                t.add(counted?);
             }
         }
     }

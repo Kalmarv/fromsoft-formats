@@ -28,7 +28,7 @@ use primase_foundations::compress::oodle::Oodle;
 use std::collections::{BTreeMap, BTreeSet};
 mod common;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 /// The archive of `game`, the Oodle library its files need and its path dictionary, when all are configured.
 fn open(game: Game, data: Data) -> Result<Option<(Archive, Oodle, NameDictionary)>> {
@@ -89,20 +89,33 @@ fn a_collisions_scene_config_names_a_draw_param_file_that_exists() -> Result<()>
             .collect();
         let mut cache = BTreeMap::new();
         let (mut exists, mut absent, mut no_files) = (0, 0, 0);
-        for map in maps {
-            let path = format!("/map/mapstudio/{map}.msb.dcx");
-            if !archive.contains(&path) {
-                continue;
-            }
-            let layout = MapLayout::read(&archive.read(&path, &decoder)?)?;
-            let ids = files(&mut cache, &archive, game, map);
-            for config in layout.gparam_configs()? {
-                if layout.parts[config.part].kind != PartKind::Collision {
-                    continue;
+        // each layout's collision parts' scene configs, read on the archive's threads
+        let maps: Vec<&str> = maps
+            .into_iter()
+            .filter(|map| archive.contains(&format!("/map/mapstudio/{map}.msb.dcx")))
+            .collect();
+        let read = archive.read_each(
+            maps.iter().map(|map| format!("/map/mapstudio/{map}.msb.dcx")),
+            &decoder,
+            inputs::threads(),
+            |_, bytes| -> Result<Vec<_>> {
+                let layout = MapLayout::read(bytes?)?;
+                let mut ids = Vec::new();
+                for config in layout.gparam_configs()? {
+                    if layout.parts[config.part].kind == PartKind::Collision {
+                        ids.push(
+                            config
+                                .draw_param_id()
+                                .expect("every collision stores a scene config"),
+                        );
+                    }
                 }
-                let id = config
-                    .draw_param_id()
-                    .expect("every collision stores a scene config");
+                Ok(ids)
+            },
+        )?;
+        for (map, configs) in maps.into_iter().zip(read) {
+            let ids = files(&mut cache, &archive, game, map);
+            for id in configs? {
                 if ids.is_empty() {
                     no_files += 1;
                 } else if ids.contains(&id) {
@@ -144,14 +157,17 @@ fn the_events_that_switch_a_draw_param_file_name_the_numbers_the_files_have() ->
         // calls, calls that name a file that exists, calls that name none, calls of a script that belongs to no map
         let (mut calls, mut named, mut unnamed, mut common) = (0, 0, 0, 0);
         let mut clears = 0;
-        for path in paths {
-            let script = Script::read(&archive.read(path, &decoder)?)?;
+        // each script's calls, read on the archive's threads
+        let read = archive.read_each(&paths, &decoder, inputs::threads(), |_, bytes| -> Result<_> {
+            Ok(gparam_events::calls(game, &Script::read(bytes?)?))
+        })?;
+        for (path, calls_of_script) in paths.iter().zip(read) {
             let own = path
                 .strip_prefix("/event/")
                 .and_then(|p| p.strip_suffix(".emevd.dcx"))
                 .and_then(MapId::from_name)
                 .and_then(MapId::name);
-            for call in gparam_events::calls(game, &script) {
+            for call in calls_of_script? {
                 match call.switch {
                     Switch::AreaSubId {
                         area: Some(area),
@@ -228,12 +244,16 @@ fn every_draw_param_file_states_its_time_axis() -> Result<()> {
             .collect();
         type Axis = (u32, Option<(u8, String, String)>);
         let mut axes: BTreeMap<Axis, usize> = BTreeMap::new();
-        for path in &paths {
-            let file = Gparam::read(&archive.read(path, &decoder)?)?;
+        // each file's version and time axis, read on the archive's threads
+        let read = archive.read_each(&paths, &decoder, inputs::threads(), |_, bytes| -> Result<Axis> {
+            let file = Gparam::read(bytes?)?;
             let time = file
                 .time
                 .map(|t| (t.offset_flag, t.offset.to_string(), t.period.to_string()));
-            *axes.entry((file.version, time)).or_default() += 1;
+            Ok((file.version, time))
+        })?;
+        for axis in read {
+            *axes.entry(axis?).or_default() += 1;
         }
         let axis = |flag: u8, offset: &str, period: &str, n: usize| -> (Axis, usize) {
             ((5, Some((flag, offset.into(), period.into()))), n)
@@ -317,31 +337,44 @@ fn elden_ring_group_load_flags_agree_with_every_installed_extra_table() -> Resul
         .collect();
     assert_eq!(paths.len(), 448);
     let mut counts = BTreeMap::<(u8, u8), usize>::new();
-    for path in &paths {
-        let bytes = archive.read(path, &decoder)?;
-        let file = Gparam::read(&bytes)?;
-        let u32_at = |at| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
-        assert_eq!(u32_at(8), 5, "{path}");
-        let count = u32_at(52) as usize;
-        let table = u32_at(56) as usize;
-        for index in 0..file.groups.len() {
-            let raw = (0..count)
-                .map(|i| table + 16 * i)
-                .find(|at| u32_at(*at) as usize == index)
-                .map(|at| (bytes[at + 12], bytes[at + 13]))
-                .unwrap_or((0, 0));
-            let flags = file.group_load_flags(index as u32);
-            assert_eq!(
-                flags.fallback_rows_start_active,
-                raw.0 == 0,
-                "{path} group {index}"
-            );
-            assert_eq!(flags.force_zero_id, raw.1 != 0, "{path} group {index}");
-            assert_eq!(
-                flags.value_id(100),
-                if raw.1 == 0 { 100 } else { 0 },
-                "{path} group {index}"
-            );
+    // each file's groups checked on the archive's threads, with each group's raw words
+    let read = archive.read_each(
+        &paths,
+        &decoder,
+        inputs::threads(),
+        |path, bytes| -> Result<Vec<(u8, u8)>> {
+            let bytes = bytes?;
+            let mut raws = Vec::new();
+            let file = Gparam::read(bytes)?;
+            let u32_at = |at| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+            assert_eq!(u32_at(8), 5, "{path}");
+            let count = u32_at(52) as usize;
+            let table = u32_at(56) as usize;
+            for index in 0..file.groups.len() {
+                let raw = (0..count)
+                    .map(|i| table + 16 * i)
+                    .find(|at| u32_at(*at) as usize == index)
+                    .map(|at| (bytes[at + 12], bytes[at + 13]))
+                    .unwrap_or((0, 0));
+                let flags = file.group_load_flags(index as u32);
+                assert_eq!(
+                    flags.fallback_rows_start_active,
+                    raw.0 == 0,
+                    "{path} group {index}"
+                );
+                assert_eq!(flags.force_zero_id, raw.1 != 0, "{path} group {index}");
+                assert_eq!(
+                    flags.value_id(100),
+                    if raw.1 == 0 { 100 } else { 0 },
+                    "{path} group {index}"
+                );
+                raws.push(raw);
+            }
+            Ok(raws)
+        },
+    )?;
+    for raws in read {
+        for raw in raws? {
             *counts.entry(raw).or_default() += 1;
         }
     }

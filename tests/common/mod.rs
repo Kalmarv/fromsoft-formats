@@ -19,7 +19,7 @@ pub fn oodle(
 /// `None` when the configuration lacks them.
 pub fn archive(
     game: fromsoft_formats::Game,
-) -> Result<Option<fromsoft_formats::Archive>, Box<dyn std::error::Error>> {
+) -> Result<Option<fromsoft_formats::Archive>, fromsoft_formats::Error> {
     use crate::inputs::{Game as Data, install, keys, threads};
     use fromsoft_formats::{Archive, Game, Keys};
     let data = match game {
@@ -38,12 +38,12 @@ pub fn archive(
 }
 
 /// A float a reference dump writes as its u32 bit pattern in hex.
-pub fn bits(v: &serde_json::Value) -> Result<u32, Box<dyn std::error::Error>> {
-    Ok(u32::from_str_radix(v.as_str().ok_or("float bits")?, 16)?)
+pub fn bits(v: &serde_json::Value) -> Result<u32, String> {
+    u32::from_str_radix(v.as_str().ok_or("float bits")?, 16).map_err(|e| format!("float bits {v}: {e}"))
 }
 
 /// Three floats a reference dump writes as bit patterns.
-pub fn bits3(v: &serde_json::Value) -> Result<[u32; 3], Box<dyn std::error::Error>> {
+pub fn bits3(v: &serde_json::Value) -> Result<[u32; 3], String> {
     let a = v.as_array().ok_or("vector")?;
     Ok([bits(&a[0])?, bits(&a[1])?, bits(&a[2])?])
 }
@@ -69,17 +69,19 @@ pub fn add_counts<K: Ord>(
 /// `suffixes`: a BND4 is entered (its members decoded, at any depth up to eight), a split binder (a BHF4 index named
 /// `...bhd`, its payload the entry named `...bdt`) is opened and entered, and anything else is a leaf. `label` is the
 /// entry's name, then `|` and the member names down to the leaf. The entries are read in one pass over the BDTs
-/// ([`scan_map`]) and visited on [`crate::inputs::threads`] threads, each into totals of its own, which are added up in
-/// path-hash order. Returns how many entries were visited and the totals; the first error in hash order (or a panic in
-/// `visit`) is the error.
+/// ([`fromsoft_formats::Archive::read_each`], the split binders with [`fromsoft_formats::Archive::read_each_binder`])
+/// and visited on [`crate::inputs::threads`] threads, each into totals of its own, which are added up in path-hash
+/// order. Returns how many entries were visited and the totals; the first error in hash order (or a panic in `visit`)
+/// is the error.
 pub fn each_leaf<A: Tally>(
     archive: &fromsoft_formats::Archive,
     names: &fromsoft_formats::NameDictionary,
     suffixes: &[&str],
     decoder: &fromsoft_formats::dcx::Decoder<'_>,
-    visit: impl Fn(&mut A, &str, &[u8]) -> Result<(), Box<dyn std::error::Error>> + Sync,
-) -> Result<(usize, A), Box<dyn std::error::Error>> {
-    type Visit<'a, A> = &'a dyn Fn(&mut A, &str, &[u8]) -> Result<(), Box<dyn std::error::Error>>;
+    visit: impl Fn(&mut A, &str, &[u8]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> + Sync,
+) -> Result<(usize, A), String> {
+    type Visit<'a, A> =
+        &'a dyn Fn(&mut A, &str, &[u8]) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
     fn members<A>(
         binder: &fromsoft_formats::Binder,
         label: &str,
@@ -87,7 +89,7 @@ pub fn each_leaf<A: Tally>(
         totals: &mut A,
         visit: Visit<'_, A>,
         depth: usize,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), String> {
         for (i, file) in binder.files.iter().enumerate() {
             let name = file.name.clone().unwrap_or_else(|| format!("#{i}"));
             leaves(
@@ -108,12 +110,14 @@ pub fn each_leaf<A: Tally>(
         totals: &mut A,
         visit: Visit<'_, A>,
         depth: usize,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        if bytes.starts_with(b"BND4") && depth < 8 {
-            let binder = fromsoft_formats::Binder::read(bytes, decoder)?;
+    ) -> Result<(), String> {
+        if bytes.starts_with(b"BHF4") {
+            Err("a split binder not named ...bhd".to_owned())
+        } else if bytes.starts_with(b"BND4") && depth < 8 {
+            let binder = fromsoft_formats::Binder::read(bytes, decoder).map_err(|e| e.to_string())?;
             members(&binder, label, decoder, totals, visit, depth)
         } else {
-            visit(totals, label, bytes)
+            visit(totals, label, bytes).map_err(|e| e.to_string())
         }
     }
     // the entries the walk enters, each by the first of its names with one of the suffixes
@@ -126,29 +130,35 @@ pub fn each_leaf<A: Tally>(
             Some((hash, path.as_str()))
         })
         .collect();
-    let walked = scan_map(
-        archive,
-        decoder,
-        |hash| wanted.contains_key(&hash),
-        |hash, bytes| {
-            let path = wanted[&hash];
+    let (split, whole): (Vec<_>, Vec<_>) = wanted
+        .iter()
+        .map(|(&hash, &path)| (hash, path))
+        .partition(|(_, path)| path.ends_with("bhd"));
+    let threads = crate::inputs::threads();
+    let read_whole = archive
+        .read_each(whole.iter().map(|w| w.1), decoder, threads, |path, bytes| {
             let mut totals = A::default();
-            let result = (|| -> Result<(), Box<dyn std::error::Error>> {
-                let bytes = bytes?;
-                if bytes.starts_with(b"BHF4") {
-                    let stem = path
-                        .strip_suffix("bhd")
-                        .ok_or("a split binder not named ...bhd")?;
-                    let payload = archive.read(&format!("{stem}bdt"), decoder)?;
-                    let binder = fromsoft_formats::Binder::read_split(bytes, &payload, decoder)?;
-                    members(&binder, path, decoder, &mut totals, &visit, 0)
-                } else {
-                    leaves(bytes, path, decoder, &mut totals, &visit, 0)
-                }
-            })();
-            (totals, result.map_err(|e| e.to_string()))
-        },
-    )?;
+            let result = bytes
+                .map_err(|e| e.to_string())
+                .and_then(|bytes| leaves(bytes, path, decoder, &mut totals, &visit, 0));
+            (totals, result)
+        })
+        .map_err(|p| p.to_string())?;
+    let read_split = archive
+        .read_each_binder(split.iter().map(|w| w.1), decoder, threads, |path, binder| {
+            let mut totals = A::default();
+            let result = binder
+                .map_err(|e| e.to_string())
+                .and_then(|binder| members(&binder, path, decoder, &mut totals, &visit, 0));
+            (totals, result)
+        })
+        .map_err(|p| p.to_string())?;
+    let walked: std::collections::BTreeMap<u64, (A, Result<(), String>)> = whole
+        .iter()
+        .map(|w| w.0)
+        .zip(read_whole)
+        .chain(split.iter().map(|w| w.0).zip(read_split))
+        .collect();
     let mut totals = A::default();
     for (entry, result) in walked.into_values() {
         result?;

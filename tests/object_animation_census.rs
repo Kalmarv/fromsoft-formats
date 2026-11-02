@@ -17,7 +17,7 @@ use fromsoft_formats::{Archive, Binder, NameDictionary, dcx::Decoder};
 use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
 use std::collections::BTreeMap;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 #[allow(unsafe_code)]
 fn native(
@@ -66,56 +66,106 @@ fn census(
     };
     let archive = Archive::open_game(dir, kind, &keys)?;
     let names = NameDictionary::read_for(names, kind)?;
-    let mut members: BTreeMap<String, usize> = BTreeMap::new();
-    let (mut binders, mut nested, mut beside, mut samples) = (0, 0, 0, 0);
-    let mut failures = Vec::new();
+    // the object binders, in the dictionary's order
+    let mut wanted = Vec::new();
     for (&hash, paths) in &names.names {
         if !archive.entries.contains_key(&hash) {
             continue;
         }
         for path in paths {
-            let Some(suffix) = is_object_binder(path) else {
-                continue;
-            };
+            if let Some(suffix) = is_object_binder(path) {
+                wanted.push((path.as_str(), suffix));
+            }
+        }
+    }
+    // an animation binder as its member count and its first eight members' names
+    let summary = |animation: &Binder| -> (usize, Vec<String>) {
+        let list = animation
+            .files
+            .iter()
+            .take(8)
+            .map(|f| leaf(f.name.as_deref().unwrap_or("")))
+            .collect();
+        (animation.files.len(), list)
+    };
+    /// One object binder: whether it read, its members by extension, the animation binder nested in it, and the error
+    /// that stopped it.
+    #[derive(Default)]
+    struct Object {
+        read: bool,
+        members: BTreeMap<String, usize>,
+        nested: Option<(usize, Vec<String>)>,
+        error: Option<String>,
+    }
+    let read = archive.read_each_binder(
+        wanted.iter().map(|w| w.0),
+        &decoder,
+        inputs::threads(),
+        |_, binder| {
+            let mut o = Object::default();
             let result = (|| -> Result<()> {
-                let binder = Binder::read(&archive.read(path, &decoder)?, &decoder)?;
-                binders += 1;
-                let mut animation = None;
+                let binder = binder?;
+                o.read = true;
                 for f in &binder.files {
                     let name = leaf(f.name.as_deref().unwrap_or(""));
                     let extension = name.split_once('.').map_or("(none)", |(_, e)| e).to_owned();
-                    *members.entry(extension).or_default() += 1;
+                    *o.members.entry(extension).or_default() += 1;
                     if name.ends_with(".anibnd") || name.ends_with(".anibnd.dcx") {
-                        animation = Some(Binder::read(&decoder.decode_if_dcx(&f.bytes)?, &decoder)?);
-                    }
-                }
-                let sibling = path.strip_suffix(suffix).map(|stem| format!("{stem}.anibnd.dcx"));
-                if let Some(sibling) = sibling.filter(|p| archive.contains(p)) {
-                    beside += 1;
-                    if animation.is_none() {
-                        animation = Some(Binder::read(&archive.read(&sibling, &decoder)?, &decoder)?);
-                    }
-                }
-                if let Some(animation) = animation {
-                    nested += 1;
-                    if samples < 6 {
-                        samples += 1;
-                        let list: Vec<String> = animation
-                            .files
-                            .iter()
-                            .take(8)
-                            .map(|f| leaf(f.name.as_deref().unwrap_or("")))
-                            .collect();
-                        println!(
-                            "sample {label} {path} {} members: {list:?}",
-                            animation.files.len()
-                        );
+                        o.nested = Some(summary(&Binder::read(
+                            &decoder.decode_if_dcx(&f.bytes)?,
+                            &decoder,
+                        )?));
                     }
                 }
                 Ok(())
             })();
-            if let Err(e) = result {
-                failures.push(format!("{path}: {e}"));
+            o.error = result.err().map(|e| e.to_string());
+            o
+        },
+    )?;
+    // the animation binder beside each object binder that read and holds none, in a second pass
+    let sibling =
+        |(path, suffix): (&str, &str)| path.strip_suffix(suffix).map(|stem| format!("{stem}.anibnd.dcx"));
+    let siblings: Vec<String> = wanted
+        .iter()
+        .zip(&read)
+        .filter(|(_, o)| o.error.is_none() && o.nested.is_none())
+        .filter_map(|(&w, _)| sibling(w).filter(|p| archive.contains(p)))
+        .collect();
+    let beside_read = archive.read_each_binder(&siblings, &decoder, inputs::threads(), |_, binder| {
+        binder.map(|b| summary(&b)).map_err(|e| e.to_string())
+    })?;
+    let mut beside_read: BTreeMap<&String, _> = siblings.iter().zip(beside_read).collect();
+    let mut members: BTreeMap<String, usize> = BTreeMap::new();
+    let (mut binders, mut nested, mut beside, mut samples) = (0, 0, 0, 0);
+    let mut failures = Vec::new();
+    for (&(path, suffix), o) in wanted.iter().zip(read) {
+        binders += usize::from(o.read);
+        for (extension, n) in o.members {
+            *members.entry(extension).or_default() += n;
+        }
+        if let Some(e) = o.error {
+            failures.push(format!("{path}: {e}"));
+            continue;
+        }
+        let mut animation = o.nested;
+        if let Some(sibling) = sibling((path, suffix)).filter(|p| archive.contains(p)) {
+            beside += 1;
+            if animation.is_none() {
+                match beside_read.remove(&sibling).ok_or("a sibling not read")? {
+                    Ok(summary) => animation = Some(summary),
+                    Err(e) => {
+                        failures.push(format!("{path}: {e}"));
+                        continue;
+                    }
+                }
+            }
+        }
+        if let Some((count, list)) = animation {
+            nested += 1;
+            if samples < 6 {
+                samples += 1;
+                println!("sample {label} {path} {count} members: {list:?}");
             }
         }
     }

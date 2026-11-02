@@ -7,12 +7,12 @@
 //! animation binder at the top level of the archive).
 mod inputs;
 
-use fromsoft_formats::{Binder, Game, NameDictionary, blf::LoadList, dcx::Decoder};
+use fromsoft_formats::{Game, NameDictionary, blf::LoadList, dcx::Decoder};
 use inputs::{OracleSet, Query, Tool, expect_found, oodle, oracle};
 use std::collections::BTreeMap;
 mod common;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 #[derive(Default)]
 struct Totals {
@@ -30,6 +30,27 @@ struct Totals {
     versions: BTreeMap<u32, usize>,
 }
 
+impl Totals {
+    /// Adds the totals of other binders to these.
+    fn add(&mut self, other: Totals) {
+        self.binders += other.binders;
+        self.with_companions += other.with_companions;
+        self.companions += other.companions;
+        for (key, n) in other.by_count {
+            *self.by_count.entry(key).or_default() += n;
+        }
+        self.markers_without_binder += other.markers_without_binder;
+        self.lists += other.lists;
+        self.binders_with_lists += other.binders_with_lists;
+        for (key, n) in other.shapes {
+            *self.shapes.entry(key).or_default() += n;
+        }
+        for (key, n) in other.versions {
+            *self.versions.entry(key).or_default() += n;
+        }
+    }
+}
+
 fn census(game: Game, data: inputs::Game) -> Result<Option<Totals>> {
     let (Some(archive), Some(dll), Some(names)) = (
         common::archive(game)?,
@@ -45,6 +66,8 @@ fn census(game: Game, data: inputs::Game) -> Result<Option<Totals>> {
     };
     let names = NameDictionary::read_for(names, game)?;
     let mut t = Totals::default();
+    // the animation binders, by path hash
+    let mut wanted = Vec::new();
     for (hash, paths) in &names.names {
         let Some(path) = paths
             .iter()
@@ -52,49 +75,64 @@ fn census(game: Game, data: inputs::Game) -> Result<Option<Totals>> {
         else {
             continue;
         };
-        if !archive.entries.contains_key(hash) {
-            continue;
+        if archive.entries.contains_key(hash) {
+            wanted.push(path);
         }
-        t.binders += 1;
-        let binder = Binder::read(&archive.read_hash(*hash, &decoder)?, &decoder)?;
-        let id = path
-            .strip_prefix("/chr/")
-            .and_then(|p| p.strip_suffix(".anibnd.dcx"))
-            .ok_or("a chr path")?;
-        let prefix = format!("{id}_");
-        let markers = binder.division_markers(&prefix);
-        let named: Vec<&String> = markers
-            .iter()
-            .filter(|set| archive.contains(&format!("/chr/{set}.anibnd.dcx")))
-            .collect();
-        t.markers_without_binder += markers.len() - named.len();
-        if !named.is_empty() {
-            t.with_companions += 1;
-            t.companions += named.len();
-            *t.by_count.entry(named.len()).or_default() += 1;
-        }
-        let mut lists = 0;
-        for file in &binder.files {
-            let is_list = file
-                .name
-                .as_deref()
-                .is_some_and(|n| n.to_ascii_lowercase().ends_with(".blf"));
-            if !is_list {
-                continue;
-            }
-            lists += 1;
-            let list = LoadList::parse(&file.bytes)
-                .map_err(|e| format!("{path}: {}: {e}", file.name.as_deref().unwrap_or("")))?;
-            *t.versions.entry(list.version).or_default() += 1;
-            let shape = list
-                .commands
+    }
+    // each binder counted on the archive's threads into totals of its own, added up in that order
+    let read = archive.read_each_binder(
+        &wanted,
+        &decoder,
+        inputs::threads(),
+        |path, binder| -> Result<Totals> {
+            let binder = binder?;
+            let mut t = Totals {
+                binders: 1,
+                ..Totals::default()
+            };
+            let id = path
+                .strip_prefix("/chr/")
+                .and_then(|p| p.strip_suffix(".anibnd.dcx"))
+                .ok_or("a chr path")?;
+            let prefix = format!("{id}_");
+            let markers = binder.division_markers(&prefix);
+            let named: Vec<&String> = markers
                 .iter()
-                .map(|c| (c.first_entry_id, c.kind.clone(), c.parameters))
+                .filter(|set| archive.contains(&format!("/chr/{set}.anibnd.dcx")))
                 .collect();
-            *t.shapes.entry(shape).or_default() += 1;
-        }
-        t.lists += lists;
-        t.binders_with_lists += usize::from(lists > 0);
+            t.markers_without_binder += markers.len() - named.len();
+            if !named.is_empty() {
+                t.with_companions += 1;
+                t.companions += named.len();
+                *t.by_count.entry(named.len()).or_default() += 1;
+            }
+            let mut lists = 0;
+            for file in &binder.files {
+                let is_list = file
+                    .name
+                    .as_deref()
+                    .is_some_and(|n| n.to_ascii_lowercase().ends_with(".blf"));
+                if !is_list {
+                    continue;
+                }
+                lists += 1;
+                let list = LoadList::parse(&file.bytes)
+                    .map_err(|e| format!("{path}: {}: {e}", file.name.as_deref().unwrap_or("")))?;
+                *t.versions.entry(list.version).or_default() += 1;
+                let shape = list
+                    .commands
+                    .iter()
+                    .map(|c| (c.first_entry_id, c.kind.clone(), c.parameters))
+                    .collect();
+                *t.shapes.entry(shape).or_default() += 1;
+            }
+            t.lists += lists;
+            t.binders_with_lists += usize::from(lists > 0);
+            Ok(t)
+        },
+    )?;
+    for binder in read {
+        t.add(binder?);
     }
     Ok(Some(t))
 }
