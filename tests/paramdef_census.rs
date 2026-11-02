@@ -224,6 +224,29 @@ fn cross_check(game: Game, binder: &Binder, defs: &ParamDefs) -> Checked {
                 for (row, hand) in typed.rows().zip(&hand.rows) {
                     assert_eq!(row.id, hand.id);
                     let float = |n: &str| row.get(n).unwrap().as_f64().unwrap();
+                    for (k, boundary) in hand.lod_boundaries.iter().enumerate() {
+                        let name = format!("lv{k}{}", k + 1);
+                        assert_eq!(
+                            float(&format!("{name}_BorderDist")),
+                            f64::from(boundary.border),
+                            "row {} {name}",
+                            row.id
+                        );
+                        assert_eq!(
+                            float(&format!("{name}_PlayDist")),
+                            f64::from(boundary.play),
+                            "row {} {name}",
+                            row.id
+                        );
+                    }
+                    assert_eq!(
+                        row.get("enableCrossFade").unwrap().as_i64(),
+                        Some(i64::from(hand.cross_fade))
+                    );
+                    assert_eq!(
+                        row.get("shadowDrawLodOffset").unwrap().as_i64(),
+                        Some(i64::from(hand.shadow_lod_offset))
+                    );
                     assert_eq!(float("tex_lv01_BorderDist"), f64::from(hand.tex_lv01_border));
                     assert_eq!(float("tex_lv01_PlayDist"), f64::from(hand.tex_lv01_play));
                     assert_eq!(

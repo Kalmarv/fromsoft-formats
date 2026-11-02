@@ -744,19 +744,49 @@ const PARTS_DRAW_ROW: usize = 144;
 const TEX_LV01_BORDER: usize = 40;
 const TEX_LV01_PLAY: usize = 44;
 const LOD_TYPE: usize = 80;
+/// Where the row keeps each boundary's `lvNM_BorderDist` and `lvNM_PlayDist` (f32, `lv01` to `lv45`), the word whose bit
+/// 0 is `enableCrossFade` (no other bit is defined) and `shadowDrawLodOffset` (s8). The game's mesh-level step
+/// (eldenring.exe 1.17.3) reads the pairs at 0 to 0x24, the bit at 0x30 and the offset at 0x51.
+const LOD_BORDERS: [usize; 5] = [0, 8, 16, 24, 32];
+const LOD_PLAYS: [usize; 5] = [4, 12, 20, 28, 36];
+const CROSS_FADE: usize = 48;
+const SHADOW_LOD_OFFSET: usize = 81;
 
-/// The fields of a `PartsDrawParam` row this reader reads: the texture level switch and the LOD type.
+/// One boundary between two of a model's mesh levels in a `PartsDrawParam` row (`lvNM_BorderDist`,
+/// `lvNM_PlayDist`), in metres.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+pub struct LodBoundary {
+    /// Where the coarser level begins, before the draw-distance scale of the row's `lodType` (row `lodType` of
+    /// [`DrawDistScaleParam`]).
+    pub border: f32,
+    /// The band past the border: with cross-fade, the distance over which the finer level fades into the coarser; without,
+    /// the hysteresis either side of the border on the boundaries next to the level drawn. Not scaled.
+    pub play: f32,
+}
+
+/// The fields of a `PartsDrawParam` row this reader reads: the mesh level switch, the texture level switch and the LOD
+/// type.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct PartsDraw {
     /// The row's ID.
     pub id: i32,
+    /// `lv01` to `lv45`: the boundaries between mesh levels 0 and 1, ..., 4 and 5. Elden Ring's step (read from the
+    /// executable's code) draws level `k` where the distance passes the border of the boundary below it scaled by
+    /// row `lodType` of the draw-distance scales, with `play` as a cross-fade band or a hysteresis band
+    /// ([`PartsDraw::cross_fade`]).
+    pub lod_boundaries: [LodBoundary; 5],
+    /// `enableCrossFade`: the level is chosen from the distance alone and fades across each `play` band; off, it moves
+    /// with hysteresis from the level drawn before.
+    pub cross_fade: bool,
+    /// `shadowDrawLodOffset`: the levels a shadow view draws the model coarser than its distance gives.
+    pub shadow_lod_offset: i8,
     /// `tex_lv01_BorderDist`: the distance in metres the textures change from their own form to their lv01 form at;
     /// 0 is no switch.
     pub tex_lv01_border: f32,
     /// `tex_lv01_PlayDist`: the margin either side of the border (metres).
     pub tex_lv01_play: f32,
-    /// `lodType`: which row of the load balancer's draw-distance scales applies ([`DrawDistScaleParam`], row
-    /// `100 + lodType`).
+    /// `lodType`: which row of the load balancer's draw-distance scales applies ([`DrawDistScaleParam`]: row `lodType`
+    /// for the mesh levels, `100 + lodType` for the texture level).
     pub lod_type: u8,
 }
 
@@ -769,15 +799,39 @@ pub struct PartsDrawParam {
 
 impl PartsDrawParam {
     /// The rows of `param`, which must be `PARTS_DRAW_PARAM_ST` of version 5 with 144-byte rows (the one layout whose
-    /// offsets are known; any other is refused).
+    /// offsets are known; any other is refused). A row whose cross-fade word sets a bit other than bit 0 is refused.
     pub fn from_param(param: &Param) -> Result<PartsDrawParam> {
         layout(param, PARTS_DRAW_PARAM_TYPE, PARTS_DRAW_VERSION, PARTS_DRAW_ROW)?;
         let rows = param
             .rows
             .iter()
             .map(|r| {
+                let mut lod_boundaries = [LodBoundary {
+                    border: 0.0,
+                    play: 0.0,
+                }; 5];
+                for ((boundary, &border), &play) in
+                    lod_boundaries.iter_mut().zip(&LOD_BORDERS).zip(&LOD_PLAYS)
+                {
+                    boundary.border = f32::from_le_bytes(field(r, border)?);
+                    boundary.play = f32::from_le_bytes(field(r, play)?);
+                }
+                let cross_fade = u32::from_le_bytes(field(r, CROSS_FADE)?);
+                if cross_fade > 1 {
+                    return Err(invalid(
+                        FORMAT,
+                        CROSS_FADE,
+                        format!(
+                            "row {} sets bits {cross_fade:#x} of its cross-fade word, only bit 0 is defined",
+                            r.id
+                        ),
+                    ));
+                }
                 Ok(PartsDraw {
                     id: r.id,
+                    lod_boundaries,
+                    cross_fade: cross_fade == 1,
+                    shadow_lod_offset: i8::from_le_bytes(field(r, SHADOW_LOD_OFFSET)?),
                     tex_lv01_border: f32::from_le_bytes(field(r, TEX_LV01_BORDER)?),
                     tex_lv01_play: f32::from_le_bytes(field(r, TEX_LV01_PLAY)?),
                     lod_type: u8::from_le_bytes(field(r, LOD_TYPE)?),
@@ -1259,6 +1313,12 @@ mod tests {
     #[test]
     fn the_texture_switch_params_read_their_fields_and_refuse_other_layouts() {
         let mut parts = vec![0u8; PARTS_DRAW_ROW];
+        for (k, (&border, &play)) in LOD_BORDERS.iter().zip(&LOD_PLAYS).enumerate() {
+            parts[border..][..4].copy_from_slice(&(10.0 * (k + 1) as f32).to_le_bytes());
+            parts[play..][..4].copy_from_slice(&(k as f32).to_le_bytes());
+        }
+        parts[CROSS_FADE] = 1;
+        parts[SHADOW_LOD_OFFSET] = 2;
         parts[TEX_LV01_BORDER..][..4].copy_from_slice(&80f32.to_le_bytes());
         parts[TEX_LV01_PLAY..][..4].copy_from_slice(&5f32.to_le_bytes());
         parts[LOD_TYPE] = 1;
@@ -1273,12 +1333,29 @@ mod tests {
             read.row(81000),
             Some(&PartsDraw {
                 id: 81000,
+                lod_boundaries: std::array::from_fn(|k| LodBoundary {
+                    border: 10.0 * (k + 1) as f32,
+                    play: k as f32
+                }),
+                cross_fade: true,
+                shadow_lod_offset: 2,
                 tex_lv01_border: 80.0,
                 tex_lv01_play: 5.0,
                 lod_type: 1
             })
         );
         assert_eq!(read.row(1), None);
+        // a cross-fade word with a bit the definition does not have
+        let mut other = vec![0u8; PARTS_DRAW_ROW];
+        other[CROSS_FADE] = 2;
+        let bytes = fixture(
+            PARTS_DRAW_PARAM_TYPE,
+            PARTS_DRAW_VERSION,
+            PARTS_DRAW_ROW,
+            &[(1, other)],
+        );
+        let refused = PartsDrawParam::from_param(&Param::read(&bytes).unwrap()).unwrap_err();
+        assert!(refused.to_string().contains("only bit 0"), "{refused}");
 
         let mut asset = vec![0u8; ASSET_GEOMETRY_ROW];
         asset[REF_DRAW_PARAM..][..4].copy_from_slice(&81000i32.to_le_bytes());
