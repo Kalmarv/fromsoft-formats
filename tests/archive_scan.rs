@@ -63,6 +63,8 @@ fn compare(game: Game) -> Result<()> {
 
     assert_eq!(scanned.len(), hashes.len(), "{game:?}: entries scanned");
     let mut differ = Vec::new();
+    // each pair's entries, those refused both ways and those that differ, by shard: a pair's reads stand on their own
+    let mut pairs: BTreeMap<u8, [usize; 3]> = BTreeMap::new();
     for (h, want) in hashes.iter().zip(&each) {
         let got = &scanned[h];
         assert_eq!(
@@ -71,10 +73,26 @@ fn compare(game: Game) -> Result<()> {
             "{game:?}: entry {h:08x} visited {} times",
             got.len()
         );
+        let pair = pairs.entry(archive.entries[h].shard).or_default();
+        pair[0] += 1;
+        pair[1] += usize::from(want.is_err());
         if &got[0] != want {
+            pair[2] += 1;
             differ.push(format!("{h:08x}: scan {:?}, read_hash {want:?}", got[0]));
         }
     }
+    for (shard, [entries, refused, differ]) in &pairs {
+        let stem = archive.pair(*shard).map_or("an unknown pair", |p| p.stem);
+        eprintln!("{game:?} {stem}: {entries} entries, {refused} refused both ways, {differ} differ");
+    }
+    for stem in &archive.absent {
+        eprintln!("{game:?} {stem}: not installed");
+    }
+    assert_eq!(
+        pairs.len(),
+        archive.headers.len(),
+        "{game:?}: a pair the install holds gave no entry"
+    );
     let errors = each.iter().filter(|s| s.is_err()).count();
     eprintln!(
         "{game:?}: {} entries ({errors} refused both ways), {} reads of {:.2} GB; scan {:.1} s, entry by entry {:.1} s, {} threads",
