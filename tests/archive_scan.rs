@@ -3,7 +3,7 @@
 //! its length and MD5 (or its error's text), every entry of both installs, read both ways.
 mod inputs;
 
-use fromsoft_formats::{Archive, Game, dcx::Decoder};
+use fromsoft_formats::{Archive, Binder, Game, dcx::Decoder};
 use inputs::{Tool, oodle, threads};
 use primase_foundations::hash::md5;
 use primase_foundations::parallel::{Threads, map};
@@ -102,4 +102,138 @@ fn sekiro_scan_equals_read_hash_on_every_entry() -> Result<()> {
 #[test]
 fn elden_ring_scan_equals_read_hash_on_every_entry() -> Result<()> {
     compare(Game::EldenRing)
+}
+
+/// `Archive::read_each` gives each path, in the order asked, what `Archive::read` gives it: every shader and material
+/// binder, one of them asked twice, and a path the index lacks.
+fn read_each_is_read(game: Game) -> Result<()> {
+    let (Some(archive), Some(dll)) = (common::archive(game)?, oodle(Tool::Oodle6)) else {
+        return Ok(());
+    };
+    let dll = common::oodle(dll)?;
+    let decoder = Decoder {
+        oodle: Some(&dll),
+        max_output: 1 << 31,
+    };
+    let mut paths: Vec<&str> = game
+        .shader_binders()
+        .iter()
+        .chain(game.material_binders())
+        .copied()
+        .collect();
+    paths.push("/no/such/entry.dcx");
+    paths.push(paths[0]);
+    let got = archive
+        .read_each(&paths, &decoder, threads(), |path, r| (path.to_owned(), seen(r)))
+        .map_err(|p| p.to_string())?;
+    let want: Vec<(String, Seen)> = paths
+        .iter()
+        .map(|&path| match archive.read(path, &decoder) {
+            Ok(b) => (path.to_owned(), seen(Ok(&b))),
+            Err(e) => (path.to_owned(), seen(Err(e))),
+        })
+        .collect();
+    assert!(
+        want.iter().filter(|(_, s)| s.is_ok()).count() >= 2,
+        "{game:?}: binders read"
+    );
+    assert!(
+        want[want.len() - 2].1.is_err(),
+        "{game:?}: the missing path is refused"
+    );
+    assert_eq!(got, want, "{game:?}");
+    Ok(())
+}
+
+#[test]
+fn sekiro_read_each_is_read() -> Result<()> {
+    read_each_is_read(Game::Sekiro)
+}
+
+#[test]
+fn elden_ring_read_each_is_read() -> Result<()> {
+    read_each_is_read(Game::EldenRing)
+}
+
+/// A binder as its members' names, lengths and MD5s, or the error's text.
+type Members = std::result::Result<Vec<(Option<String>, usize, [u8; 16])>, String>;
+
+fn members(binder: fromsoft_formats::Result<Binder>) -> Members {
+    binder
+        .map(|b| {
+            b.files
+                .iter()
+                .map(|f| (f.name.clone(), f.bytes.len(), md5(&f.bytes)))
+                .collect()
+        })
+        .map_err(|e| e.to_string())
+}
+
+/// `Archive::read_each_binder` gives each path, in the order asked, the binder `Binder::read` reads from what
+/// `Archive::read` gives (a split binder's index with `Binder::read_split` and the payload beside it): the shader
+/// binders, a map's collision binder (split), it asked twice, and a binder and a split binder the index lacks.
+fn read_each_binder_is_read(game: Game) -> Result<()> {
+    let (Some(archive), Some(dll)) = (common::archive(game)?, oodle(Tool::Oodle6)) else {
+        return Ok(());
+    };
+    let dll = common::oodle(dll)?;
+    let decoder = Decoder {
+        oodle: Some(&dll),
+        max_output: 1 << 31,
+    };
+    let split: Vec<String> = ["m11_01_00_00", "m10_00_00_00"]
+        .iter()
+        .flat_map(|m| {
+            [
+                format!("/map/{m}/h{}.hkxbhd", &m[1..]),
+                format!("/map/{}/{m}/h{}.hkxbhd", &m[..3], &m[1..]),
+            ]
+        })
+        .filter(|p| archive.contains(p))
+        .collect();
+    assert!(!split.is_empty(), "{game:?}: no collision binder");
+    let mut paths: Vec<String> = game.shader_binders().iter().map(|p| (*p).to_owned()).collect();
+    paths.extend(split.iter().cloned());
+    paths.extend([
+        "/no/such/entry.bnd.dcx".to_owned(),
+        "/no/such/entry.hkxbhd".to_owned(),
+        split[0].clone(),
+    ]);
+    let got = archive
+        .read_each_binder(&paths, &decoder, threads(), |_, binder| members(binder))
+        .map_err(|p| p.to_string())?;
+    let want: Vec<Members> = paths
+        .iter()
+        .map(|path| {
+            members(match path.strip_suffix("bhd") {
+                Some(stem) => archive.read(path, &decoder).and_then(|index| {
+                    Binder::read_split(&index, &archive.read(&format!("{stem}bdt"), &decoder)?, &decoder)
+                }),
+                None => archive
+                    .read(path, &decoder)
+                    .and_then(|b| Binder::read(&b, &decoder)),
+            })
+        })
+        .collect();
+    assert!(
+        want[want.len() - 3].is_err() && want[want.len() - 2].is_err(),
+        "{game:?}: the missing paths"
+    );
+    assert!(
+        want.last()
+            .is_some_and(|m| m.as_ref().is_ok_and(|m| !m.is_empty())),
+        "{game:?}: the split binder"
+    );
+    assert_eq!(got, want, "{game:?}");
+    Ok(())
+}
+
+#[test]
+fn sekiro_read_each_binder_is_read() -> Result<()> {
+    read_each_binder_is_read(Game::Sekiro)
+}
+
+#[test]
+fn elden_ring_read_each_binder_is_read() -> Result<()> {
+    read_each_binder_is_read(Game::EldenRing)
 }

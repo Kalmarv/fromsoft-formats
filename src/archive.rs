@@ -9,7 +9,7 @@
 )]
 pub use crate::bhd::{PathHash, path_hash, path_hash64};
 use crate::{
-    Game, Result,
+    Binder, Game, Result,
     bhd::{Entry, Header, unwrap_rsa_with},
     dcx::Decoder,
     game::{ArchivePair, ArchiveSet},
@@ -388,7 +388,8 @@ impl Archive {
         self.entries.contains_key(&self.hash(path))
     }
     /// Read decrypted stored bytes, including BDT padding. Metadata logical_size
-    /// lets consumers distinguish padding without losing reference-reader parity.
+    /// lets consumers distinguish padding without losing reference-reader parity. For many entries,
+    /// [`Archive::scan_stored`].
     pub fn read_stored(&self, hash: u64) -> Result<Vec<u8>> {
         let e = self.entries.get(&hash).ok_or(crate::Error::Missing(hash))?;
         let pair = self
@@ -396,14 +397,163 @@ impl Archive {
             .ok_or_else(|| invalid("BHD5", 0, "entry from an unknown archive"))?;
         read_extent(&self.root, pair.stem, &e.entry)
     }
-    /// Decode a DCX envelope when present; non-DCX bytes retain their stored padding.
+    /// Decode a DCX envelope when present; non-DCX bytes retain their stored padding. For many entries,
+    /// [`Archive::scan`].
     pub fn read_hash(&self, hash: u64, decoder: &Decoder<'_>) -> Result<Vec<u8>> {
         let bytes = self.read_stored(hash)?;
         decoder.decode_if_dcx(&bytes)
     }
     /// [`Archive::read_hash`] of the hash of the archive path `path`; [`crate::Error::Missing`] if the index lacks it.
+    /// For many entries, [`Archive::read_each`]: a loop of `read` opens, seeks and reads each entry in turn.
     pub fn read(&self, path: &str, decoder: &Decoder<'_>) -> Result<Vec<u8>> {
         self.read_hash(self.hash(path), decoder)
+    }
+    /// `work(path, bytes)` for each of `paths`, with the bytes (or the error) [`Archive::read`] gives for it; the
+    /// results in the order of `paths`, so whatever is folded from them is the same on any number of threads. The way to
+    /// read many entries: one pass over the BDTs ([`Archive::scan`]) with the decoding and `work` on `threads` threads,
+    /// where a loop of [`Archive::read`] opens, seeks and reads each entry in turn. A path the index lacks is given
+    /// [`crate::Error::Missing`]. A panic in `work` stops the reads and is returned.
+    ///
+    /// `work` runs on the thread that read the entry, and the bytes are gone when it returns. Every result is held until
+    /// the last entry is read, so `T` is what `work` derives from the bytes (counts, a parsed record, the members'
+    /// digests), never the bytes or a whole binder.
+    ///
+    /// Entries that need others are read in stages, one `read_each` each, the later `work` finding what an earlier
+    /// stage gave by path: the MSBs, then the models they name. Reading the second entry inside `work` with
+    /// [`Archive::read`] is the loop again, one seek per entry. Binders, split ones included (a `.bhd` index and its
+    /// `.bdt` payload), are [`Archive::read_each_binder`]'s.
+    pub fn read_each<P: AsRef<str>, T: Send>(
+        &self,
+        paths: impl IntoIterator<Item = P>,
+        decoder: &Decoder<'_>,
+        threads: NonZeroUsize,
+        work: impl Fn(&str, Result<&[u8]>) -> T + Sync,
+    ) -> std::result::Result<Vec<T>, Panicked> {
+        let paths: Vec<P> = paths.into_iter().collect();
+        // each result with the place of its path, put in order when the last is in
+        let mut done: Vec<(usize, T)> = Vec::with_capacity(paths.len());
+        // the paths of each entry the index holds, with their places, by path hash; the others are refused here
+        let mut wanted: BTreeMap<u64, Vec<(usize, &str)>> = BTreeMap::new();
+        for (i, path) in paths.iter().map(AsRef::as_ref).enumerate() {
+            let hash = self.hash(path);
+            if self.entries.contains_key(&hash) {
+                wanted.entry(hash).or_default().push((i, path));
+            } else {
+                done.push((i, work(path, Err(crate::Error::Missing(hash)))));
+            }
+        }
+        let done = std::sync::Mutex::new(done);
+        self.scan(
+            decoder,
+            threads,
+            |hash| wanted.contains_key(&hash),
+            |hash, bytes| {
+                let Some(at) = wanted.get(&hash) else {
+                    unreachable!("the scan visits only the entries keep accepts")
+                };
+                let mut at = at.iter();
+                let mine: Vec<(usize, T)> = match bytes {
+                    Ok(bytes) => at.map(|&(i, path)| (i, work(path, Ok(bytes)))).collect(),
+                    // an error is not shared: the first of the entry's paths is given the scan's, any other (two paths of
+                    // one hash) the error its own read gives
+                    Err(e) => {
+                        let first = at.next().map(|&(i, path)| (i, work(path, Err(e))));
+                        let others = at.map(|&(i, path)| {
+                            let t = match self.read(path, decoder) {
+                                Ok(bytes) => work(path, Ok(&bytes)),
+                                Err(e) => work(path, Err(e)),
+                            };
+                            (i, t)
+                        });
+                        first.into_iter().chain(others).collect()
+                    }
+                };
+                done.lock().expect("only an extend holds the lock").extend(mine);
+            },
+        )?;
+        let mut done = done.into_inner().expect("only an extend holds the lock");
+        assert_eq!(
+            done.len(),
+            paths.len(),
+            "the scan visits each entry it was asked for once"
+        );
+        done.sort_unstable_by_key(|&(i, _)| i);
+        Ok(done.into_iter().map(|(_, t)| t).collect())
+    }
+    /// [`Archive::read_each`] of binders: `work(path, binder)` for each of `paths`, with the binder the entry holds
+    /// ([`Binder::read`]) or the error that stopped it, the results in the order of `paths`. A path ending in `bhd`
+    /// names a split binder, read with the `bdt` beside it ([`Binder::read_split`]) in a second pass: the indexes in the
+    /// first (a few kilobytes each, kept), then the payloads, each read with its index.
+    pub fn read_each_binder<P: AsRef<str>, T: Send>(
+        &self,
+        paths: impl IntoIterator<Item = P>,
+        decoder: &Decoder<'_>,
+        threads: NonZeroUsize,
+        work: impl Fn(&str, Result<Binder>) -> T + Sync,
+    ) -> std::result::Result<Vec<T>, Panicked> {
+        /// What the first pass gave for a path: its result, or a split binder's index with the path of its payload.
+        enum First<T> {
+            Done(T),
+            Index { payload: String, index: Vec<u8> },
+        }
+        /// A split binder's payload to read: its index (the first path's) and the paths that name the binder, with
+        /// their places.
+        struct Split<'a> {
+            index: Vec<u8>,
+            at: Vec<(usize, &'a str)>,
+        }
+        let paths: Vec<P> = paths.into_iter().collect();
+        let paths: Vec<&str> = paths.iter().map(AsRef::as_ref).collect();
+        let first = self.read_each(&paths, decoder, threads, |path, bytes| {
+            match (bytes, path.strip_suffix("bhd")) {
+                (Ok(index), Some(stem)) => First::Index {
+                    payload: format!("{stem}bdt"),
+                    index: index.to_vec(),
+                },
+                (Ok(bytes), None) => First::Done(work(path, Binder::read(bytes, decoder))),
+                (Err(e), _) => First::Done(work(path, Err(e))),
+            }
+        })?;
+        // each result with the place of its path, put in order when the last is in
+        let mut done: Vec<(usize, T)> = Vec::with_capacity(paths.len());
+        // the split binders, by the path of their payload
+        let mut payloads: BTreeMap<String, Split<'_>> = BTreeMap::new();
+        for (i, (&path, first)) in paths.iter().zip(first).enumerate() {
+            match first {
+                First::Done(t) => done.push((i, t)),
+                First::Index { payload, index } => payloads
+                    .entry(payload)
+                    .or_insert_with(|| Split {
+                        index,
+                        at: Vec::new(),
+                    })
+                    .at
+                    .push((i, path)),
+            }
+        }
+        let split = self.read_each(payloads.keys(), decoder, threads, |payload, bytes| {
+            let Some(Split { index, at }) = payloads.get(payload) else {
+                unreachable!("read_each gives work the paths it was asked for")
+            };
+            // an error is not shared: the first path of the binder is given the payload's, any other the one its own
+            // read gives
+            let mut bytes = Some(bytes);
+            at.iter()
+                .map(|&(i, path)| {
+                    let binder = match bytes.take() {
+                        Some(bytes) => bytes.and_then(|b| Binder::read_split(index, b, decoder)),
+                        None => self
+                            .read(payload, decoder)
+                            .and_then(|b| Binder::read_split(index, &b, decoder)),
+                    };
+                    (i, work(path, binder))
+                })
+                .collect::<Vec<_>>()
+        })?;
+        done.extend(split.into_iter().flatten());
+        assert_eq!(done.len(), paths.len(), "each path is read in one of the passes");
+        done.sort_unstable_by_key(|&(i, _)| i);
+        Ok(done.into_iter().map(|(_, t)| t).collect())
     }
     /// Every entry whose path hash `keep` accepts, each given to `visit` with the bytes [`Archive::read_hash`] returns
     /// for it (decrypted, a DCX envelope decoded, stored padding kept) or the error it returns, on `threads` threads.
