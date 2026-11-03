@@ -29,11 +29,15 @@ pub struct Texture {
     pub kind: String,
     /// The UV set it uses.
     pub uv_number: i32,
-    /// Its index in the shader's data.
+    /// Its index in the shader's data. Not the texture register the program samples it from: it is 0 on every texture
+    /// of Sekiro's layered map materials (`M[Multiple]`, `M[MultipleGround]`), which the programs read at different
+    /// registers.
     pub shader_data_index: i32,
     /// The texture's path (empty in the older block version, which stores none).
     pub path: String,
-    /// The extra floats the newer block version stores after the path.
+    /// The extra floats the newer block version stores after the path. In Sekiro the first two are the texture's UV scale
+    /// (u, v): a draw's texture-tiling row for the texture is that scale when the FLVER's binding of the same kind has an
+    /// empty path, and the FLVER binding's own scale when it has a path; a stored 0 is drawn as 1.
     pub extra: Vec<f32>,
     /// The texture block's version: 5, or 3 for the older form that stores neither a path nor floats. The rest of the
     /// slot does not imply it: Sekiro's definitions hold version-5 blocks with an empty path and no floats, which a

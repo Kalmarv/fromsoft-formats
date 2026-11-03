@@ -8,6 +8,7 @@ mod gx_items;
 pub mod gxmd;
 
 mod encode;
+mod storage;
 mod vertex;
 mod write;
 use crate::{
@@ -16,6 +17,7 @@ use crate::{
     invalid,
 };
 pub use channel::Channel;
+pub use storage::{FaceSetBytes, MeshBytes, Storage, VertexBufferBytes};
 pub use vertex::Vertex;
 pub use write::{GxArea, Layout, SkeletonBone, SkeletonSet};
 
@@ -46,7 +48,8 @@ pub struct Texture {
     pub path: String,
     /// The slot it binds, as the material names it.
     pub kind: String,
-    /// Its UV scale.
+    /// Its UV scale. In Sekiro it is the scale the binding is drawn with when its path is not empty; with an empty path
+    /// the material definition's texture scale is used instead ([`crate::mtd::Texture::extra`]).
     pub scale: [f32; 2],
     /// How the texture repeats along u and v (`TilingTypeU`, `TilingTypeV`). The two bytes are equal and 0 or 1 on every
     /// binding of Sekiro's and Elden Ring's models (241,231 and 570,781 bindings); the reader accepts 0 to 5.
@@ -132,7 +135,8 @@ pub struct FaceSet {
     pub flags: u32,
     /// Whether the indices are a triangle strip (`0xffff` restarts) rather than a list.
     pub strip: bool,
-    /// Whether back faces are culled.
+    /// Whether back faces are culled. Sekiro draws a face set with this set with back-face culling and one without it
+    /// with culling off, in its G-buffer pass.
     pub cull: bool,
     /// The 16-bit word at +6 of the record, as stored: 1 on 77.9% of Sekiro's face sets and 53.8% of Elden Ring's, and up
     /// to 371 and 285 on the others. Not a pad; what it counts is not known.

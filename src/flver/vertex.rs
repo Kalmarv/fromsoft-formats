@@ -12,7 +12,9 @@ pub struct Vertex {
     pub normal: [f32; 3],
     /// The normal's fourth component as stored; for a static mesh it names the bone the vertex follows.
     pub normal_w: i32,
-    /// The bone weights (semantic 1).
+    /// The bone weights (semantic 1), as stored. Four `UByte4Norm` weights need not sum to 1: their bytes sum to 252 to 255
+    /// in the skinned meshes of a captured Sekiro frame, and Sekiro's skinning programs divide the weights by their sum (at
+    /// least 0.001) before use. Weights used as decoded sum to as little as 0.988 of the game's.
     pub bone_weights: [f32; 4],
     /// The bone indices (semantic 2): into the mesh's palette ([`super::Mesh::palette`]) where it has one, else bones.
     pub bone_indices: [u16; 4],

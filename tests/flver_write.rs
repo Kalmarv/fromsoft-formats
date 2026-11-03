@@ -529,3 +529,60 @@ fn elden_rings_flvers_write_back_to_their_bytes() -> Result<()> {
     assert_eq!((bones, face_sets), (535_503, 277_113));
     Ok(())
 }
+
+#[test]
+fn the_storage_names_the_bytes_of_each_face_set_and_vertex_buffer() {
+    use fromsoft_formats::flver::Storage;
+    let built = model();
+    let bytes = built.write(&Layout::for_model(&built)).unwrap();
+    let storage = Storage::read(&bytes).unwrap();
+    let block = storage.data_block(&bytes).unwrap();
+    let read = Model::read(&bytes).unwrap();
+    assert_eq!(storage.meshes.len(), read.meshes.len());
+    for (mesh, bytes_of) in read.meshes.iter().zip(&storage.meshes) {
+        assert_eq!(mesh.faces.len(), bytes_of.face_sets.len());
+        for (face, &i) in mesh.faces.iter().zip(&bytes_of.face_sets) {
+            let f = storage.face_sets[i];
+            assert_eq!((f.count, f.width), (face.indices.len(), 16));
+            let stored: Vec<u32> = block[f.offset..f.offset + 2 * f.count]
+                .chunks(2)
+                .map(|c| u32::from(u16::from_le_bytes([c[0], c[1]])))
+                .collect();
+            assert_eq!(stored, face.indices);
+            assert_eq!(
+                storage
+                    .at(
+                        f.offset,
+                        storage.vertex_buffers[bytes_of.vertex_buffers[0]].offset
+                    )
+                    .0,
+                Some(i)
+            );
+        }
+        for (&layout, &i) in mesh.layouts.iter().zip(&bytes_of.vertex_buffers) {
+            let b = storage.vertex_buffers[i];
+            assert_eq!((b.layout, b.count), (layout, mesh.vertices.len()));
+            assert!(b.offset + b.stride * b.count <= block.len());
+        }
+    }
+}
+
+#[test]
+fn the_storage_refuses_bytes_outside_the_file_or_the_data_block() {
+    use fromsoft_formats::{Error, flver::Storage};
+    let built = model();
+    let bytes = built.write(&Layout::for_model(&built)).unwrap();
+    let refused = |data: &[u8]| match Storage::read(data) {
+        Err(Error::Invalid { format, detail, .. }) => {
+            assert_eq!(format, "FLVER");
+            detail
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    };
+    // Truncated: the data block runs past the end of the file.
+    refused(&bytes[..bytes.len() - 1]);
+    // The header's data length shrunk to 2 bytes: the face sets' indices now lie outside the data block.
+    let mut altered = bytes.clone();
+    altered[16..20].copy_from_slice(&2u32.to_le_bytes());
+    assert_eq!(refused(&altered), "bytes outside the data block");
+}
