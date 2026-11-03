@@ -7,7 +7,8 @@
 //!
 //! Arguments as `list_binder`'s, plus the folder written to (created if missing). The folder holds game data: keep it out
 //! of any repository. An archive path of the form `file:<path>` reads a binder from a local file instead (a binder
-//! extracted earlier that holds binders, as a shader binder holds its bundles); the game folder and keys are then unused.
+//! extracted earlier that holds binders, as a shader binder holds its bundles, in a DCX envelope or not); the game
+//! folder and keys are then unused.
 #![allow(unsafe_code, reason = "opens the Oodle library the caller names")]
 
 use fromsoft_formats::{Binder, Game, Install, Keys, dcx::Decoder};
@@ -31,7 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         max_output: 1 << 30,
     };
     let bytes = match path.strip_prefix("file:") {
-        Some(local) => std::fs::read(local)?,
+        Some(local) => decoder.decode_if_dcx(&std::fs::read(local)?)?,
         None => {
             let keys = Keys::from_folder(keys, game, None)?;
             Install::new(root, game, keys).open()?.read(path, &decoder)?

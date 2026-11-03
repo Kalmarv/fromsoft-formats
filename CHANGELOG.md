@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `examples/extract_binder`: a `file:` path in a DCX envelope is decoded first, as one read from an install is (Elden Ring's `shaderbdle*.shaderbdlebnd.dcx` are Kraken envelopes around the binder).
 - `flver::Storage`: where a FLVER keeps its index and vertex bytes, without decoding them. `Storage::read` gives the data block's offset and length, each face set's offset, index count and width, each vertex buffer's offset, stride, count and layout, and each mesh's face sets and vertex buffers; every offset and length is checked against the data block. `data_block` returns the block and `at` names the face set and vertex buffer at a pair of offsets into it. Sekiro uploads the data block as one GPU buffer, as stored, and draws each face set from it (seen in captured frames of Sekiro 1.06), so a draw's buffer offsets name its mesh. `examples/storage_check.rs` reads every FLVER of an install with both `Storage` and `Model` and checks they agree (Sekiro: 14,310 models, no disagreement).
 - Documentation from captured Sekiro frames: `Vertex::bone_weights` are as stored and the game divides them by their sum; `flver::Texture::scale` is drawn when the binding has a path, otherwise `mtd::Texture::extra`'s first two floats (the UV scale); `mtd::Texture::shader_data_index` is not the texture register; `FaceSet::cull` set is drawn with back-face culling, clear with culling off.
 - Breaking: `param::PartsDraw` gains `lod_boundaries` (`lv01` to `lv45`: `LodBoundary { border, play }` at 0 to 36),
