@@ -86,6 +86,15 @@ impl Game {
         }
     }
 
+    /// The binders holding the game's MTD material definitions (Sekiro's `/mtd/allmaterialbnd.mtdbnd.dcx`); none for a
+    /// game whose materials are binaries ([`Game::material_binders`]).
+    pub fn mtd_binders(self) -> &'static [&'static str] {
+        match self {
+            Game::Sekiro => &["/mtd/allmaterialbnd.mtdbnd.dcx"],
+            Game::EldenRing => &[],
+        }
+    }
+
     /// The binders holding the game's shader bundles (`<shader>.shaderbdle` members), in the order a shader is looked up:
     /// Sekiro's one; Elden Ring's base game's, its two later additions' and SpeedTree's (a shader is in one of them).
     pub fn shader_binders(self) -> &'static [&'static str] {
