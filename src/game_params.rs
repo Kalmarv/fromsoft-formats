@@ -97,6 +97,23 @@ pub fn read_npc_param(install: &Install, archive: &Archive, decoder: &Decoder<'_
     )
 }
 
+/// The bullet param of an Elden Ring install's regulation ([`crate::param::BulletParam`]); another game's is refused
+/// (its layout is not read).
+pub fn read_bullet_param(
+    install: &Install,
+    archive: &Archive,
+    decoder: &Decoder<'_>,
+) -> Result<crate::param::BulletParam> {
+    if install.game != crate::Game::EldenRing {
+        return Err(invalid(
+            FORMAT,
+            0,
+            format!("{}'s BulletParam layout is not read", install.game.name()),
+        ));
+    }
+    crate::param::BulletParam::from_param(&read_param(install, archive, decoder, "Bullet.param")?)
+}
+
 /// The model effect param of the install's game params (Sekiro's `ModelSfxParam`, Elden Ring's `AssetModelSfxParam`):
 /// the effects a placed object or asset spawns, and the dummy polygons they attach to.
 pub fn read_model_sfx_param(

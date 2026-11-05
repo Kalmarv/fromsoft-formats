@@ -24,9 +24,10 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use fromsoft_formats::dcx::Decoder;
-use fromsoft_formats::game_params::{param_binder, regulation_binder};
+use fromsoft_formats::game_params::{param_binder, read_bullet_param, regulation_binder};
 use fromsoft_formats::param::{
-    AssetGeometryParam, DrawDistScaleParam, GrassParam, NpcParam, NpcStats, Param, PartsDrawParam,
+    AssetGeometryParam, BulletParam, DrawDistScaleParam, GrassParam, NpcParam, NpcStats, Param,
+    PartsDrawParam,
 };
 use fromsoft_formats::paramdef::{ParamDefs, TypedParam, Value};
 use fromsoft_formats::{Binder, Game, Install, Keys};
@@ -152,11 +153,12 @@ struct Checked {
     parts_draw: usize,
     asset_geometry: usize,
     draw_dist_scale: usize,
+    bullet: usize,
 }
 
 /// The typed values of `NPC_PARAM_ST`, the grass params, the outfit-free stats and the texture-switch params
-/// (`PartsDrawParam`, `AssetEnvironmentGeometryParam`, `LoadBalancerDrawDistScaleParam`) equal what the hand-written
-/// readers read from the same rows.
+/// (`PartsDrawParam`, `AssetEnvironmentGeometryParam`, `LoadBalancerDrawDistScaleParam`) and of Elden Ring's
+/// `BulletParam` equal what the hand-written readers read from the same rows.
 fn cross_check(game: Game, binder: &Binder, defs: &ParamDefs) -> Checked {
     let regulation = binder.regulation_number();
     let mut checked = Checked::default();
@@ -280,10 +282,92 @@ fn cross_check(game: Game, binder: &Binder, defs: &ParamDefs) -> Checked {
                     checked.draw_dist_scale += 1;
                 }
             }
+            "BULLET_PARAM_ST" if game == Game::EldenRing => {
+                let typed = defs.bind(&param, regulation).unwrap();
+                let hand = BulletParam::from_param(&param).unwrap();
+                assert_eq!(typed.rows().count(), hand.rows.len());
+                for (row, hand) in typed.rows().zip(&hand.rows) {
+                    assert_eq!(row.id, hand.id);
+                    let ints = [
+                        ("sfxId_Bullet", hand.effect),
+                        ("sfxId_Hit", hand.hit_effect),
+                        ("sfxId_Flick", hand.flick_effect),
+                        ("HitBulletID", hand.spawned_bullet),
+                        ("intervalCreateBulletId", hand.interval_bullet),
+                        ("FollowType", i32::from(hand.follow)),
+                        ("isInheritSpeedToChild", i32::from(hand.inherit_speed)),
+                    ];
+                    for (name, value) in ints {
+                        let typed_value = row.get(name).unwrap().as_i64();
+                        assert_eq!(typed_value, Some(i64::from(value)), "row {} {name}", row.id);
+                    }
+                    let floats = [
+                        ("life", hand.life),
+                        ("lifeRandomRange", hand.life_random),
+                        ("dist", hand.range),
+                        ("gravityInRange", hand.gravity_in_range),
+                        ("gravityOutRange", hand.gravity_out_of_range),
+                        ("initVellocity", hand.initial_speed),
+                        ("accelInRange", hand.acceleration_in_range),
+                        ("accelOutRange", hand.acceleration_out_of_range),
+                        ("maxVellocity", hand.max_speed),
+                        ("minVellocity", hand.min_speed),
+                        ("accelTime", hand.acceleration_delay),
+                        ("intervalCreateTimeMin", hand.interval_min),
+                        ("intervalCreateTimeMax", hand.interval_max),
+                        ("intervalCreateWaitTime", hand.interval_wait),
+                    ];
+                    for (name, value) in floats {
+                        // bit patterns, so that a NaN compares
+                        let Value::Float(typed_value) = row.get(name).unwrap() else {
+                            panic!("row {} {name} is not a float", row.id);
+                        };
+                        assert_eq!(typed_value.to_bits(), value.to_bits(), "row {} {name}", row.id);
+                    }
+                    checked.bullet += 1;
+                }
+            }
             _ => {}
         }
     }
     checked
+}
+
+/// Two rows of the install's `BulletParam` as `read_bullet_param` reads them: Glintstone Pebble's and Glintstone
+/// Shard's bullets (the values are those the paramdef typing gives the rows).
+fn bullets_of_glintstone_pebble_and_shard(install: &Install, decoder: &Decoder<'_>) -> Result<()> {
+    let bullets = read_bullet_param(install, &install.open()?, decoder)?;
+    for (id, effect, hit_effect, life) in [
+        (10_400_000, 523_002, 523_003, 1.12),
+        (10_400_100, 523_022, 523_023, 1.25),
+    ] {
+        let b = bullets.row(id).unwrap();
+        assert_eq!(
+            (b.effect, b.hit_effect, b.life),
+            (effect, hit_effect, life),
+            "{id}"
+        );
+        assert_eq!(
+            (
+                b.initial_speed,
+                b.acceleration_in_range,
+                b.acceleration_out_of_range
+            ),
+            (13.0, 40.0, 40.0),
+            "{id}"
+        );
+        assert_eq!(
+            (b.max_speed, b.min_speed, b.acceleration_delay),
+            (25.0, 6.0, 0.32),
+            "{id}"
+        );
+        assert_eq!(
+            (b.range, b.gravity_in_range, b.gravity_out_of_range),
+            (12.0, 0.0, 0.0),
+            "{id}"
+        );
+    }
+    Ok(())
 }
 
 fn write_digests(name: &str, text: &str) {
@@ -305,13 +389,14 @@ fn configured(game: Game) -> Option<(Install, inputs::OodleLibrary)> {
 #[test]
 fn every_param_of_the_installs_binds() -> Result<()> {
     // (game, defs folder's game, members, read by Param::read, rows, params whose def revision differs, rows the
-    // hand-written readers read; the texture-switch readers are Elden Ring's)
-    let checked = |npc, grass, parts_draw, asset_geometry, draw_dist_scale| Checked {
+    // hand-written readers read; the texture-switch and bullet readers are Elden Ring's)
+    let checked = |npc, grass, parts_draw, asset_geometry, draw_dist_scale, bullet| Checked {
         npc,
         grass,
         parts_draw,
         asset_geometry,
         draw_dist_scale,
+        bullet,
     };
     for (game, set, members, unread, rows, differs, expected) in [
         (
@@ -321,7 +406,7 @@ fn every_param_of_the_installs_binds() -> Result<()> {
             0,
             179_358,
             10,
-            checked(7_045, 632, 385, 24_106, 154),
+            checked(7_045, 632, 385, 24_106, 154, 15_475),
         ),
         (
             Game::Sekiro,
@@ -330,7 +415,7 @@ fn every_param_of_the_installs_binds() -> Result<()> {
             3,
             36_083,
             0,
-            checked(1_279, 166, 0, 0, 0),
+            checked(1_279, 166, 0, 0, 0, 0),
         ),
     ] {
         let (Some((install, dll)), Some(dir)) = (configured(game), oracle(OracleSet::Smithbox, set, "defs"))
@@ -359,6 +444,9 @@ fn every_param_of_the_installs_binds() -> Result<()> {
             Game::Sekiro => assert_eq!(binder.regulation_number(), None),
         }
         assert_eq!(cross_check(game, &binder, &defs), expected);
+        if game == Game::EldenRing {
+            bullets_of_glintstone_pebble_and_shard(&install, &decoder)?;
+        }
         write_digests(
             &format!("{}-install.tsv", game.name().replace(' ', "-")),
             &digests,

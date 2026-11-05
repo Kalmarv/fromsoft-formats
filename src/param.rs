@@ -1,7 +1,7 @@
 //! PARAM files (`NpcParam.param` and the other params of a game's param binder): the table of rows as stored, and the
 //! typed reading of the NPC param's display masks and of a few other params' fields (grass types, model effects,
 //! and Elden Ring's texture-level switch: `PartsDrawParam`, the asset geometry param's draw-param reference and the
-//! load balancer's draw-distance scales).
+//! load balancer's draw-distance scales; and Elden Ring's bullets, `BulletParam`).
 //!
 //! [`Param::read`] is strict about the layout Sekiro's and Elden Ring's params share (little-endian, 64-bit offsets,
 //! the param type named by an offset, UTF-16 row names): the header, the row table, the rows' data, the param type
@@ -956,6 +956,149 @@ impl DrawDistScaleParam {
     }
 }
 
+/// Elden Ring's `BulletParam`: how a bullet (the projectile of a spell, an arrow or an attack) flies, the effects it
+/// shows, and the bullets it makes.
+pub const BULLET_PARAM_TYPE: &str = "BULLET_PARAM_ST";
+/// Its layout revision and row size as the install's regulation (1.17.3) stores them: revision 4, 272-byte rows, which
+/// Paramdex's `ER/Defs/BulletParam.xml` (as Smithbox ships it) lays out at that regulation.
+const BULLET_VERSION: u16 = 4;
+const BULLET_ROW: usize = 272;
+/// Where the row keeps `sfxId_Bullet`, `sfxId_Hit` and `sfxId_Flick` (s32), `life`, `dist`, `gravityInRange`,
+/// `gravityOutRange`, `initVellocity`, `accelInRange`, `accelOutRange`, `maxVellocity`, `minVellocity` and `accelTime`
+/// (f32), `HitBulletID` (s32), the byte whose low three bits are `FollowType`, `intervalCreateBulletId` (s32),
+/// `intervalCreateTimeMin`, `intervalCreateTimeMax` and `intervalCreateWaitTime` (f32), the byte whose bit 0 is
+/// `isInheritSpeedToChild`, and `lifeRandomRange` (f32).
+const BULLET_EFFECT: usize = 4;
+const BULLET_HIT_EFFECT: usize = 8;
+const BULLET_FLICK_EFFECT: usize = 12;
+const BULLET_LIFE: usize = 16;
+const BULLET_RANGE: usize = 20;
+const BULLET_GRAVITY_IN_RANGE: usize = 28;
+const BULLET_GRAVITY_OUT_OF_RANGE: usize = 32;
+const BULLET_INITIAL_SPEED: usize = 40;
+const BULLET_ACCELERATION_IN_RANGE: usize = 44;
+const BULLET_ACCELERATION_OUT_OF_RANGE: usize = 48;
+const BULLET_MAX_SPEED: usize = 52;
+const BULLET_MIN_SPEED: usize = 56;
+const BULLET_ACCELERATION_DELAY: usize = 60;
+const BULLET_SPAWNED: usize = 104;
+const BULLET_FOLLOW: usize = 154;
+const BULLET_INTERVAL_BULLET: usize = 172;
+const BULLET_INTERVAL_MIN: usize = 176;
+const BULLET_INTERVAL_MAX: usize = 180;
+const BULLET_INTERVAL_WAIT: usize = 188;
+const BULLET_INHERIT_SPEED: usize = 195;
+const BULLET_LIFE_RANDOM: usize = 208;
+
+/// The fields of a `BulletParam` row this reader reads: its flight, its effects and the bullets it makes. What each
+/// means is Paramdex's description of the field (the game's own Japanese), not checked against the running game.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+pub struct Bullet {
+    /// The row's ID.
+    pub id: i32,
+    /// `sfxId_Bullet`: the effect of the bullet itself; -1 for none.
+    pub effect: i32,
+    /// `sfxId_Hit`: the effect of its hitting; -1 for none.
+    pub hit_effect: i32,
+    /// `sfxId_Flick`: the effect of its being deflected; -1 for none.
+    pub flick_effect: i32,
+    /// `life`: the seconds the bullet may exist; -1 for ever.
+    pub life: f32,
+    /// `lifeRandomRange`: the spread of random seconds added to `life`.
+    pub life_random: f32,
+    /// `dist`: the distance (metres) at which the bullet's falling off begins ("not the distance it actually flies"):
+    /// the boundary between its in-range and its out-of-range gravity and acceleration.
+    pub range: f32,
+    /// `gravityInRange`: the downward gravity (metres per second squared) within the range.
+    pub gravity_in_range: f32,
+    /// `gravityOutRange`: the downward gravity once the falling off begins.
+    pub gravity_out_of_range: f32,
+    /// `initVellocity`: the initial speed of the bullet's effect (metres per second).
+    pub initial_speed: f32,
+    /// `accelInRange`: its acceleration (metres per second squared) within the range.
+    pub acceleration_in_range: f32,
+    /// `accelOutRange`: its acceleration out of the range.
+    pub acceleration_out_of_range: f32,
+    /// `maxVellocity`: its highest speed (metres per second).
+    pub max_speed: f32,
+    /// `minVellocity`: its guaranteed lowest speed (metres per second).
+    pub min_speed: f32,
+    /// `accelTime`: the seconds before which the bullet does not accelerate ("so that a spell can fly like a rocket").
+    pub acceleration_delay: f32,
+    /// `HitBulletID`: the bullet this one makes from its own params ("when a new bullet param is made from this
+    /// one"); -1 for none.
+    pub spawned_bullet: i32,
+    /// `FollowType`: how the bullet follows its source (0, "does not follow", is the default); the values are not
+    /// named here.
+    pub follow: u8,
+    /// `intervalCreateBulletId`: the bullet made at intervals; -1 for none.
+    pub interval_bullet: i32,
+    /// `intervalCreateTimeMin`: the least seconds between two of them.
+    pub interval_min: f32,
+    /// `intervalCreateTimeMax`: the most seconds between two of them (0 turns them off).
+    pub interval_max: f32,
+    /// `intervalCreateWaitTime`: the seconds before the first of them.
+    pub interval_wait: f32,
+    /// `isInheritSpeedToChild`: a bullet it is replaced by takes its speed at that moment (the child's own speed is
+    /// ignored).
+    pub inherit_speed: bool,
+}
+
+/// The rows of `BulletParam`, as far as [`Bullet`] reads them.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct BulletParam {
+    /// Every row, in file order.
+    pub rows: Vec<Bullet>,
+}
+
+impl BulletParam {
+    /// The rows of `param`, which must be `BULLET_PARAM_ST` of version 4 with 272-byte rows (the one layout whose
+    /// offsets are known; any other is refused).
+    pub fn from_param(param: &Param) -> Result<BulletParam> {
+        layout(param, BULLET_PARAM_TYPE, BULLET_VERSION, BULLET_ROW)?;
+        let rows = param
+            .rows
+            .iter()
+            .map(|r| {
+                let int = |at| field(r, at).map(i32::from_le_bytes);
+                let float = |at| field(r, at).map(f32::from_le_bytes);
+                let [follow] = field::<1>(r, BULLET_FOLLOW)?;
+                let [inherit] = field::<1>(r, BULLET_INHERIT_SPEED)?;
+                Ok(Bullet {
+                    id: r.id,
+                    effect: int(BULLET_EFFECT)?,
+                    hit_effect: int(BULLET_HIT_EFFECT)?,
+                    flick_effect: int(BULLET_FLICK_EFFECT)?,
+                    life: float(BULLET_LIFE)?,
+                    life_random: float(BULLET_LIFE_RANDOM)?,
+                    range: float(BULLET_RANGE)?,
+                    gravity_in_range: float(BULLET_GRAVITY_IN_RANGE)?,
+                    gravity_out_of_range: float(BULLET_GRAVITY_OUT_OF_RANGE)?,
+                    initial_speed: float(BULLET_INITIAL_SPEED)?,
+                    acceleration_in_range: float(BULLET_ACCELERATION_IN_RANGE)?,
+                    acceleration_out_of_range: float(BULLET_ACCELERATION_OUT_OF_RANGE)?,
+                    max_speed: float(BULLET_MAX_SPEED)?,
+                    min_speed: float(BULLET_MIN_SPEED)?,
+                    acceleration_delay: float(BULLET_ACCELERATION_DELAY)?,
+                    spawned_bullet: int(BULLET_SPAWNED)?,
+                    follow: follow & 0x7,
+                    interval_bullet: int(BULLET_INTERVAL_BULLET)?,
+                    interval_min: float(BULLET_INTERVAL_MIN)?,
+                    interval_max: float(BULLET_INTERVAL_MAX)?,
+                    interval_wait: float(BULLET_INTERVAL_WAIT)?,
+                    inherit_speed: inherit & 1 == 1,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(BulletParam { rows })
+    }
+
+    /// The row with `id`.
+    pub fn row(&self, id: i32) -> Option<&Bullet> {
+        self.rows.iter().find(|r| r.id == id)
+    }
+}
+
 /// Refuse `param` unless it is `param_type` of layout revision `version` with rows of `size` bytes.
 fn layout(param: &Param, param_type: &str, version: u16, size: usize) -> Result<()> {
     if param.param_type == param_type && param.data_version == version && param.row_size == size {
@@ -1408,6 +1551,80 @@ mod tests {
             let other = Param::read(&fixture(name, version, size, &[(1, vec![0; size])])).unwrap();
             assert!(AssetGeometryParam::from_param(&other).is_err(), "{name} {size}");
             assert!(DrawDistScaleParam::from_param(&other).is_err(), "{name} {size}");
+        }
+    }
+
+    /// A bullet row reads its flight, effects and child bullets at the offsets of its one layout, the follow type from
+    /// the low three bits of its byte and the speed inheritance from bit 0 of its; another revision or size is refused.
+    #[test]
+    fn a_bullet_row_reads_its_flight_effects_and_children() {
+        let mut row = vec![0u8; BULLET_ROW];
+        let mut int = |at: usize, v: i32| row[at..][..4].copy_from_slice(&v.to_le_bytes());
+        int(BULLET_EFFECT, 523022);
+        int(BULLET_HIT_EFFECT, 523023);
+        int(BULLET_FLICK_EFFECT, -1);
+        int(BULLET_SPAWNED, 10400101);
+        int(BULLET_INTERVAL_BULLET, -1);
+        let floats = [
+            (BULLET_LIFE, 1.25),
+            (BULLET_LIFE_RANDOM, 0.5),
+            (BULLET_RANGE, 12.0),
+            (BULLET_GRAVITY_IN_RANGE, 1.0),
+            (BULLET_GRAVITY_OUT_OF_RANGE, 2.0),
+            (BULLET_INITIAL_SPEED, 13.0),
+            (BULLET_ACCELERATION_IN_RANGE, 40.0),
+            (BULLET_ACCELERATION_OUT_OF_RANGE, 41.0),
+            (BULLET_MAX_SPEED, 25.0),
+            (BULLET_MIN_SPEED, 6.0),
+            (BULLET_ACCELERATION_DELAY, 0.32),
+            (BULLET_INTERVAL_MIN, 0.1),
+            (BULLET_INTERVAL_MAX, 0.2),
+            (BULLET_INTERVAL_WAIT, 0.3),
+        ];
+        for (at, v) in floats {
+            row[at..][..4].copy_from_slice(&f32::to_le_bytes(v));
+        }
+        // the bits above each field are other fields'
+        row[BULLET_FOLLOW] = 0b1111_1010;
+        row[BULLET_INHERIT_SPEED] = 0b1111_1111;
+        let bytes = fixture(BULLET_PARAM_TYPE, BULLET_VERSION, BULLET_ROW, &[(10400100, row)]);
+        let read = BulletParam::from_param(&Param::read(&bytes).unwrap()).unwrap();
+        assert_eq!(
+            read.row(10400100),
+            Some(&Bullet {
+                id: 10400100,
+                effect: 523022,
+                hit_effect: 523023,
+                flick_effect: -1,
+                life: 1.25,
+                life_random: 0.5,
+                range: 12.0,
+                gravity_in_range: 1.0,
+                gravity_out_of_range: 2.0,
+                initial_speed: 13.0,
+                acceleration_in_range: 40.0,
+                acceleration_out_of_range: 41.0,
+                max_speed: 25.0,
+                min_speed: 6.0,
+                acceleration_delay: 0.32,
+                spawned_bullet: 10400101,
+                follow: 2,
+                interval_bullet: -1,
+                interval_min: 0.1,
+                interval_max: 0.2,
+                interval_wait: 0.3,
+                inherit_speed: true,
+            })
+        );
+        assert_eq!(read.row(1), None);
+        for (version, size) in [(BULLET_VERSION - 1, BULLET_ROW), (BULLET_VERSION, BULLET_ROW + 4)] {
+            let other =
+                Param::read(&fixture(BULLET_PARAM_TYPE, version, size, &[(1, vec![0; size])])).unwrap();
+            let e = BulletParam::from_param(&other).unwrap_err().to_string();
+            assert!(
+                e.contains("the reader is of BULLET_PARAM_ST version 4 with rows of 272"),
+                "{e}"
+            );
         }
     }
 }
