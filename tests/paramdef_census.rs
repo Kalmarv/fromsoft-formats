@@ -296,6 +296,9 @@ fn cross_check(game: Game, binder: &Binder, defs: &ParamDefs) -> Checked {
                         ("intervalCreateBulletId", hand.interval_bullet),
                         ("FollowType", i32::from(hand.follow)),
                         ("isInheritSpeedToChild", i32::from(hand.inherit_speed)),
+                        ("homingAngle", i32::from(hand.homing_angle)),
+                        ("homingAngleX", i32::from(hand.homing_angle_x)),
+                        ("isEnableAutoHoming", i32::from(hand.auto_homing)),
                     ];
                     for (name, value) in ints {
                         let typed_value = row.get(name).unwrap().as_i64();
@@ -316,6 +319,9 @@ fn cross_check(game: Game, binder: &Binder, defs: &ParamDefs) -> Checked {
                         ("intervalCreateTimeMin", hand.interval_min),
                         ("intervalCreateTimeMax", hand.interval_max),
                         ("intervalCreateWaitTime", hand.interval_wait),
+                        ("homingBeginDist", hand.homing_begin),
+                        ("hormingStopRange", hand.homing_stop_range),
+                        ("hormingOffsetRange", hand.homing_offset),
                     ];
                     for (name, value) in floats {
                         // bit patterns, so that a NaN compares
@@ -364,6 +370,16 @@ fn bullets_of_glintstone_pebble_and_shard(install: &Install, decoder: &Decoder<'
         assert_eq!(
             (b.range, b.gravity_in_range, b.gravity_out_of_range),
             (12.0, 0.0, 0.0),
+            "{id}"
+        );
+        assert_eq!(
+            (
+                b.homing_angle,
+                b.homing_angle_x,
+                b.homing_stop_range,
+                b.auto_homing
+            ),
+            (35, -1, 0.4, true),
             "{id}"
         );
     }

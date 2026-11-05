@@ -967,7 +967,9 @@ const BULLET_ROW: usize = 272;
 /// `gravityOutRange`, `initVellocity`, `accelInRange`, `accelOutRange`, `maxVellocity`, `minVellocity` and `accelTime`
 /// (f32), `HitBulletID` (s32), the byte whose low three bits are `FollowType`, `intervalCreateBulletId` (s32),
 /// `intervalCreateTimeMin`, `intervalCreateTimeMax` and `intervalCreateWaitTime` (f32), the byte whose bit 0 is
-/// `isInheritSpeedToChild`, and `lifeRandomRange` (f32).
+/// `isInheritSpeedToChild`, and `lifeRandomRange` (f32); and its homing: `hormingStopRange`, `homingBeginDist` and
+/// `hormingOffsetRange` (f32), `homingAngle` and `homingAngleX` (s16), and the byte whose bit 4 is
+/// `isEnableAutoHoming`.
 const BULLET_EFFECT: usize = 4;
 const BULLET_HIT_EFFECT: usize = 8;
 const BULLET_FLICK_EFFECT: usize = 12;
@@ -989,6 +991,12 @@ const BULLET_INTERVAL_MAX: usize = 180;
 const BULLET_INTERVAL_WAIT: usize = 188;
 const BULLET_INHERIT_SPEED: usize = 195;
 const BULLET_LIFE_RANDOM: usize = 208;
+const BULLET_HOMING_STOP: usize = 36;
+const BULLET_HOMING_BEGIN: usize = 64;
+const BULLET_HOMING_OFFSET: usize = 84;
+const BULLET_HOMING_ANGLE: usize = 130;
+const BULLET_AUTO_HOMING: usize = 156;
+const BULLET_HOMING_ANGLE_X: usize = 212;
 
 /// The fields of a `BulletParam` row this reader reads: its flight, its effects and the bullets it makes. What each
 /// means is Paramdex's description of the field (the game's own Japanese), not checked against the running game.
@@ -1042,6 +1050,19 @@ pub struct Bullet {
     /// `isInheritSpeedToChild`: a bullet it is replaced by takes its speed at that moment (the child's own speed is
     /// ignored).
     pub inherit_speed: bool,
+    /// `homingAngle`: how many degrees a second the bullet corrects its course toward its target.
+    pub homing_angle: i16,
+    /// `homingAngleX`: the same about its X axis alone; -1 for `homingAngle`.
+    pub homing_angle_x: i16,
+    /// `homingBeginDist`: the metres it flies before it begins to home.
+    pub homing_begin: f32,
+    /// `hormingStopRange`: the distance from its target (metres) at which it stops homing ("so that a homing bullet
+    /// does not hit too often").
+    pub homing_stop_range: f32,
+    /// `hormingOffsetRange`: the metres it aims off its target in each of X, Y and Z when shot (0 aims true).
+    pub homing_offset: f32,
+    /// `isEnableAutoHoming`: whether it follows a target by itself when nothing is locked on.
+    pub auto_homing: bool,
 }
 
 /// The rows of `BulletParam`, as far as [`Bullet`] reads them.
@@ -1064,6 +1085,8 @@ impl BulletParam {
                 let float = |at| field(r, at).map(f32::from_le_bytes);
                 let [follow] = field::<1>(r, BULLET_FOLLOW)?;
                 let [inherit] = field::<1>(r, BULLET_INHERIT_SPEED)?;
+                let [auto_homing] = field::<1>(r, BULLET_AUTO_HOMING)?;
+                let short = |at| field(r, at).map(i16::from_le_bytes);
                 Ok(Bullet {
                     id: r.id,
                     effect: int(BULLET_EFFECT)?,
@@ -1087,6 +1110,12 @@ impl BulletParam {
                     interval_max: float(BULLET_INTERVAL_MAX)?,
                     interval_wait: float(BULLET_INTERVAL_WAIT)?,
                     inherit_speed: inherit & 1 == 1,
+                    homing_angle: short(BULLET_HOMING_ANGLE)?,
+                    homing_angle_x: short(BULLET_HOMING_ANGLE_X)?,
+                    homing_begin: float(BULLET_HOMING_BEGIN)?,
+                    homing_stop_range: float(BULLET_HOMING_STOP)?,
+                    homing_offset: float(BULLET_HOMING_OFFSET)?,
+                    auto_homing: auto_homing & 0x10 != 0,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -1554,8 +1583,9 @@ mod tests {
         }
     }
 
-    /// A bullet row reads its flight, effects and child bullets at the offsets of its one layout, the follow type from
-    /// the low three bits of its byte and the speed inheritance from bit 0 of its; another revision or size is refused.
+    /// A bullet row reads its flight, effects, child bullets and homing at the offsets of its one layout, the follow
+    /// type from the low three bits of its byte, the speed inheritance from bit 0 of its and the auto-homing from bit 4
+    /// of its (here clear, every other bit set); another revision or size is refused.
     #[test]
     fn a_bullet_row_reads_its_flight_effects_and_children() {
         let mut row = vec![0u8; BULLET_ROW];
@@ -1580,6 +1610,9 @@ mod tests {
             (BULLET_INTERVAL_MIN, 0.1),
             (BULLET_INTERVAL_MAX, 0.2),
             (BULLET_INTERVAL_WAIT, 0.3),
+            (BULLET_HOMING_BEGIN, 1.5),
+            (BULLET_HOMING_STOP, 0.4),
+            (BULLET_HOMING_OFFSET, 0.25),
         ];
         for (at, v) in floats {
             row[at..][..4].copy_from_slice(&f32::to_le_bytes(v));
@@ -1587,6 +1620,9 @@ mod tests {
         // the bits above each field are other fields'
         row[BULLET_FOLLOW] = 0b1111_1010;
         row[BULLET_INHERIT_SPEED] = 0b1111_1111;
+        row[BULLET_AUTO_HOMING] = 0b1110_1111;
+        row[BULLET_HOMING_ANGLE..][..2].copy_from_slice(&35i16.to_le_bytes());
+        row[BULLET_HOMING_ANGLE_X..][..2].copy_from_slice(&(-1i16).to_le_bytes());
         let bytes = fixture(BULLET_PARAM_TYPE, BULLET_VERSION, BULLET_ROW, &[(10400100, row)]);
         let read = BulletParam::from_param(&Param::read(&bytes).unwrap()).unwrap();
         assert_eq!(
@@ -1614,6 +1650,12 @@ mod tests {
                 interval_max: 0.2,
                 interval_wait: 0.3,
                 inherit_speed: true,
+                homing_angle: 35,
+                homing_angle_x: -1,
+                homing_begin: 1.5,
+                homing_stop_range: 0.4,
+                homing_offset: 0.25,
+                auto_homing: false,
             })
         );
         assert_eq!(read.row(1), None);
