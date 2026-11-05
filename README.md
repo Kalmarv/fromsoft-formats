@@ -1,45 +1,58 @@
 # fromsoft-formats
 
-A Rust library that reads the data files of FromSoftware's Sekiro: Shadows Die Twice and Elden Ring: the installed archives, the containers around files, and the models, maps, materials, textures, params, text, events and collision inside them.
+A Rust library that reads and writes the data files of Sekiro: Shadows Die Twice and Elden Ring. It opens a game install's archives with keys you supply and parses the files inside them.
 
-<img src="docs/wolf-slash.webp" width="480" alt="Sekiro's Wolf swinging the Kusabimaru in a slash combo">
+## Features
 
-Sekiro's Wolf with the Kusabimaru in a slash combo (`a050_300000`). fromsoft-formats reads the game's files for it: the
-archives, DCX envelopes and BND4 binders, the FLVER models of his four outfit parts and of the sword, their TPF
-textures and MTD materials, and the animation's TAE events. [havok-formats](https://github.com/Kalmarv/havok-formats)
-reads the skeleton and the animation, [havok-cloth](https://github.com/Kalmarv/havok-cloth) steps the cloth of his
-outfit, and the frames are drawn with the game's own shader programs, lit by Poly Haven's Venice Sunset HDRI.
+- Opens the BHD5/BDT archives of an install and reads entries by archive path, one at a time or in parallel
+- Decodes DCX envelopes (DFLT, KRAK and ZSTD) and reads BND4 binders, including split BHF4/BDF4 binders
+- Reads FLVER models, TPF texture packages, CLM2 cloth data and `.grass` meshes
+- Reads MTD and MATBIN materials, shader METAPARAM files and Elden Ring shader and sampler names
+- Reads MSB map layouts, BTL light banks, GPARAM draw parameters and Sekiro's EDGE hang edges
+- Reads EMEVD event scripts and types their instructions against the community's EMEDF schema
+- Reads FXR effects, with all 72 action types found in the two games' files typed
+- Reads PARAM tables, binds them to Paramdex definitions and decrypts and encrypts Elden Ring's `regulation.bin`
+- Reads FMG text, TAE animation events (checked against event templates you supply) and Elden Ring PC saves
+- Reads map and object collision from Havok tagfiles through [havok-formats](https://github.com/Kalmarv/havok-formats)
+- Writes DCX, BND4, TPF, FMG, PARAM, `regulation.bin`, MTD, MATBIN, EMEVD, TAE, MSB and FLVER files
+- Rewrites a stock file it has read to the same bytes, except for compressed payloads it compresses again
+- Returns an `Error::Invalid` naming the format and byte offset for data it does not accept, instead of panicking
+- Keeps values as the file stores them, with no unit or coordinate conversion
+- Contains no `unsafe` code and ships no keys, path dictionaries, native libraries or game files
 
-It was written and checked against the Steam builds of Sekiro 1.06 (`sekiro.exe` 1.6.0.0) and Elden Ring
-(`eldenring.exe` 2.7.2.0). It reads, by name:
+## Getting Started
 
-- **Archives and containers.** BHD5/BDT archive indexes and their entries (RSA-wrapped index, AES-128 ranges), the path hashes of both games, DCX envelopes (DFLT, KRAK and ZSTD) and BND4 binders, including split BHF4/BDF4 binders.
-- **Models and textures.** FLVER2 models (versions `0x20013`, `0x20014`, `0x20016`, `0x2001a`, including Elden Ring's SpeedTree layouts), TPF texture packages (PC, DDS payloads kept whole, the pixel layout of each format code named), CLM2 cloth companions, `.grass` meshes (vertices with six grass densities and the tree of volumes over the triangles), the community's names for the words of a material's GX items (`flver::gx`).
-- **Materials and shaders.** Sekiro's MTD material definitions, Elden Ring's MATBIN materials, shader METAPARAM files (version 6), and Elden Ring's shader names and sampler names split into their parts (`shader`).
-- **Maps.** MSB map layouts (Sekiro's MSBS and Elden Ring's MSBE: models, parts, regions, events), BTL light banks (versions 15, 16 and 18, with the words the community's editor names and a running game identified), EDGE hang edges (Sekiro), GPARAM draw parameters (versions 3, 5 and 6), EMEVD event scripts (the 64-bit layout of both games, their instructions typed against the community's schema: names, argument types, flags, entities and map ids) and the part-state rules they set in Sekiro. Elden Ring's legacy maps (dungeons, catacombs, the sky map, the colosseums) are placed among the open-world tiles from the regulation's `WorldMapLegacyConvParam` (`overworld`).
-- **Effects.** FXR effect files (version 5, the layout of every file in both installs): the state machine, the tree of nodes, configs and actions with their properties and fields as stored; every action of the 72 types the installs hold typed (emitters, shapes, movement, billboards, sprites, mesh and trail particles, distortion, GPU particles, forces, lights; `fxr::actions`, `Fxr::typed`), the property functions evaluated and their modifiers decoded, the value sets named (`fxr::enums`), and the files an effect refers to (`fxr::resources`).
-- **Game data.** PARAM files (the NPC and grass params, both games' part-built NPC outfits through the equipment params, and Elden Ring's texture-level switch: `PartsDrawParam`, the asset geometry param's draw-param reference and the load balancer's draw-distance scales; and Elden Ring's bullets), FMG text and the NPC names built from it, TAE animation events (version `0x1000D`) and, from a template file you supply, their event names and typed parameters (`tae::template`), the `.blf` load lists of divided animation binders, the names of the hit-material classes, Elden Ring's PC character saves (`save`: each slot's arm style, active slots and equipped items, checked against the slot's MD5 and its item records), and map and object collision in Havok tagfiles (through [`havok-formats`](https://github.com/Kalmarv/havok-formats)).
+### Requirements
 
-It also writes some of them back, each proven by rebuilding every stock file of both installs from its parsed fields (and the 29 `regulation.bin` files held): DCX envelopes (`dcx::frame`, `dcx::encode`), BND4 and BHF4/BDF4 binders with their name hash tables (`Binder::write`), TPF packages (`Package::write`), FMG text files (`Fmg::write`), PARAM files (`Param::write`) and the AES layer of `regulation.bin` (`regulation`). The structure comes back byte for byte; the compressed payloads of an envelope that is compressed again do not.
+- Rust 1.99 or later (edition 2024).
+- Your own copy of Sekiro or Elden Ring and its archive keys, one PKCS#1 `RSA PUBLIC KEY` PEM per archive in a folder (`Data1.pem` to `Data5.pem` for Sekiro; `Data0.pem` to `Data3.pem`, `DLC.pem`, `sd.pem` and `regulation.key` for Elden Ring).
+- For Kraken-compressed files on Windows, the game's own `oo2core_6_win64.dll`. On other platforms a portable decoder is used and no library is needed.
+- A path list (`NameDictionary`) if you want to turn archive path hashes back into names, since the archives store only hashes.
 
-It needs a few things from you, because it ships none of them: the archive keys of your own install (one RSA public key per archive, and for Elden Ring the key of `regulation.bin`), which you keep as files in a folder and load with `Keys::from_folder`; the crate keeps them only in the `Keys` value you pass, the game's Oodle library (or, off Windows, a portable decoder) for Kraken-compressed files, and, to turn path hashes back into paths, a path list of your choosing. The crate holds no key material, no digests of it, no dictionary, no native library and no game file, and this repository does not contain or link to any.
+### Installation
 
-## Example
+```sh
+cargo add fromsoft-formats
+cargo add primase-foundations --features compress
+```
 
-This lists the members of Sekiro's param binder. It is `examples/list_binder.rs` in short form, and the same steps are compiled as a doc test in `src/lib.rs`.
+`primase-foundations` provides the `Oodle` handle that the DCX decoder takes.
 
-```rust,no_run
+### Usage
+
+This program lists the members of Sekiro's param binder:
+
+```rust
 use fromsoft_formats::{Binder, Game, Install, Keys, dcx::Decoder};
 use primase_foundations::compress::oodle::{Oodle, Version};
 use std::path::Path;
 
-#[allow(unsafe_code)] // loading the caller-trusted native decoder is explicitly unsafe
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // One PKCS#1 `RSA PUBLIC KEY` PEM per archive (`Data1.pem` ... `Data5.pem`), which you hold.
+    // One PEM per archive (Data1.pem ... Data5.pem), from a folder you hold.
     let keys = Keys::from_folder("keys", Game::Sekiro, None)?;
     let archive = Install::new("D:/Games/Sekiro", Game::Sekiro, keys).open()?;
 
-    // Kraken-compressed files need Oodle: the game's own library on Windows, a portable decoder elsewhere.
+    // The game's own Oodle library on Windows; pass None elsewhere for the portable decoder.
     // SAFETY: the library is the game's own.
     let oodle = unsafe { Oodle::open(Some(Path::new("D:/Games/Sekiro/oo2core_6_win64.dll")), Version::V6) }?;
     let decoder = Decoder { oodle: Some(&oodle), max_output: 1 << 30 };
@@ -52,93 +65,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-The reader of a single file takes its decompressed bytes and returns the file's contents, or an error that says what it refused and where:
+A reader of a single file takes its decompressed bytes and returns its contents or an error:
 
 ```rust
 use fromsoft_formats::{Error, flver::Model};
 
 let err = Model::read(b"not a FLVER file").unwrap_err();
 assert!(matches!(&err, Error::Invalid { format: "FLVER", offset: 0, .. }));
-println!("{err}");
 ```
 
-Add it with `cargo add fromsoft-formats` (or `fromsoft-formats = "0.12"` under `[dependencies]`). The API reference is on [docs.rs](https://docs.rs/fromsoft-formats).
-
-## What it guarantees
-
-- **Checked reads.** Every read of untrusted bytes goes through a bounds-checked view. Data that is shorter than it says, points outside itself, overlaps another part or holds a value the reader does not know is an `Error::Invalid` naming the format, the byte offset and what was expected. The readers are written to return that error rather than panic; this is exercised by hand-built bad inputs in the unit tests and by census tests that read the files of real installs, not by fuzzing, so a panic on a crafted file is a bug worth reporting.
-- **Nothing half-read.** Most readers require every byte of a file to be accounted for (up to a few bytes of zero padding), so a layout the reader does not know is refused instead of silently misread. Where a reader deliberately leaves part of a file uninterpreted (event scripts, GPARAM's opaque blocks, the type data of MSB regions and events), it keeps those bytes as stored or counts them.
-- **Values as stored.** Readers return what the file states, not what a game does with it: no unit conversion, no coordinate-system change, no guesses at the meaning of unknown fields (they are kept under their offsets).
-- **Bounded work.** Decoded sizes are capped by the `max_output` you give the `Decoder`, and most readers limit how many bytes a file's records may name, as a multiple of the input's size, so a hostile file cannot make them allocate or copy without limit.
-- **Deterministic.** Opening an install on any number of threads gives the same archive.
-- **Narrow side effects.** The crate has no `unsafe` code, makes no network connections and starts no processes. Only `archive` (the install's archives) and `game_params` (Elden Ring's `regulation.bin`) read files, and a lint enforces that.
-- **Lints.** The library denies `clippy::indexing_slicing`, `clippy::arithmetic_side_effects` and `clippy::cast_possible_truncation` outside tests, `unsafe_code`, and (`#![deny(missing_docs)]`) any public item without documentation. Exactly two items opt out of the strict lints, each with a stated reason: `affine::narrow` (a float narrowed to the nearest `f32`) and the vertex helper `exact_i32` in `flver` (a value checked integral and in range before the cast). The two modules that read files from disk, `archive` and `game_params`, also allow the lints that otherwise forbid file access.
-
-## What it does not do
-
-- It writes only DCX envelopes, BND4/BHF4 binders, TPF packages, FMG text files, PARAM files and `regulation.bin` (see below); it does not repack the BHD5/BDT archives or write any other format. A file it writes is not the original's bytes where a compressor decides them: the zlib, Kraken and zstd payloads it makes decode to the same data under the same header but are not the shipped payloads.
-- It does not decode pixels, convert models, meshes or animations to other formats, or interpret scripts and flags. It is a reader of the formats, not a converter.
-- It does not supply keys, dictionaries or the Oodle library, and it does not authenticate the SHA digests an archive index states (they are parsed and kept).
-- It does not enumerate archive paths: the indexes store hashes only, so you pass a path list (`NameDictionary`) for the names you want to find.
-- It reads only the formats and versions above (plus FMG's Dark Souls layout and GPARAM versions 3 and 6, which other games use). Other versions, and files from other FromSoftware games, are refused by name.
-- It is not a game or a mod loader.
-
-## Tests
+The repository has example programs that take the game, game folder, keys folder and Oodle library (or `-`) as their first arguments:
 
 ```sh
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo run --example list_binder -- sekiro "D:/Games/Sekiro" ./keys "D:/Games/Sekiro/oo2core_6_win64.dll" /param/gameparam/gameparam.parambnd.dcx
 ```
 
-These need no game files: the unit tests and the tests on hand-built fixtures run everywhere, and the tests that read a real install skip with a line naming the missing input.
+- `list_binder`: lists the members of one binder in the archives
+- `extract_binder`: writes the members of one binder to a folder
+- `find_material`: lists the map pieces of a layout whose materials match a pattern
+- `flver_keys`: lists hashes of the vertex and index data of FLVER models, for matching captured frames to files
+- `texture_tar`: writes the textures of matching TPF packages to stdout as a tar stream of DDS files
+- `rebuild_collision`: rebuilds a binder's compressed-mesh collision and writes it back
+- `read_bench`: times the archive read path stage by stage
 
-To run those against your own copies, write a TOML file and point the `GAME_DATA` environment variable at it. Every section and key is optional. Paths below are placeholders:
+Run the tests with `cargo test --workspace`. They need no game files; tests that read a real install skip unless the `GAME_DATA` configuration is set, as described in [docs/testing.md](docs/testing.md). See [CONTRIBUTING.md](CONTRIBUTING.md) for the checks CI runs and how to report a file the crate cannot read, and [docs/](docs/) for the crate's guarantees and limits. The API reference is on [docs.rs](https://docs.rs/fromsoft-formats).
 
-```toml
-[installs]
-sekiro = 'D:/placeholder/Sekiro'
-elden = 'D:/placeholder/ELDEN RING/Game'
-[keys]                                   # folders of the PEM files you hold
-sekiro = 'D:/placeholder/keys/sekiro'    # Data1.pem ... Data5.pem
-elden = 'D:/placeholder/keys/elden'      # Data0.pem ... Data3.pem, DLC.pem, sd.pem, sd_dlc02.pem, regulation.key
-[tools]
-oodle6 = 'D:/placeholder/Sekiro/oo2core_6_win64.dll'
-[oracles]
-root = 'D:/placeholder/oracles'          # reference output made by other readers, see below
-[scratch]
-root = 'D:/placeholder/scratch'
-[run]
-require = 'gate'                         # a missing gate input fails the test instead of skipping it
-gate = 'smoke'                           # or 'full': how much the heavy tests cover
-```
-
-[tests/inputs/README.md](tests/inputs/README.md) lists every input the tests read, what it is and where it comes from. Besides the installs, keys and Oodle library, some tests compare this crate's reading with the output of independent readers (SoulsFormats, SoulsFormatsNEXT, the fxr library, UXM's path lists) kept under `oracles.root`; those files are made by the user from their own installs and are not part of this repository. The file layout comes from [primase-testdata](https://github.com/Kalmarv/primase-testdata), which also has a sample.
-
-## Draw parameters and wind regions
-
-`msb::MapLayout::wind_sfx_region` reads a type-6 region as `WindSfxRegion` with the effect ID, wind-area index
-and retained unknown float, using each game's layout. Other region types return `None`.
-`param::PartsDrawParam`, `AssetGeometryParam` and `DrawDistScaleParam` expose Elden Ring's texture-switch distances,
-asset-to-draw-param references and distance-scale rows; unsupported revisions and row lengths are errors.
-`param::BulletParam` (through `game_params::read_bullet_param`) reads Elden Ring's bullets: their effects, life, speed,
-acceleration, gravity and the bullets they make, with each field's meaning as Paramdex describes it.
-`gparam::Gparam::time` retains the stored time axis; `TimeAxis::sampling` gives the source offset and period for
-sampling at the caller's hour. Reading the fields does not choose a texture form or weather for the caller.
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md), including how to report a file this crate cannot read.
-
-## Related work
-
-The layouts follow the community's documentation of these formats, chiefly SoulsFormats and SoulsFormatsNEXT (names of unknown fields follow them), Paramdex and Smithbox (param layouts), the fxr project (the names, types and defaults of the effect actions' parameters; Unlicense), and UXM (archive lists and path hashes); the tests check this crate's readings against theirs. Used by [primase](https://github.com/Kalmarv/primase), a game-asset conversion library.
-
-## Check the examples
-
-From the repository root, `cargo test -p fromsoft-formats --doc` checks the crate documentation, and
-`cargo build -p fromsoft-formats --examples` builds its example programs. Examples that read paths need the caller's files; the repository ships no game assets.
-
-## Licence
-
-GPL-3.0-or-later; see [LICENSE](LICENSE). Dependencies that are forks of other projects keep their upstream licences.
+Licensed under GPL-3.0-or-later; see [LICENSE](LICENSE).
