@@ -58,7 +58,7 @@ havok-formats = { version = "0.9.0", git = "https://github.com/Kalmarv/havok-for
 md-5 = { version = "=0.11.0", default-features = false }
 num-bigint = { version = "=0.5.1", default-features = false, features = ["std"] }
 primase-foundations = "0.3.2"
-primase-testdata = { version = "0.1.6", git = "https://github.com/Kalmarv/primase-testdata", rev = "62b344c8ad5c9659e72c3ebb1ee4800a01ffabc0" }
+primase-testdata = "0.1.8"
 serde = { version = "1", default-features = false, features = ["std", "derive"] }
 serde_json = { version = "=1.0.154", default-features = false, features = ["std", "preserve_order", "float_roundtrip"] }
 sha2 = { version = "=0.11.1", default-features = false }
