@@ -1,7 +1,36 @@
 # Changelog
 
-## Unreleased
+## 0.15.0 (2026-11-06)
 
+- **Breaking:** `equipment::resolve_outfit` and `OutfitParts` are gone: the crate no longer chooses an NPC's gender and
+  level spellings. `outfit_candidates` reads every supported spelling of each slot with its archive presence
+  (`OutfitCandidates`, `OutfitSlotCandidates`, `PartCandidate`), and `NpcOutfit::candidates` replaces `parts` and
+  `chosen_by_presence`; choosing among them is the consumer's. `read_initializer` and `read_protector` give the checked
+  records (`InitializerRecord`: the four protector references and the sex byte; `ProtectorRecord`: model, category and
+  gender), negative IDs and unknown gender modes as stored. `PLAYER_CHARACTER` is the player model, `c0000`.
+- `Archive::scan`: every wanted entry of the archives in one pass over the BDTs, decoded, with `visit` on the
+  configured threads (entries in no particular order, each once; a panic in `visit` is returned);
+  `Archive::scan_stored` is the same pass without the decoding. The whole-install censuses read through it.
+- `envmap`: Elden Ring and Sekiro environment packages: their identities (`packages`, `texture_identity`,
+  `region_identity`), each package's member headers without the texture payloads (`inventory`), and the MSB box fields
+  that go with them (`box_fields`, `irradiance_box_fields`).
+- `listing`: an archive path's asset kind (`classify`, `AssetKind`), and `Listing`, the BHD entries joined with a name
+  dictionary. Nothing is chosen.
+- `material_events`: Elden Ring's `MaterialExParam` rows (revision 4, `read_rows`) and the structural TAE event 198
+  records (`Event198`); unknown words keep both their integer and float views.
+- `weapon_params`: Sekiro's and Elden Ring's `EquipParamWeapon` and `WepAbsorpPosParam` rows (`layouts`, `WeaponRow`,
+  `Holds`), with all eight trace slots and every stored dummy value.
+- `flver::gxmd`: the version-123 GXMD record framing of FLVER material extensions, every payload word kept.
+  `flver::display_marks` gives the display-mask groups a material name's `#NN#` markers name.
+- `paths`: the named archive paths readers and catalogues share (`COMMON_EFFECTS`, `map_collision_stem`,
+  `map_collision_member` and the rest).
+- `collision`: `hit_meaning`, `hit_filter_meaning` and `motion_kind` name authored collision classes, filters and body
+  motion kinds per game; every raw ID is kept and unknown values stay explicit.
+- `tae::ELDEN_TRANSITION_END`: Elden Ring's event kind 16, whose end the game reads for an incoming clip's transition.
+- `examples/find_material`: Elden Ring map binders are found under their area folder, so open-world terrain is
+  scanned.
+- Depends on primase-foundations 0.3.2 (for `scan`, behind `Archive::scan`) and havok-formats 0.9.0; dxcontainer 0.4.0 is a
+  dev-dependency.
 - `param::BulletParam` and `game_params::read_bullet_param`: Elden Ring's bullets (`BULLET_PARAM_ST`; revision 4, 272-byte rows as the 1.17.3 regulation stores them, laid out by Paramdex's definition). `Bullet` reads a row's effects (`sfxId_Bullet`, `sfxId_Hit`, `sfxId_Flick`), life and its random range, its flight (`initVellocity`, `accelInRange` and `accelOutRange`, `accelTime`, `maxVellocity`, `minVellocity`, `dist`, `gravityInRange` and `gravityOutRange`), its homing (`homingAngle`, `homingAngleX`, `homingBeginDist`, `hormingStopRange`, `hormingOffsetRange`, and `isEnableAutoHoming`, bit 4 of the byte at 156), its follow type and the bullets it makes (`HitBulletID`, `intervalCreateBulletId` with its times, `isInheritSpeedToChild`). Any other type, revision or row size is refused, as is another game's install. `tests/paramdef_census.rs` checks every field on all 15,475 rows of regulation 11730034 against the Smithbox-typed values, and Glintstone Pebble's and Glintstone Shard's rows (10400000, 10400100).
 - `examples/flver_keys`: each vertex buffer's and face set's line has a fourth column, a JSON object of the mesh that draws it (its index, material name, `mtd`, the FLVER's texture bindings) and the game's own definition of that material by the stem of its name: an Elden Ring MATBIN's shader, source, params by name and samplers (all 20,619 of the four material binders read), or a Sekiro MTD's shader, params and textures (all 3,170 of `/mtd/allmaterialbnd.mtdbnd.dcx` read). `locum-cli` shows it with the buffer's name, so a draw gives its material and authored values: an Elden Ring frame's draws of `AEG210_212` name face sets 0, 3 and 6 with materials `m10_00_664`, `m10_00_680` and `m10_00_681`, and the textures the first draw bound are the ones its MATBIN names at the same `Texture2D` numbers.
 - `Game::mtd_binders`: the binders holding the game's MTD material definitions (Sekiro's `/mtd/allmaterialbnd.mtdbnd.dcx`).
