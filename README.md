@@ -1,5 +1,7 @@
 # fromsoft-formats
 
+[![crates.io: fromsoft-formats](https://img.shields.io/crates/v/fromsoft-formats?label=fromsoft-formats)](https://crates.io/crates/fromsoft-formats) [![docs.rs](https://img.shields.io/docsrs/fromsoft-formats)](https://docs.rs/fromsoft-formats) [![CI](https://img.shields.io/github/actions/workflow/status/Kalmarv/fromsoft-formats/ci.yml?branch=main&label=CI)](https://github.com/Kalmarv/fromsoft-formats/actions/workflows/ci.yml)
+
 A Rust library that reads and writes the data files of Sekiro: Shadows Die Twice and Elden Ring. It opens a game install's archives with keys you supply and parses the files inside them.
 
 ## Features
