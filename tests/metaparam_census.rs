@@ -1,11 +1,12 @@
-//! Every metaparam of the install's shader bundles (`/shader/shaderbdle.shaderbdlebnd.dcx`, 248 bundles): 232 read, the
-//! 16 of version 4 (the old lightmap shaders and `sfx_AMSN_cloth`) refused as another version, with the counts of
-//! what they declare. The 232 files were compared field by field with the third-party SoulsFormatsNEXT reader
+//! Every metaparam of the install's shader bundles (`/shader/shaderbdle.shaderbdlebnd.dcx`, 248 bundles) reads, with
+//! the counts of what they declare, from the install and from the bundles cut from it (`corpus.sekiro/shader-binders`):
+//! 232 of version 6 and 16 of version 4 (the old lightmap shaders and `sfx_AMSN_cloth`), each lightmap one its
+//! version-6 sibling but for the version and a zero shader ID. The 232 version-6 files were compared field by field with the third-party SoulsFormatsNEXT reader
 //! (`METAPARAM`, built from its source; it takes Sekiro's colour parameters, type 12 where it says 13, only with that
 //! one value allowed): textures, render passes, CAParams and MtdParams, no difference. Each program's extension agrees
 //! with the shader type of its DXBC container, counted by stage.
 //!
-//! Needs `installs.sekiro` and `tools.oodle6`.
+//! Needs `installs.sekiro` and `tools.oodle6`, or `corpus.sekiro/shader-binders`.
 #![allow(clippy::unwrap_used)]
 mod inputs;
 
@@ -43,7 +44,7 @@ fn every_metaparam_of_the_install() {
     )
     .unwrap();
     assert_eq!(outer.files.len(), 248);
-    let (mut read, mut refused) = (0, 0);
+    let mut versions = BTreeMap::new();
     let mut declared = [0usize; 4];
     let mut stages: BTreeMap<(String, u32), usize> = BTreeMap::new();
     for bundle in &outer.files {
@@ -51,19 +52,9 @@ fn every_metaparam_of_the_install() {
             let name = f.name.as_deref().unwrap();
             let extension = name.rsplit_once('.').unwrap().1.to_owned();
             if extension == "metaparam" {
-                match Metaparam::read(&f.bytes) {
-                    Ok(m) => {
-                        read += 1;
-                        declared[0] += m.textures.len();
-                        declared[1] += m.passes.len();
-                        declared[2] += m.ca_params.len();
-                        declared[3] += m.mtd_params.len();
-                    }
-                    Err(e) => {
-                        assert!(e.to_string().contains("version"), "{name}: {e}");
-                        refused += 1;
-                    }
-                }
+                let m = Metaparam::read(&f.bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+                *versions.entry(m.version).or_insert(0) += 1;
+                add(&mut declared, &m);
                 continue;
             }
             let chunks = dxcontainer::chunks(&f.bytes).unwrap();
@@ -75,8 +66,8 @@ fn every_metaparam_of_the_install() {
             *stages.entry((extension, shader_type)).or_default() += 1;
         }
     }
-    assert_eq!((read, refused), (232, 16));
-    assert_eq!(declared, [1352, 1160, 773, 1535]);
+    assert_eq!(versions, BTreeMap::from([(4, 16), (6, 232)]));
+    assert_eq!(declared, DECLARED);
     // .ppo pixel (0), .vpo vertex (1), .hpo hull (3), .dpo domain (4)
     let stages: Vec<_> = stages.into_iter().collect();
     assert_eq!(
@@ -88,6 +79,78 @@ fn every_metaparam_of_the_install() {
             (("vpo".into(), 1), 5_747)
         ]
     );
+}
+
+/// The textures, render passes, CAParams and MtdParams of the 248 bundles' metaparams: 1,352, 1,160, 773 and 1,535 of
+/// the 232 of version 6 (counted before version 4 was read), the rest version 4's.
+const DECLARED: [usize; 4] = [1352 + 201, 1160 + 80, 773 + 54, 1535 + 1];
+
+fn add(declared: &mut [usize; 4], m: &Metaparam) {
+    declared[0] += m.textures.len();
+    declared[1] += m.passes.len();
+    declared[2] += m.ca_params.len();
+    declared[3] += m.mtd_params.len();
+}
+
+#[test]
+fn every_metaparam_of_the_bundles_cut_from_the_install() {
+    let Some(dir) = inputs::oracle(inputs::OracleSet::Corpus, inputs::Game::Sekiro, "shader-binders") else {
+        return;
+    };
+    let dir = dir.join("shaderbdle");
+    let mut bundles: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    bundles.sort();
+    assert_eq!(bundles.len(), 248);
+    let read = |name: &str| {
+        let bytes = std::fs::read(dir.join(name).join(format!("{name}.metaparam"))).unwrap();
+        let m = Metaparam::read(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        (bytes, m)
+    };
+    let mut declared = [[0usize; 4]; 2];
+    let mut old = Vec::new();
+    for name in &bundles {
+        let (bytes, m) = read(name);
+        match m.version {
+            6 => add(&mut declared[1], &m),
+            4 => {
+                add(&mut declared[0], &m);
+                assert_eq!(m.shader_id, 0, "{name}");
+                old.push(name.clone());
+                // the lightmap shaders are their version-6 siblings with neither version nor shader ID
+                if let Some(sibling) = name.strip_suffix("_lightmap") {
+                    let (sibling_bytes, six) = read(sibling);
+                    assert_eq!(six.version, 6, "{sibling}");
+                    assert_eq!(
+                        Metaparam {
+                            version: 6,
+                            shader_id: six.shader_id,
+                            ..m
+                        },
+                        six,
+                        "{name}"
+                    );
+                    let differ: Vec<usize> = (0..bytes.len().max(sibling_bytes.len()))
+                        .filter(|&i| bytes.get(i) != sibling_bytes.get(i))
+                        .collect();
+                    assert!(
+                        differ.iter().all(|&i| i == 8 || (0x58..0x5c).contains(&i)),
+                        "{name}: {differ:x?}"
+                    );
+                }
+            }
+            v => panic!("{name}: version {v}"),
+        }
+    }
+    let lightmap = old.iter().filter(|n| n.ends_with("_lightmap")).count();
+    assert_eq!((old.len(), lightmap), (16, 15), "{old:?}");
+    assert!(old.contains(&"sfx_AMSN_cloth".to_owned()));
+    // version 6 as counted from the install itself, before version 4 was read
+    assert_eq!(declared[1], [1352, 1160, 773, 1535]);
+    let total: Vec<usize> = (0..4).map(|i| declared[0][i] + declared[1][i]).collect();
+    assert_eq!(total, DECLARED, "version 4: {:?}", declared[0]);
 }
 
 /// A JSON value with every negative integer taken as its 32-bit word: the reference writes some words signed.

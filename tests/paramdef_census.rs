@@ -93,7 +93,7 @@ fn digest(typed: &TypedParam<'_>) -> String {
 #[derive(Default, Debug)]
 struct Tally {
     members: usize,
-    /// Members `Param::read` refused (the 32-bit form).
+    /// Members `Param::read` refused.
     unread: Vec<String>,
     bound: usize,
     rows: usize,

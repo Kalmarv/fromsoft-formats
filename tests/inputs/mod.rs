@@ -82,6 +82,12 @@ primase_testdata::inputs! {
             about: r#"one area's high-resolution map collision as its binder stores it: loose Havok 2016.2 tagfiles and the compendium they share, every body and compressed mesh read; tests/collision.rs; schema in https://github.com/Kalmarv/primase/tree/main/toolkit/havok/README.md"#,
             source: r#"the game's own files from the user's install: the extraction example https://github.com/Kalmarv/primase/tree/main/worlds/fromsoft/examples/corpus_sekiro_havok.rs (the area's `h*.hkxbhd`/`.hkxbdt` binder, each member out of its DCX envelope)"#,
         },
+        Query::Oracle(OracleSet::Corpus, Game::Sekiro, "shader-binders") => {
+            status: Live,
+            gate: true,
+            about: r#"the members of the shader binders, one folder per binder (`grass`, `gxdecal`, ... `gxshader`) and `shaderbdle`, one folder per bundle of `/shader/shaderbdle.shaderbdlebnd.dcx` (248, each holding its `.metaparam` and its programs); tests/metaparam_census.rs"#,
+            source: r#"the game's own files from the user's install: `examples/extract_binder` over each `/shader/*.shaderbnd.dcx` and each bundle of `shaderbdle.shaderbdlebnd.dcx`, members as stored"#,
+        },
         Query::Oracle(OracleSet::Corpus, Game::Sekiro, "havok-soup") => {
             status: Live,
             gate: true,

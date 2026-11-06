@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.16.0 (2026-11-06)
+
+- **Breaking:** `param::Stored` gains `format` (a `param::Format`: byte order, the header's format bytes 0x2D and
+  0x2E, and the paramdef format version) and `type_fill`. `Param::read` reads every PARAM layout SoulsFormats knows: the
+  32-bit data offset form (Sekiro's `default_AIStandardInfoBank`, `default_EnemyBehaviorBank` and
+  `MenuColorTableParam`, refused before), the 64-bit form, the old form whose data offset is the header's u16, big
+  endian, a param type stored inline or by offset, and UTF-16 or Shift-JIS row names; `Param::write` writes each back
+  to the same bytes. A file may end with up to 15 zero bytes (Elden Ring's and Sekiro's graphics-quality params end
+  with 9 to 15).
+
 ## 0.15.0 (2026-11-06)
 
 - **Breaking:** `equipment::resolve_outfit` and `OutfitParts` are gone: the crate no longer chooses an NPC's gender and
