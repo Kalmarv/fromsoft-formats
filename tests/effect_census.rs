@@ -1,8 +1,7 @@
 //! The effect census of each configured game (`tests/census/effects.rs`): every effect binder, animation event file, map
 //! layout and event script reads, every effect file is counted once under exactly one combination of the kinds of record
-//! that reach it (or none), and the only param tables the census goes without are the three of Sekiro's that the param
-//! reader does not read (the two behaviour banks' defaults and the menu colour table, whose headers carry format flags 1
-//! and 2), and where Smithbox's param meta is configured, the param rule takes beyond it only fields that hold effect
+//! that reach it (or none), every param table reads (Sekiro's three of the 32-bit form among them), and where Smithbox's
+//! param meta is configured, the param rule takes beyond it only fields that hold effect
 //! files alone. `cargo run --release --example census -- effects <game>` prints the same report and what changed since the
 //! last run.
 mod census;
@@ -30,23 +29,14 @@ fn what_starts_each_effect() -> Result<()> {
             "{}: entries refused: {refused:?}",
             game.name()
         );
-        let tables: Vec<&str> = report
+        let tables: Vec<&String> = report
             .failures
             .iter()
-            .filter_map(|f| f.strip_prefix("param ")?.split(':').next())
+            .filter(|f| f.starts_with("param "))
             .collect();
-        let expected: &[&str] = match game {
-            Game::Sekiro => &[
-                "default_AIStandardInfoBank",
-                "default_EnemyBehaviorBank",
-                "MenuColorTableParam",
-            ],
-            Game::EldenRing => &[],
-        };
-        assert_eq!(
-            tables,
-            expected,
-            "{}: param tables the census goes without",
+        assert!(
+            tables.is_empty(),
+            "{}: param tables the census goes without: {tables:?}",
             game.name()
         );
         // the param rule against Smithbox's param meta, where it is configured: each field the meta opens is a field of

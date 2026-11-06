@@ -556,11 +556,10 @@ fn sekiro_archives() -> Result<()> {
             ("tpf byte-equal", 14_481),
             ("fmg files", 504),
             ("fmg byte-equal", 504),
-            // the 32-bit form (3) and the graphics-quality params with more than 8 trailing zero bytes (12)
+            // the 32-bit form (3) and the graphics-quality params with up to 15 trailing zero bytes (12) among them
             ("param files", 193),
-            ("param refused", 15),
-            ("param byte-equal", 178),
-            ("param derived read back equal", 178),
+            ("param byte-equal", 193),
+            ("param derived read back equal", 193),
         ],
     );
     Ok(())
@@ -589,9 +588,8 @@ fn elden_ring_archives() -> Result<()> {
             // three files hold unreferenced zero bytes between their strings, which the writer leaves out
             ("fmg normalised, read back equal", 3),
             ("param files", 45),
-            ("param refused", 12),
-            ("param byte-equal", 33),
-            ("param derived read back equal", 33),
+            ("param byte-equal", 45),
+            ("param derived read back equal", 45),
         ],
     );
     Ok(())

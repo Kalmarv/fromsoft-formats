@@ -1,9 +1,11 @@
-//! METAPARAM (`SMD`, version 6): what a shader bundle's programs need to be bound, as the bundle's
-//! `<shader>.metaparam` states it. Its texture slots (name, default texture, UV group, slot, type), the sampler masks
-//! each render pass binds per stage, and the parameters the programs read through `SAT_CAParam` and `SAT_MtdParam`
-//! (offsets in the constant buffer, defaults, name hashes). Every length, offset and zero field is checked; a file
-//! that breaks one is refused with its offset. Names follow the third-party SoulsFormatsNEXT reader of the format;
-//! a field it calls unknown is kept under its offset.
+//! METAPARAM (`SMD`, version 6, and Sekiro's older version 4): what a shader bundle's programs need to be bound, as
+//! the bundle's `<shader>.metaparam` states it. Its texture slots (name, default texture, UV group, slot, type), the
+//! sampler masks each render pass binds per stage, and the parameters the programs read through `SAT_CAParam` and
+//! `SAT_MtdParam` (offsets in the constant buffer, defaults, name hashes). Every length, offset and zero field is
+//! checked; a file that breaks one is refused with its offset. Version 4 (Sekiro's 15 `*_lightmap` shaders and
+//! `sfx_AMSN_cloth`) is laid out as version 6: each of the lightmap files is byte for byte its version-6 sibling's
+//! (`FourBlend_lightmap` and `FourBlend`) but for the version and the shader ID, which is zero. Names follow the
+//! third-party SoulsFormatsNEXT reader of the format; a field it calls unknown is kept under its offset.
 use crate::{
     Result,
     bytes::{Budget, View},
@@ -11,6 +13,8 @@ use crate::{
 };
 
 const FORMAT: &str = "METAPARAM";
+/// The versions read: both have one layout.
+pub const VERSIONS: [u32; 2] = [4, 6];
 
 /// The `N` of a `Texture2D_N` in a texture slot's or a program resource's name: the number both name a texture by
 /// (`C_DetailBlend__snp_Texture2D_7_AlbedoMap` and the program's `C_DetailBlend_snp_0_Texture2D_7`). A slot's
@@ -130,9 +134,11 @@ impl MtdParam {
 /// A shader's parameter definition.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Metaparam {
+    /// The stored version: 6, or 4 in Sekiro's older shaders.
+    pub version: u32,
     /// Constant-buffer size in bytes.
     pub constant_buffer_size: u32,
-    /// The shader's stored ID.
+    /// The shader's stored ID (zero in version 4).
     pub shader_id: u32,
     /// Feature flags: 0x10 declares CAParams, 0x100 the vertex stage reads the material's parameters, 0x10000 the
     /// shader is tessellated.
@@ -230,7 +236,7 @@ impl Reader<'_> {
 }
 
 impl Metaparam {
-    /// Read a `.metaparam` file (decompressed). Version 6 only; every length, offset and zero field is checked.
+    /// Read a `.metaparam` file (decompressed), version 6 or 4; every length, offset and zero field is checked.
     pub fn read(data: &[u8]) -> Result<Self> {
         let r = Reader {
             v: View {
@@ -243,7 +249,8 @@ impl Metaparam {
         };
         r.v.expect(0, b"SMD\0")?;
         r.v.expect(4, &[0; 4])?;
-        if r.v.u32(8)? != 6 {
+        let version = r.v.u32(8)?;
+        if !VERSIONS.contains(&version) {
             return Err(invalid(FORMAT, 8, "version"));
         }
         let texture_count = r.count(0xc, 48)?;
@@ -342,6 +349,7 @@ impl Metaparam {
             });
         }
         Ok(Metaparam {
+            version,
             constant_buffer_size: r.v.u32(0x34)?,
             shader_id: r.v.u32(0x58)?,
             flags: r.v.u32(0x38)?,
@@ -484,6 +492,7 @@ mod tests {
             ),
             (0x40, 0x1234, 0x10, 0xabcd, 8)
         );
+        assert_eq!(m.version, 6);
         assert_eq!((m.unknown_30, m.unknown_40, m.unknown_50), (0x401, 2, 7));
         assert_eq!(m.ca_param_components, 1);
         assert_eq!(
@@ -545,10 +554,28 @@ mod tests {
     }
 
     #[test]
+    fn version_4_reads_as_version_6() {
+        let six = fixture();
+        let mut four = six.clone();
+        four[8] = 4;
+        four[0x58..0x5c].fill(0); // no shader ID
+        let (six, four) = (Metaparam::read(&six).unwrap(), Metaparam::read(&four).unwrap());
+        assert_eq!((four.version, four.shader_id), (4, 0));
+        assert_eq!(
+            Metaparam {
+                version: 6,
+                shader_id: six.shader_id,
+                ..four
+            },
+            six
+        );
+    }
+
+    #[test]
     fn what_it_cannot_read_is_refused_with_its_offset() {
         let good = fixture();
         let mut bad = good.clone();
-        bad[8] = 4; // another version
+        bad[8] = 5; // another version
         assert!(Metaparam::read(&bad).unwrap_err().to_string().contains("version"));
         let mut bad = good.clone();
         bad[0x5c] = 1; // padding

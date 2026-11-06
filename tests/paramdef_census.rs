@@ -93,7 +93,7 @@ fn digest(typed: &TypedParam<'_>) -> String {
 #[derive(Default, Debug)]
 struct Tally {
     members: usize,
-    /// Members `Param::read` refused (the 32-bit form).
+    /// Members `Param::read` refused.
     unread: Vec<String>,
     bound: usize,
     rows: usize,
@@ -428,8 +428,8 @@ fn every_param_of_the_installs_binds() -> Result<()> {
             Game::Sekiro,
             Data::Sekiro,
             138,
-            3,
-            36_083,
+            0,
+            36_226,
             0,
             checked(1_279, 166, 0, 0, 0, 0),
         ),

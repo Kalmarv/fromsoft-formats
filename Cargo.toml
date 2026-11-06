@@ -41,7 +41,7 @@ workspace = true
 
 
 [workspace.package]
-version = "0.15.0"
+version = "0.16.0"
 edition = "2024"
 rust-version = "1.99"
 license = "GPL-3.0-or-later"
@@ -58,7 +58,7 @@ havok-formats = { version = "0.9.0", git = "https://github.com/Kalmarv/havok-for
 md-5 = { version = "=0.11.0", default-features = false }
 num-bigint = { version = "=0.5.1", default-features = false, features = ["std"] }
 primase-foundations = "0.3.2"
-primase-testdata = "0.1.8"
+primase-testdata = "0.1.9"
 serde = { version = "1", default-features = false, features = ["std", "derive"] }
 serde_json = { version = "=1.0.154", default-features = false, features = ["std", "preserve_order", "float_roundtrip"] }
 sha2 = { version = "=0.11.1", default-features = false }

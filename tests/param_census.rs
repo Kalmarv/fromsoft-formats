@@ -3,7 +3,8 @@
 //!
 //! The counts are those of an independent census of the same files (a separate parser of the PARAM header and rows,
 //! run over the installs' decoded binders, Elden Ring 1.17.3): a file ends with up to eight zero
-//! bytes, no gap lies between its parts, and the only members refused are Sekiro's three params of the 32-bit form.
+//! bytes, no gap lies between its parts, and every member reads, Sekiro's three params of the 32-bit form (with real
+//! row names) among them.
 //!
 //! Needs `installs.elden`, `keys.elden`, `installs.sekiro`, `keys.sekiro` and `tools.oodle6`; a test whose game is not
 //! configured does nothing.
@@ -47,8 +48,8 @@ fn members(
 }
 
 #[test]
-fn every_param_of_the_installs_reads_but_the_32_bit_form() -> Result<()> {
-    for (game, total, refused) in [
+fn every_param_of_the_installs_reads() -> Result<()> {
+    for (game, total, thirty_two_bit) in [
         (Game::EldenRing, 194, &[][..]),
         (
             Game::Sekiro,
@@ -73,7 +74,16 @@ fn every_param_of_the_installs_reads_but_the_32_bit_form() -> Result<()> {
         let mut refusals = Vec::new();
         let mut rows = 0;
         for (name, read) in &members {
+            let leaf = name
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap()
+                .trim_end_matches(".param");
             match read {
+                Ok(param) if thirty_two_bit.contains(&leaf) => {
+                    // the 32-bit form, whose rows have names of their own
+                    rows += param.rows.len();
+                }
                 Ok(param) => {
                     rows += param.rows.len();
                     // every row of a 0x85-form param shares one name offset: the empty string, or none has one
@@ -88,22 +98,14 @@ fn every_param_of_the_installs_reads_but_the_32_bit_form() -> Result<()> {
                     );
                     assert!(param.unk06 <= 2, "{name}: unk06 {}", param.unk06);
                 }
-                Err(why) => {
-                    assert!(why.contains("format flags"), "{name}: {why}");
-                    refusals.push(
-                        name.rsplit(['/', '\\'])
-                            .next()
-                            .unwrap()
-                            .trim_end_matches(".param")
-                            .to_owned(),
-                    );
-                }
+                Err(why) => refusals.push(format!("{leaf}: {why}")),
             }
         }
-        refusals.sort();
-        let mut want: Vec<String> = refused.iter().map(|s| (*s).to_owned()).collect();
-        want.sort();
-        assert_eq!(refusals, want, "{}: the members refused", game.name());
+        assert!(
+            refusals.is_empty(),
+            "{}: the members refused: {refusals:?}",
+            game.name()
+        );
         println!(
             "{}: {} of {} read, {rows} rows",
             game.name(),

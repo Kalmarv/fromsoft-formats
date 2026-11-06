@@ -3,9 +3,11 @@
 //! and Elden Ring's texture-level switch: `PartsDrawParam`, the asset geometry param's draw-param reference and the
 //! load balancer's draw-distance scales; and Elden Ring's bullets, `BulletParam`).
 //!
-//! [`Param::read`] is strict about the layout Sekiro's and Elden Ring's params share (little-endian, 64-bit offsets,
-//! the param type named by an offset, UTF-16 row names): the header, the row table, the rows' data, the param type
-//! string and the row names account for every byte of the file, apart from up to eight zero bytes at its end. It keeps each row's
+//! [`Param::read`] reads every layout of the format ([`Format`]: either byte order, the row data's offset in a u16, a
+//! 32-bit or a 64-bit word, the param type by offset or in the header, UTF-16 or Shift-JIS row names), Sekiro's and
+//! Elden Ring's (little-endian, 64-bit offsets, the type by offset, UTF-16 names) and the older 32-bit form of Sekiro's
+//! AI and menu banks among them. It is strict about it: the header, the row table, the rows' data, the param type
+//! string and the row names account for every byte of the file, apart from up to 15 zero bytes at its end. It keeps each row's
 //! data as stored; what the bytes mean is the field layout of the param type's definition, which the file does not
 //! carry. The only layout this module reads is [`NpcParam`]'s, for the one group of fields it reads (the 32
 //! `modelDispMask` bits), at the offsets each game states ([`NpcLayout`], [`crate::Game::npc_param`]); the other fields
@@ -13,21 +15,79 @@
 use crate::{Result, bytes::View, bytes::coverage_split, invalid};
 
 const FORMAT: &str = "PARAM";
-/// The header, up to the row table.
-const HEADER: usize = 0x40;
-/// A row's entry in the row table: id, zero, data offset, name offset.
-const ROW_ENTRY: usize = 24;
-/// Format flags 1 of Sekiro's and Elden Ring's params: the param type string by offset (0x80), 64-bit offsets (0x04) and
-/// the unexplained low flag (0x01).
-const FORMAT_2D: u8 = 0x85;
-/// Format flags 2 of Sekiro's and Elden Ring's params: UTF-16 row names (0x01) and two flags whose meaning is not
-/// established. The byte after them (0x2f) is zero in every param of both games.
-const FORMAT_2E: u8 = 0x07;
+/// The header up to the row table when the row data's offset follows the format bytes (a 32- or 64-bit word at 0x30).
+const WIDE_HEADER: usize = 0x40;
+/// The header up to the row table when the row data's offset is the u16 at 0x04.
+const NARROW_HEADER: usize = 0x30;
+/// The zero bytes after the row table of a file whose format flags 1 are exactly 0x01.
+const TABLE_PADDING: usize = 0x20;
 /// The zero padding allowed between the parts of the file: none (the parts follow each other directly).
 const GAP: usize = 0;
 /// The zero bytes a file may end with after its last part: two after the shared empty row name, or eight after the
-/// param type when no row has a name.
-const TAIL: usize = 8;
+/// param type when no row has a name; the archives' graphics-quality params (`Gconfig_*.param`) end in 4 to 15.
+const TAIL: usize = 15;
+
+/// How a PARAM file is laid out: its bytes 0x2c to 0x2f. SoulsFormats' `PARAM` names the flags.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Format {
+    /// Whether the file is big-endian (byte 0x2c is 0xff; 0 in a little-endian file).
+    pub big_endian: bool,
+    /// Format flags 1 (byte 0x2d). 0x01 and 0x02 together: the row data's offset is a 32-bit word at 0x30 and a row's
+    /// entry 12 bytes (u32 id, data offset, name offset); 0x04: a 64-bit word and 24 bytes (u32 id, u32 0, u64 data
+    /// offset, u64 name offset); neither: the row data's offset is the u16 at 0x04, the row table starts at 0x30 and
+    /// an entry is 12 bytes, followed by 32 zero bytes when the flags are exactly 0x01. 0x80: the param type is a
+    /// string the u64 at 0x10 points to; without it, the type fills the header's 32 bytes at 0x0c.
+    pub flags_2d: u8,
+    /// Format flags 2 (byte 0x2e). 0x01: the row names are UTF-16; without it, Shift-JIS.
+    pub flags_2e: u8,
+    /// The paramdef format version (byte 0x2f).
+    pub paramdef_format_version: u8,
+}
+
+impl Format {
+    /// Sekiro's and Elden Ring's params: little-endian, 64-bit offsets (0x04), the param type by offset (0x80), the
+    /// unexplained low flag (0x01), UTF-16 row names and two flags whose meaning is not established (0x07).
+    pub const SEKIRO: Format = Format {
+        big_endian: false,
+        flags_2d: 0x85,
+        flags_2e: 0x07,
+        paramdef_format_version: 0,
+    };
+
+    /// Whether the row data's offset is a 32-bit word at 0x30.
+    fn int_offset(self) -> bool {
+        self.flags_2d & 0x03 == 0x03
+    }
+
+    /// Whether the row data's offset is a 64-bit word at 0x30 (and a row's offsets 64-bit).
+    fn long_offset(self) -> bool {
+        !self.int_offset() && self.flags_2d & 0x04 != 0
+    }
+
+    fn header(self) -> usize {
+        if self.int_offset() || self.long_offset() {
+            WIDE_HEADER
+        } else {
+            NARROW_HEADER
+        }
+    }
+
+    fn row_entry(self) -> usize {
+        if self.flags_2d & 0x04 != 0 { 24 } else { 12 }
+    }
+
+    fn type_by_offset(self) -> bool {
+        self.flags_2d & 0x80 != 0
+    }
+
+    fn unicode_names(self) -> bool {
+        self.flags_2e & 0x01 != 0
+    }
+
+    fn table_padding(self) -> usize {
+        if self.flags_2d == 0x01 { TABLE_PADDING } else { 0 }
+    }
+}
 
 /// One row as stored.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,8 +96,8 @@ pub struct Row {
     pub id: i32,
     /// The row's name; `None` when the row has no name offset. In the params this reader accepts, the rows that have an
     /// offset all share one empty string, so the name is `Some("")` (or no row has an offset): the names people use come
-    /// from community lists, not the game. Real names exist only in the older 32-bit form of Sekiro's AI and menu
-    /// banks, which is refused.
+    /// from community lists, not the game. Real names exist in the older 32-bit form of Sekiro's AI and menu banks
+    /// and in the graphics-quality params.
     pub name: Option<String>,
     /// The row's bytes, `row_size` of them.
     pub data: Vec<u8>,
@@ -59,8 +119,8 @@ pub struct Param {
     pub rows: Vec<Row>,
 }
 
-/// The two facts of a PARAM file that its rows do not say and no reader here uses, kept so that [`Param::write`] can
-/// write the file again byte for byte.
+/// The facts of a PARAM file that its rows do not say, kept so that [`Param::write`] can write the file again byte for
+/// byte: its layout, and the two fields no reader here uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Stored {
     /// The header's first word, which the game's tools state as the start of the strings: the param type's offset
@@ -69,18 +129,25 @@ pub struct Stored {
     /// the two a file has follows the tool version that wrote it, not the param).
     pub strings_offset: u32,
     /// Zero bytes after the last string: 0 or 8 when no row has a name, 2 after the one shared empty name. The
-    /// graphics-quality params of the archives (`Gconfig_*.param`, 24 files with real row names) end in 4 to 15, and
-    /// those with more than 8 are refused by [`Param::read`], whose limit is 8.
+    /// graphics-quality params of the archives (`Gconfig_*.param`, 24 files with real row names) end in 4 to 15; more
+    /// than 15 is refused.
     pub padding: usize,
+    /// The file's byte order and format flags.
+    pub format: Format,
+    /// The byte filling the header's 32-byte param type field after the type's NUL, in a file that stores the type
+    /// there ([`Format::flags_2d`] without 0x80); 0 otherwise.
+    pub type_fill: u8,
 }
 
 impl Stored {
-    /// What the tools write for `param` more often than not: the strings offset rounded up to 16, and the padding of
-    /// the common cases (none when no row has a name, 2 when some row has).
+    /// What the tools write for `param` in Sekiro's and Elden Ring's layout more often than not: the strings offset
+    /// rounded up to 16, and the padding of the common cases (none when no row has a name, 2 when some row has).
     pub fn derived(param: &Param) -> Stored {
         let rows = param.rows.len();
-        let type_offset = HEADER
-            .saturating_add(rows.saturating_mul(ROW_ENTRY))
+        let format = Format::SEKIRO;
+        let type_offset = format
+            .header()
+            .saturating_add(rows.saturating_mul(format.row_entry()))
             .saturating_add(rows.saturating_mul(param.row_size));
         let rounded = type_offset.saturating_add(type_offset.wrapping_neg() & 15);
         Stored {
@@ -90,6 +157,8 @@ impl Stored {
             } else {
                 0
             },
+            format,
+            type_fill: 0,
         }
     }
 }
@@ -110,45 +179,60 @@ fn utf16(v: &View<'_>, offset: usize) -> Result<(String, usize)> {
 }
 
 impl Param {
-    /// Read the file `data`, a param of the layout Sekiro and Elden Ring share.
+    /// Read the file `data`, a param of any layout ([`Format`]).
     pub fn read(data: &[u8]) -> Result<Param> {
         Ok(Self::read_stored(data)?.0)
     }
 
     /// [`Param::read`] and the [`Stored`] facts of the file, for [`Param::write`].
     pub fn read_stored(data: &[u8]) -> Result<(Param, Stored)> {
-        let v = View {
+        let big_endian = match (View {
             data,
             format: FORMAT,
             be: false,
             base: 0,
+        })
+        .u8(0x2c)?
+        {
+            0 => false,
+            0xff => true,
+            b => {
+                return Err(invalid(
+                    FORMAT,
+                    0x2c,
+                    format!("byte order {b:#04x}, where 0 and 0xff are read"),
+                ));
+            }
         };
-        // The strings offset at 0 is not trusted (the format's other readers do not use it either): the param type
-        // and the names are found by their own offsets.
-        if v.u8(0x2c)? != 0 {
-            return Err(invalid(FORMAT, 0x2c, "big-endian params are not read"));
-        }
-        let (f2d, f2e) = (v.u8(0x2d)?, v.u8(0x2e)?);
-        if f2d != FORMAT_2D || f2e != FORMAT_2E {
+        let v = View {
+            data,
+            format: FORMAT,
+            be: big_endian,
+            base: 0,
+        };
+        let format = Format {
+            big_endian,
+            flags_2d: v.u8(0x2d)?,
+            flags_2e: v.u8(0x2e)?,
+            paramdef_format_version: v.u8(0x2f)?,
+        };
+        let header = format.header();
+        let entry = format.row_entry();
+        let short_data_start = v.u16(0x04)?;
+        if header == WIDE_HEADER && short_data_start != 0 {
             return Err(invalid(
                 FORMAT,
-                0x2d,
-                format!(
-                    "format flags {f2d:#04x} {f2e:#04x}, the ones read are {FORMAT_2D:#04x} {FORMAT_2E:#04x}"
-                ),
+                0x04,
+                "a data offset in the u16 of a file that states it after the format",
             ));
         }
-        v.expect(0x04, &[0, 0])?;
         let unk06 = v.u16(0x06)?;
         let data_version = v.u16(0x08)?;
         let count = usize::from(v.u16(0x0a)?);
-        v.expect(0x0c, &[0; 4])?;
-        let type_offset =
-            usize::try_from(v.u64(0x10)?).map_err(|_| invalid(FORMAT, 0x10, "size overflow"))?;
-        v.expect(0x18, &[0; 0x14])?;
-        let data_start = usize::try_from(v.u64(0x30)?).map_err(|_| invalid(FORMAT, 0x30, "size overflow"))?;
-        v.expect(0x38, &[0; 8])?;
-        let (param_type, type_len) = {
+        let (param_type, type_span, type_fill) = if format.type_by_offset() {
+            v.expect(0x0c, &[0; 4])?;
+            let type_offset = v.size(0x10)?;
+            v.expect(0x18, &[0; 0x14])?;
             let rest = data
                 .get(type_offset..)
                 .ok_or_else(|| invalid(FORMAT, type_offset, "param type beyond the file"))?;
@@ -156,34 +240,66 @@ impl Param {
                 .iter()
                 .position(|&b| b == 0)
                 .ok_or_else(|| invalid(FORMAT, type_offset, "param type not terminated"))?;
-            let text = rest
-                .get(..end)
-                .and_then(|name| std::str::from_utf8(name).ok())
-                .filter(|t| t.is_ascii())
-                .ok_or_else(|| invalid(FORMAT, type_offset, "param type is not ASCII"))?;
-            (text.to_owned(), end.saturating_add(1))
+            (
+                ascii(rest.get(..end), type_offset)?,
+                Some((type_offset, end.saturating_add(1))),
+                0,
+            )
+        } else {
+            // in the header's 32 bytes: the name, then a NUL and a fill byte to the end of the field when it is shorter
+            let field = v.slice(0x0c, 0x20)?;
+            let end = field.iter().position(|&b| b == 0).unwrap_or(field.len());
+            let fill = field.get(end.saturating_add(1)..).unwrap_or_default();
+            let fill_byte = fill.first().copied().unwrap_or(0);
+            if fill.iter().any(|&b| b != fill_byte) {
+                return Err(invalid(
+                    FORMAT,
+                    0x0c,
+                    "the param type's field is not one byte after its name",
+                ));
+            }
+            (ascii(field.get(..end), 0x0c)?, None, fill_byte)
+        };
+        let data_start = if format.int_offset() {
+            v.expect(0x34, &[0; 12])?;
+            usize::try_from(v.u32(0x30)?).map_err(|_| invalid(FORMAT, 0x30, "size overflow"))?
+        } else if format.long_offset() {
+            v.expect(0x38, &[0; 8])?;
+            v.size(0x30)?
+        } else {
+            usize::from(short_data_start)
         };
 
         let mut entries = Vec::with_capacity(count);
         for i in 0..count {
-            let at = v.element(HEADER, i, ROW_ENTRY)?;
+            let at = v.element(header, i, entry)?;
             let id = v.u32(at)? as i32;
-            v.expect(v.at(at, 4)?, &[0; 4])?;
-            let (offset_at, name_at) = (v.at(at, 8)?, v.at(at, 16)?);
-            let offset = v.size(offset_at)?;
-            let name = v.size(name_at)?;
+            let (offset, name) = if entry == 24 {
+                v.expect(v.at(at, 4)?, &[0; 4])?;
+                (v.size(v.at(at, 8)?)?, v.size(v.at(at, 16)?)?)
+            } else {
+                let word = |o: usize| -> Result<usize> {
+                    usize::try_from(v.u32(o)?).map_err(|_| invalid(FORMAT, o, "size overflow"))
+                };
+                (word(v.at(at, 4)?)?, word(v.at(at, 8)?)?)
+            };
             entries.push((at, id, offset, name));
         }
+        let table_end = v.element(header, count, entry)?;
 
-        // The rows' data runs from the first row to the strings that follow it, in equal strides.
+        // The rows' data runs from the first row to the strings that follow it, in equal strides; with no strings after
+        // it (no row name and the type in the header), to the strings offset the header states.
         let strings = entries
             .iter()
             .map(|e| e.3)
             .filter(|&n| n != 0)
-            .chain(std::iter::once(type_offset))
-            .min()
-            .unwrap_or(type_offset);
-        let span = strings
+            .chain(type_span.map(|t| t.0))
+            .min();
+        let data_end = match strings {
+            Some(s) => s,
+            None => usize::try_from(v.u32(0)?).map_err(|_| invalid(FORMAT, 0, "size overflow"))?,
+        };
+        let span = data_end
             .checked_sub(data_start)
             .ok_or_else(|| invalid(FORMAT, 0x30, "row data starts after the strings"))?;
         let row_size = if count == 0 {
@@ -200,28 +316,35 @@ impl Param {
             ));
         };
         let mut rows = Vec::with_capacity(count);
-        let mut spans = vec![
-            (0, HEADER),
-            (HEADER, v.element(0, count, ROW_ENTRY)?),
-            (type_offset, type_len),
-        ];
+        let mut spans = vec![(0, header), (header, table_end.saturating_sub(header))];
+        if format.table_padding() > 0 {
+            v.expect(table_end, &[0; TABLE_PADDING])?;
+            spans.push((table_end, TABLE_PADDING));
+        }
+        spans.extend(type_span);
         if count > 0 {
             spans.push((data_start, span));
         }
         let mut names: Vec<(usize, usize)> = Vec::new();
-        let mut strings_end = type_offset.saturating_add(type_len);
+        let mut strings_end = type_span.map_or(data_start.saturating_add(span), |(at, len)| {
+            at.saturating_add(len)
+        });
         for (i, &(at, id, offset, name)) in entries.iter().enumerate() {
             if offset != v.element(data_start, i, row_size)? {
                 return Err(invalid(
                     FORMAT,
-                    v.at(at, 8)?,
+                    v.at(at, 4)?,
                     format!("row {id} data at {offset:#x}, not in stride after the first"),
                 ));
             }
             let name = if name == 0 {
                 None
             } else {
-                let (text, len) = utf16(&v, name)?;
+                let (text, len) = if format.unicode_names() {
+                    utf16(&v, name)?
+                } else {
+                    shift_jis(data, name)?
+                };
                 names.push((name, len));
                 strings_end = strings_end.max(name.saturating_add(len));
                 Some(text)
@@ -247,9 +370,35 @@ impl Param {
             Stored {
                 strings_offset: v.u32(0)?,
                 padding: data.len().saturating_sub(strings_end),
+                format,
+                type_fill,
             },
         ))
     }
+}
+
+/// `bytes` as ASCII text (the param type), refused at `at` when absent or not ASCII.
+fn ascii(bytes: Option<&[u8]>, at: usize) -> Result<String> {
+    bytes
+        .and_then(|name| std::str::from_utf8(name).ok())
+        .filter(|t| t.is_ascii())
+        .map(str::to_owned)
+        .ok_or_else(|| invalid(FORMAT, at, "param type is not ASCII"))
+}
+
+/// The NUL-terminated Shift-JIS string at `offset` and its length in bytes with the NUL.
+fn shift_jis(data: &[u8], offset: usize) -> Result<(String, usize)> {
+    let rest = data
+        .get(offset..)
+        .ok_or_else(|| invalid(FORMAT, offset, "row name beyond the file"))?;
+    let end = rest
+        .iter()
+        .position(|&b| b == 0)
+        .ok_or_else(|| invalid(FORMAT, offset, "row name not terminated"))?;
+    let text = encoding_rs::SHIFT_JIS
+        .decode_without_bom_handling_and_without_replacement(rest.get(..end).unwrap_or_default())
+        .ok_or_else(|| invalid(FORMAT, offset, "row name is not Shift-JIS"))?;
+    Ok((text.into_owned(), end.saturating_add(1)))
 }
 
 /// One row of the NPC param (`NPC_PARAM_ST`): its id and the 32 display mask bits.
@@ -1155,6 +1304,12 @@ fn field<const N: usize>(row: &Row, at: usize) -> Result<[u8; N]> {
 mod tests {
     use super::*;
 
+    /// Sekiro's and Elden Ring's layout: the header, a row's entry and the format flags.
+    const HEADER: usize = WIDE_HEADER;
+    const ROW_ENTRY: usize = 24;
+    const FORMAT_2D: u8 = Format::SEKIRO.flags_2d;
+    const FORMAT_2E: u8 = Format::SEKIRO.flags_2e;
+
     /// A param of `rows` (id, data), all of `size` bytes, every row named the empty string.
     pub(crate) fn fixture(param_type: &str, version: u16, size: usize, rows: &[(i32, Vec<u8>)]) -> Vec<u8> {
         let n = rows.len();
@@ -1270,10 +1425,17 @@ mod tests {
         Param::read(&bytes).unwrap();
         bytes.extend_from_slice(&[1; 8]);
         assert!(Param::read(&bytes).is_err());
+        // other format flags are another layout, which these bytes don't hold: without 0x80 the type is in the
+        // header's 32 bytes, where this file has the type's offset
         let mut flags = one(1);
         flags[0x2d] = 0x04;
         let e = Param::read(&flags).unwrap_err().to_string();
-        assert!(e.contains("format flags"), "{e}");
+        assert!(e.contains("param type"), "{e}");
+        // a byte order byte other than 0 and 0xff
+        let mut order = one(1);
+        order[0x2c] = 1;
+        let e = Param::read(&order).unwrap_err().to_string();
+        assert!(e.contains("byte order 0x01"), "{e}");
         let mut stride = fixture(
             NPC_PARAM_TYPE,
             l.data_version,
@@ -1389,8 +1551,9 @@ mod tests {
     }
 
     #[test]
-    fn a_file_may_end_with_eight_zero_bytes_after_its_last_part_and_no_more() {
-        // a param no row of which has a name: the type string is the last part, and the file ends 8 zero bytes after it
+    fn a_file_may_end_with_up_to_fifteen_zero_bytes_after_its_last_part_and_no_more() {
+        // a param no row of which has a name: the type string is the last part, and the file ends in zero bytes after
+        // it: 8 in the tools' params with no names, 4 to 15 in the graphics-quality params (`Gconfig_*.param`)
         let l = Game::Sekiro.npc_param();
         let named = fixture(NPC_PARAM_TYPE, l.data_version, l.row_size, &[(1, npc_row(&l, 1))]);
         let unnamed = |tail: usize| {
@@ -1399,11 +1562,13 @@ mod tests {
             b.resize(b.len() + tail, 0);
             b
         };
-        for tail in [0, 2, 8] {
-            let p = Param::read(&unnamed(tail)).unwrap();
+        for tail in [0, 2, 8, 9, 15] {
+            let (p, stored) = Param::read_stored(&unnamed(tail)).unwrap();
             assert_eq!(p.rows[0].name, None);
+            assert_eq!(stored.padding, tail);
+            assert_eq!(p.write(&stored).unwrap(), unnamed(tail));
         }
-        let e = Param::read(&unnamed(9)).unwrap_err().to_string();
+        let e = Param::read(&unnamed(16)).unwrap_err().to_string();
         assert!(e.contains("unaccounted trailing bytes"), "{e}");
         // between the parts nothing is allowed: two zero bytes between the type string and the row name
         let mut gap = named.clone();
