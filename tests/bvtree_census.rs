@@ -1,12 +1,13 @@
 //! The bounding-volume trees of every compressed mesh the installs' map and object collision hold: every mesh tree
 //! (5-byte nodes) and every section tree (4-byte nodes) decodes, their leaves name each section and each primitive
-//! exactly once, every section's `leafIndex` is its leaf's node, and each mesh's simd tree names its triangles, quads and
-//! custom primitives once each. The counts are those of the census that found the rules (Sekiro 3,344 mesh trees and
-//! 273,228 section trees; Elden Ring 22,899 and 722,405, once the name dictionary names every archive entry) and of a
-//! second decoder run over the same files.
+//! exactly once, every section's `leafIndex` is its leaf's node, and each mesh's simd tree names its triangles, quads
+//! and custom primitives once each. The counts are those of the census that found the rules (Sekiro 3,344 mesh trees
+//! and 273,228 section trees; Elden Ring 37,746 and 949,214 with Shadow of the Erdtree installed, 22,899 and 722,405
+//! without, once the name dictionary names every archive entry) and of a second decoder run over the same files.
 //!
 //! Every triangle and quad is also tested against the box of its leaf, and every simd leaf against its primitive: the
-//! counts inside, off by rounding and outside are asserted as found, so a change to a decoder or to the box rule moves them.
+//! counts inside, off by rounding and outside are asserted as found, so a change to a decoder or to the box rule moves
+//! them.
 //!
 //! The meshes are read two ways: walked in the tagfiles (`direct`, which holds every mesh) and through
 //! [`collision::read_map`] (the map `h` and `l` binders) and [`collision::read_bodies`] (Sekiro's `obj/*.objbnd`, Elden
@@ -17,6 +18,9 @@
 //!
 //! The binders are those the games' name dictionaries give. Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`,
 //! `tools.oodle6` and `oracles.uxm.{sekiro,elden}/dictionary.txt`; a game that is not configured is skipped.
+//!
+//! The Elden Ring numbers of that census are the base game's: with Shadow of the Erdtree installed the numbers asserted
+//! are this test's own, and with the expansion's archives left out it gives the census's.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod common;
 mod inputs;
@@ -353,8 +357,8 @@ fn sekiros_trees_decode_with_the_census_totals() -> Result<()> {
     Ok(())
 }
 
-/// Elden Ring: 23,280 tagfiles of the map `h`/`l` and asset collision (the `f` sets hold no compressed mesh): 22,899
-/// mesh trees of 722,405 sections and 58,630,675 primitives, 58,628,330 of them triangles or quads.
+/// Elden Ring: 34,959 tagfiles of the map `h`/`l` and asset collision (the `f` sets hold no compressed mesh): 37,746
+/// mesh trees of 949,214 sections and 76,645,635 primitives, 76,642,598 of them triangles or quads.
 #[test]
 fn elden_rings_trees_decode_with_the_census_totals() -> Result<()> {
     let Some(t) = totals(Game::EldenRing)? else {
@@ -363,17 +367,17 @@ fn elden_rings_trees_decode_with_the_census_totals() -> Result<()> {
     check(
         &t,
         &Expected {
-            files: 23_280,
-            mesh_trees: 22_899,
-            section_trees: 722_405,
-            primitives: 58_630_675,
-            nodes: 117_960_859,
-            boxes: (58_537_786, 90_544, 0),
-            inverted_boxes: 18_577,
-            leafless_simd_trees: 347,
-            simd_nodes: 22_831_521,
-            simd_leaves: (58_575_737, 657, 1_953, 0, 35),
-            simd_children_exact: 22_785_723,
+            files: 34_959,
+            mesh_trees: 37_746,
+            section_trees: 949_214,
+            primitives: 76_645_635,
+            nodes: 154_202_741,
+            boxes: (76_534_428, 108_170, 0),
+            inverted_boxes: 19_848,
+            leafless_simd_trees: 356,
+            simd_nodes: 29_874_173,
+            simd_leaves: (76_588_176, 722, 2_831, 0, 70),
+            simd_children_exact: 29_798_681,
         },
     );
     Ok(())

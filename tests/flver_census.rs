@@ -2,6 +2,10 @@
 //! SoulsFormats' census of Sekiro, SoulsFormatsNEXT's of Elden Ring. Every model must agree with the reference, and the
 //! counts of what the reference does not compare must equal an independent census of the same models.
 //! `cargo run --release --example census -- flver <game>` prints the same report and what changed since the last run.
+//!
+//! Elden Ring's reference census is of the install with Shadow of the Erdtree (`census-sote`); the counts of what it does
+//! not compare are this test's own over the same models (with the expansion's archives left out, the independent
+//! census's).
 mod census;
 mod common;
 mod inputs;
@@ -46,28 +50,28 @@ fn all_flver_models() -> Result<()> {
                 ("other dummies with an attach bone and no flag1", 0),
             ],
             Game::EldenRing => &[
-                ("bones", 535_503),
-                ("box valid", 139_011),
-                ("box sentinel", 396_492),
+                ("bones", 619_093),
+                ("box valid", 173_076),
+                ("box sentinel", 446_017),
                 ("box neither", 0),
-                ("first child is not the lowest-indexed child", 37),
+                ("first child is not the lowest-indexed child", 59),
                 ("flags above the low four bits", 0),
-                ("bit 1 set", 363_132),
+                ("bit 1 set", 407_892),
                 ("bit 1 set on a bone that has children or is named", 0),
-                ("bit 2 set", 24_493),
+                ("bit 2 set", 32_159),
                 ("bit 2 set on a bone no dummy names", 0),
-                ("bones a dummy names without bit 2", 771),
-                ("face sets", 277_113),
-                ("dummies", 88_340),
-                ("dummies with flag1", 69_004),
-                ("dummies with an attach bone", 71_059),
-                ("dummies in single-bone models", 2_205),
-                ("single-bone dummies with an attach bone and flag1", 29),
-                ("single-bone dummies with an attach bone and no flag1", 2_157),
+                ("bones a dummy names without bit 2", 1_092),
+                ("face sets", 341_297),
+                ("dummies", 114_351),
+                ("dummies with flag1", 90_703),
+                ("dummies with an attach bone", 93_348),
+                ("dummies in single-bone models", 2_869),
+                ("single-bone dummies with an attach bone and flag1", 31),
+                ("single-bone dummies with an attach bone and no flag1", 2_789),
                 ("single-bone dummies with no attach bone and flag1", 0),
-                ("single-bone dummies with no attach bone and no flag1", 19),
-                ("other dummies where flag1 follows the attach bone", 86_033),
-                ("other dummies with flag1 and no attach bone", 102),
+                ("single-bone dummies with no attach bone and no flag1", 49),
+                ("other dummies where flag1 follows the attach bone", 111_338),
+                ("other dummies with flag1 and no attach bone", 144),
                 ("other dummies with an attach bone and no flag1", 0),
             ],
         };
@@ -77,7 +81,7 @@ fn all_flver_models() -> Result<()> {
         }
         let (ones, maximum) = match game {
             Game::Sekiro => (85_996, 371),
-            Game::EldenRing => (149_048, 285),
+            Game::EldenRing => (202_391, 302),
         };
         let words = report.values.get("face set word +6").ok_or("no face set words")?;
         assert_eq!(

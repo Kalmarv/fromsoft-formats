@@ -3,19 +3,20 @@
 //!
 //! Topology. Leaf boxes are the primitives' decoded vertices grown by the shape's convex radius; a section is used when
 //! every primitive has a box. (1) Every maximal subtree of 3 to 16 leaves of a section tree is rebuilt from its leaves'
-//! boxes by `sah_shape` (which merges up to `MERGE_LEAVES` = 16 leaves from the bottom, always the two nodes whose union has
-//! the least surface area) and its inner nodes compared as sets of leaves; the subtrees of every size from 3 to 17 leaves
-//! are also compared with a pure bottom-up merge (`sah_shape_with(.., usize::MAX)`): the rate falls from two thirds at 16
-//! leaves to under a tenth at 17. (2) The first child of a stock node has the larger surface in 20,184,136 nodes of Sekiro
-//! and 53,597,280 of Elden Ring, the smaller in 417,276 and 1,699,537. (3) A section is a subtree cut at 127
-//! primitives: of the pairs of sibling sections of the mesh trees all but 6 (Sekiro) and 82 (Elden Ring) hold more than
-//! 127 together. (4) The total surface of the inner nodes of `sah_shape` trees against the stock trees and
-//! `balanced_shape` trees.
+//! boxes by `sah_shape` (which merges up to `MERGE_LEAVES` = 16 leaves from the bottom, always the two nodes whose
+//! union has the least surface area) and its inner nodes compared as sets of leaves; the subtrees of every size from 3
+//! to 17 leaves are also compared with a pure bottom-up merge (`sah_shape_with(.., usize::MAX)`): the rate falls from
+//! two thirds at 16 leaves to under a tenth at 17. (2) The first child of a stock node has the larger surface in
+//! 20,184,136 nodes of Sekiro and 70,126,886 of Elden Ring (53,597,280), the smaller in 417,276 and 2,150,002
+//! (1,699,537). (3) A section is a subtree cut at 127 primitives: of the pairs of sibling sections of the mesh trees
+//! all but 6 (Sekiro) and 84 (Elden Ring; 82) hold more than 127 together. (4) The total surface of the inner nodes of
+//! `sah_shape` trees against the stock trees and `balanced_shape` trees.
 //!
 //! The counts are those of the census over the same files (probe mode `topogate`, which compiles a copy of the
-//! builder's text): they are not copied from a run of this test. Needs `installs.{sekiro,elden}`,
-//! `keys.{sekiro,elden}`, `tools.oodle6` and `oracles.uxm.{sekiro,elden}/dictionary.txt`; a game that is not configured is
-//! skipped.
+//! builder's text): they are not copied from a run of this test; the Elden Ring counts in parentheses are the census's
+//! of the base game; with Shadow of the Erdtree installed the counts asserted are this test's own (with the expansion's
+//! archives left out it gives the census's). Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6` and
+//! `oracles.uxm.{sekiro,elden}/dictionary.txt`; a game that is not configured is skipped.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod common;
 mod hkwalk;
@@ -370,15 +371,15 @@ fn elden_rings_trees_follow_the_surface_area_rule_below_17_leaves() -> Result<()
     let Some(t) = totals(Game::EldenRing)? else {
         return Ok(());
     };
-    assert_eq!((t.sections_used, t.sections_skipped), (720_770, 1_635));
-    assert_eq!((t.subtrees, t.subtrees_exact), (5_454_605, 4_101_023));
-    assert_eq!((t.clusters, t.clusters_reproduced), (52_922_096, 49_443_727));
-    assert_eq!(t.by_size[&3], (8_281_964, 8_103_833));
-    assert_eq!(t.by_size[&16], (359_481, 237_979));
-    assert_eq!(t.by_size[&17], (317_884, 27_467));
+    assert_eq!((t.sections_used, t.sections_skipped), (947_189, 2_025));
+    assert_eq!((t.subtrees, t.subtrees_exact), (7_134_906, 5_373_673));
+    assert_eq!((t.clusters, t.clusters_reproduced), (69_182_470, 64_700_600));
+    assert_eq!(t.by_size[&3], (10_888_723, 10_653_916));
+    assert_eq!(t.by_size[&16], (469_767, 311_086));
+    assert_eq!(t.by_size[&17], (416_090, 35_500));
     assert_eq!(
         (t.first_larger, t.first_equal, t.first_smaller),
-        (53_597_280, 2_465_256, 1_699_537)
+        (70_126_886, 3_238_701, 2_150_002)
     );
     assert_eq!(
         (
@@ -387,10 +388,10 @@ fn elden_rings_trees_follow_the_surface_area_rule_below_17_leaves() -> Result<()
             t.equal_other_first_as_many,
             t.equal_other_first_fewer
         ),
-        (2_279_779, 119_836, 44_000, 21_641)
+        (2_988_706, 161_862, 59_940, 28_193)
     );
-    assert_eq!((t.sibling_pairs, t.sibling_pairs_over_127), (274_943, 274_861));
-    assert_eq!((t.costed, t.sah_no_worse), (719_647, 668_361));
+    assert_eq!((t.sibling_pairs, t.sibling_pairs_over_127), (358_192, 358_108));
+    assert_eq!((t.costed, t.sah_no_worse), (945_640, 877_589));
     assert!(t.sah_surface < 0.95 * t.stock_surface, "{t:?}");
     assert!(t.balanced_surface > 1.25 * t.stock_surface, "{t:?}");
     Ok(())

@@ -1,23 +1,25 @@
-//! The sections of the stock compressed meshes against the primitive tree of `havok-formats` (`StockTree`) and its cut, on
-//! every compressed mesh of both installs that has the custom parameter (`pParam`) with the source triangles.
+//! The sections of the stock compressed meshes against the primitive tree of `havok-formats` (`StockTree`) and its cut,
+//! on every compressed mesh of both installs that has the custom parameter (`pParam`) with the source triangles.
 //!
 //! For each mesh the source triangles are the rows of `pParam.triangleDataArray` that the mesh holds (a row's entry of
 //! `triangleIndexToShapeKey` gives its key, and the key's section is the stock section). The rows are paired into quads
 //! (`pair_quads`), the quads are the first leaves (in the order the pairing takes them) and the other rows the next (in
-//! row order), each leaf's box is its vertices' box grown by the shape's convex radius, a `StockTree` is built over them and
-//! cut into sections of at most 127 leaves and 255 distinct vertices, and the sections are compared with the stock ones
-//! (as sets of rows, and in order).
+//! row order), each leaf's box is its vertices' box grown by the shape's convex radius, a `StockTree` is built over
+//! them and cut into sections of at most 127 leaves and 255 distinct vertices, and the sections are compared with the
+//! stock ones (as sets of rows, and in order).
 //!
 //! The tree and the cut are not the stock tool in every detail, and the vertices here are the ones the files keep after
 //! quantising them, where the stock tool worked from the ones before: a different rounding of a box can send a leaf to
-//! another bin or another child. Of the meshes with two sections or more, 592 of 2,613 in Sekiro and 4,577 of 14,218 in
-//! Elden Ring come out with exactly their stock sections in their stock order, and the mesh tree above the sections is the
-//! stock mesh tree in all of them; 202,885 of the 264,453 stock sections of those meshes in Sekiro and 441,322 of 713,169 in
-//! Elden Ring are among the sections the cut finds.
+//! another bin or another child. Of the meshes with two sections or more, 592 of 2,613 in Sekiro and 7,204 of 21,168 in
+//! Elden Ring (4,577 of 14,218) come out with exactly their stock sections in their stock order, and the mesh tree
+//! above the sections is the stock mesh tree in all of them; 202,885 of the 264,453 stock sections of those meshes in
+//! Sekiro and 575,187 of 932,072 in Elden Ring (441,322 of 713,169) are among the sections the cut finds.
 //!
 //! The counts are those of the census over the same files with the scratch probe's copy of the modules (probe mode
-//! `treecrate`), not copied from a run of this test. Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`,
-//! `tools.oodle6` and `oracles.uxm.{sekiro,elden}/dictionary.txt`; a game that is not configured is skipped.
+//! `treecrate`), not copied from a run of this test: the Elden Ring counts in parentheses are the census's of the base
+//! game; with Shadow of the Erdtree installed the counts asserted are this test's own (with the expansion's archives
+//! left out it gives the census's). Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6` and
+//! `oracles.uxm.{sekiro,elden}/dictionary.txt`; a game that is not configured is skipped.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod common;
 mod hkwalk;
@@ -204,8 +206,8 @@ fn elden_rings_sections_are_mostly_what_the_cut_finds() -> Result<()> {
     let Some(t) = totals(Game::EldenRing)? else {
         return Ok(());
     };
-    assert_eq!((t.meshes, t.multi_section_meshes), (22_775, 14_218));
-    assert_eq!((t.exact_meshes, t.exact_mesh_trees), (4_577, 4_577));
-    assert_eq!((t.stock_sections, t.sections_found), (713_169, 441_322));
+    assert_eq!((t.meshes, t.multi_section_meshes), (37_614, 21_168));
+    assert_eq!((t.exact_meshes, t.exact_mesh_trees), (7_204, 7_204));
+    assert_eq!((t.stock_sections, t.sections_found), (932_072, 575_187));
     Ok(())
 }

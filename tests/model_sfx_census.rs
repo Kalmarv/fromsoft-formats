@@ -1,18 +1,21 @@
 //! The references from map data to effects that a placed light can come through, over every map layout of both installs
-//! (Sekiro's 10, Elden Ring's 935) and the model effect params: SFX regions (`MapLayout::sfx_region`), an Elden Ring
+//! (Sekiro's 10, Elden Ring's 1,347) and the model effect params: SFX regions (`MapLayout::sfx_region`), an Elden Ring
 //! asset's `sfxParamRelativeId` (`Part::sfx_param_relative_id`) and the rows of Sekiro's `ModelSfxParam` and Elden
 //! Ring's `AssetModelSfxParam` (`ModelSfxParam`).
 //!
-//! The totals asserted are those of an independent census (a Python walk of the decoded layouts and of the params typed
-//! by the Smithbox paramdefs, reading no output of this crate): 1,872 and 1,523 SFX regions, and for Elden Ring's
-//! 421,253 asset parts of `AEGnnn_mmm` models 409,246 with relative id -1, 11,533 whose `(nnn * 1000 + mmm) * 1000 + id`
-//! row the param holds and 474 whose row it lacks. A discriminating scan of every 16-bit word of the asset type data
-//! found only the word at +0x1c to be -1 or a row's id in that way (4,100 positive values that name a row, 16 that do
-//! not, 409,246 of -1; the next best word names a row for 966 parts and misses 69,758). The rows are also compared
-//! field by field with the paramdef reading of the same params.
+//! The totals were those of an independent census of the base game (a Python walk of the decoded layouts and of the
+//! params typed by the Smithbox paramdefs, reading no output of this crate): 1,872 and 1,523 SFX regions, and for Elden
+//! Ring's 421,253 asset parts of `AEGnnn_mmm` models 409,246 with relative id -1, 11,533 whose `(nnn * 1000 + mmm) *
+//! 1000 + id` row the param holds and 474 whose row it lacks. With Shadow of the Erdtree installed the Elden Ring
+//! totals asserted are this test's own (with the expansion's archives left out it gives the census's): 1,770 SFX
+//! regions, and of 624,987 asset parts 606,564 with -1, 17,698 naming a row and 725 an absent one. A discriminating
+//! scan of the base game of every 16-bit word of the asset type data found only the word at +0x1c to be -1 or a row's
+//! id in that way (4,100 positive values that name a row, 16 that do not, 409,246 of -1; the next best word names a row
+//! for 966 parts and misses 69,758). The rows are also compared field by field with the paramdef reading of the same
+//! params.
 //!
-//! Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6`, `oracles.uxm.{sekiro,elden}/dictionary.txt` and
-//! `oracles.smithbox.{sekiro,elden}/defs`; a game that is not configured is skipped.
+//! Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6`, `oracles.uxm.{sekiro,elden}/dictionary.txt`
+//! and `oracles.smithbox.{sekiro,elden}/defs`; a game that is not configured is skipped.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod inputs;
 
@@ -52,7 +55,7 @@ fn effect_references_of_both_installs() -> Result<()> {
     // (game, data set, SFX regions, maps holding one, start disabled, second byte set, param rows)
     for (game, data, regions, region_maps, disabled, second, rows) in [
         (Game::Sekiro, Data::Sekiro, 1_872, 9, 54, 13, 202),
-        (Game::EldenRing, Data::Elden, 1_523, 104, 17, 0, 1_293),
+        (Game::EldenRing, Data::Elden, 1_770, 118, 17, 0, 1_293),
     ] {
         let (Some(root), Some(folder), Some(dll), Some(dictionary), Some(defs_dir)) = (
             install(data),
@@ -194,7 +197,7 @@ fn effect_references_of_both_installs() -> Result<()> {
             (regions, region_maps, disabled, second)
         );
         if game == Game::EldenRing {
-            assert_eq!((aeg, none, named, absent), (421_253, 409_246, 11_533, 474));
+            assert_eq!((aeg, none, named, absent), (624_987, 606_564, 17_698, 725));
         }
     }
     Ok(())

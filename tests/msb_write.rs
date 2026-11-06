@@ -1,12 +1,13 @@
-//! The map layout writer: layouts built here write back to their bytes, take edits to the parts' fixed fields and refuse
-//! what a view cannot change; and every map layout of both installs (Sekiro's 10, Elden Ring's 935 files, 887 distinct)
-//! writes back to its bytes.
+//! The map layout writer: layouts built here write back to their bytes, take edits to the parts' fixed fields and
+//! refuse what a view cannot change; and every map layout of both installs (Sekiro's 10, Elden Ring's 1,347 files with
+//! Shadow of the Erdtree installed, 935 without) writes back to its bytes.
 //!
-//! The real-data counts were measured with an independent Python implementation of the layout (a parser and a writer of
-//! its own, run over the same files): every one of the 897 distinct layouts is written byte for byte from its sections.
+//! The base game's counts were measured with an independent Python implementation of the layout (a parser and a writer
+//! of its own, run over the same files): every one of its 897 distinct layouts is written byte for byte from its
+//! sections.
 //!
-//! Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6` and `oracles.uxm.{sekiro,elden}/dictionary.txt`
-//! for the real-data test; a game that is not configured is skipped.
+//! Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6` and
+//! `oracles.uxm.{sekiro,elden}/dictionary.txt` for the real-data test; a game that is not configured is skipped.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod common;
 mod inputs;
@@ -192,7 +193,7 @@ fn the_layout_must_still_read() {
 fn every_map_layout_of_the_installs_writes_back_to_its_bytes() -> Result<()> {
     for (game, data, expected) in [
         (Game::Sekiro, Data::Sekiro, 10),
-        (Game::EldenRing, Data::Elden, 935),
+        (Game::EldenRing, Data::Elden, 1_347),
     ] {
         let (Some(root), Some(folder), Some(dll), Some(dictionary)) = (
             install(data),

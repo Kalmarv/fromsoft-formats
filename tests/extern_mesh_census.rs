@@ -1,13 +1,15 @@
 //! Every `f` collision binder the installs hold (the map areas' `f<area>.hkxbhd`/`.hkxbdt`), through
 //! [`collision::read_map`]: every member tagfile reads, every body is an `hknpExternMeshShape` of plain `hkGeometry`,
 //! and the totals are those of the census that found them (12,688 Sekiro bodies in 1,145 files, 539,652 vertices and
-//! 537,436 triangles; 264,858 Elden Ring bodies in 1,850 files, 2,233,804 vertices and 1,707,650 triangles).
+//! 537,436 triangles; 264,858 Elden Ring bodies in 1,850 files, 2,233,804 vertices and 1,707,650 triangles in the base
+//! game). With Shadow of the Erdtree installed Elden Ring's are this test's own: 413,620 bodies in 2,428 files,
+//! 3,639,518 vertices and 2,820,716 triangles (with the expansion's archives left out it gives the census's).
 //!
 //! The binders are found from the games' MSB map names, not only from the dictionaries: a binder either archive holds
 //! that its dictionary does not name is read too (the test counts them).
 //!
-//! Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6` and `oracles.uxm.{sekiro,elden}/dictionary.txt`;
-//! a game that is not configured is skipped.
+//! Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6` and
+//! `oracles.uxm.{sekiro,elden}/dictionary.txt`; a game that is not configured is skipped.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod common;
 mod inputs;
@@ -214,11 +216,11 @@ fn elden_rings_f_binders_read_with_the_census_totals() -> Result<()> {
     let Some(t) = totals(Game::EldenRing)? else {
         return Ok(());
     };
-    assert_eq!((t.binders, t.unnamed_binders, t.files), (603, 0, 1_850));
-    assert_eq!((t.sdk_2016, t.sdk_2018, t.degenerate), (67, 1_783, 0));
+    assert_eq!((t.binders, t.unnamed_binders, t.files), (889, 0, 2_428));
+    assert_eq!((t.sdk_2016, t.sdk_2018, t.degenerate), (67, 2_361, 0));
     assert_eq!(
         (t.bodies, t.vertices, t.triangles),
-        (264_858, 2_233_804, 1_707_650)
+        (413_620, 3_639_518, 2_820_716)
     );
     assert_eq!(t.soup_triangles, t.triangles);
     Ok(())

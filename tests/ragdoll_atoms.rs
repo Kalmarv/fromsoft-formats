@@ -1,14 +1,17 @@
-//! The constraint data of every character, part, object, asset and map tagfile of the installs, read into the typed atoms
-//! of `havok_formats::constraint`: every `hknpConstraintCinfo` of both games reads, with each atom the type of its slot.
+//! The constraint data of every character, part, object, asset and map tagfile of the installs, read into the typed
+//! atoms of `havok_formats::constraint`: every `hknpConstraintCinfo` of both games reads, with each atom the type of
+//! its slot.
 //!
 //! The counts are those of a census over the same files (a probe that walked the type tables and counted the class of
 //! every `constraintData` and the value of each atom's members, written before the reader): each tagfile is counted as
-//! often as a binder repeats it. The census also found: every rotation of a stored transform orthonormal to 1.2e-6 and
-//! right-handed, every limit's minimum at most its maximum, no float that is not finite, and every integer member constant
-//! per class (the flags, the axes, the factor 48), which the second half of each test asserts through the reader.
+//! often as a binder repeats it. The Elden Ring counts in parentheses are the census's of the base game; with Shadow
+//! of the Erdtree installed the counts asserted are this test's own. The census also found: every rotation of a stored transform orthonormal to 1.2e-6 and
+//! right-handed, every limit's minimum at most its maximum, no float that is not finite, and every integer member
+//! constant per class (the flags, the axes, the factor 48), which the second half of each test asserts through the
+//! reader.
 //!
-//! Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6` and `oracles.uxm.{sekiro,elden}/dictionary.txt`;
-//! a game that is not configured is skipped.
+//! Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6` and
+//! `oracles.uxm.{sekiro,elden}/dictionary.txt`; a game that is not configured is skipped.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod common;
 mod hkwalk;
@@ -239,25 +242,24 @@ fn elden_rings_constraint_atoms_read() -> Result<()> {
     assert_eq!(
         counts(&t),
         [
-            ("ball and socket", 681),
-            ("breakable", 169),
-            ("breakable/ball and socket", 1),
-            ("breakable/limited hinge", 16),
-            ("breakable/ragdoll", 152),
-            ("fixed", 36),
-            ("hinge", 1),
-            ("limited hinge", 1_260),
-            ("ragdoll", 5_739),
-            ("wheel", 48),
+            ("ball and socket", 782),         // (681)
+            ("breakable", 279),               // (169)
+            ("breakable/ball and socket", 2), // (1)
+            ("breakable/limited hinge", 32),  // (16)
+            ("breakable/ragdoll", 245),       // (152)
+            ("fixed", 50),                    // (36)
+            ("hinge", 1),                     // (1)
+            ("limited hinge", 1_738),         // (1,260)
+            ("ragdoll", 8_885),               // (5,739)
+            ("wheel", 48),                    // (48)
         ]
     );
     assert!(t.worst_orthonormality < 2e-6, "{}", t.worst_orthonormality);
     assert_eq!((t.left_handed, t.inverted_limits, t.off_constant), (0, 0, 0));
-    // the motor pointers the census counted: 5,715 unwrapped ragdoll joints have all three set and 24 none, the 1,260
-    // unwrapped hinges have theirs set; the 152 wrapped ragdoll joints and 16 wrapped hinges have none
-    assert_eq!(
-        (t.motors, t.null_motors),
-        (5_715 * 3 + 1_260, 24 * 3 + 152 * 3 + 16)
-    );
+    // the motor pointers set and null; the census's of the base game: 5,715 unwrapped ragdoll joints have all three set
+    // and 24 none, the 1,260 unwrapped hinges have theirs set, the 152 wrapped ragdoll joints and 16 wrapped hinges have
+    // none (5,715 * 3 + 1,260 and 24 * 3 + 152 * 3 + 16). With the expansion the totals are those of 8,861 and 24 ragdoll
+    // joints, 1,738 hinges, and 245 and 32 wrapped
+    assert_eq!((t.motors, t.null_motors), (28_321, 839));
     Ok(())
 }

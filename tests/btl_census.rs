@@ -4,6 +4,9 @@
 //! bit patterns. A bank the reference refuses must be refused by ours too, except the version 15 banks: the reference
 //! lists only versions 1, 2, 5, 6, 16 and 18, refuses 15 by its version, and ours reads them with their 240-byte light
 //! record. Their light is checked against an independent reading of the same bytes (a Python parser of the record).
+//!
+//! Elden Ring's reference reading is of the install with Shadow of the Erdtree (`format-sote`: 192 light banks, the base
+//! game's 109 among them).
 mod inputs;
 
 use fromsoft_formats::{Game, btl::LightBank, dcx::Decoder};
@@ -15,7 +18,11 @@ mod common;
 fn every_light_bank_matches_an_independent_reading() -> Result<()> {
     for (game, format) in [(
         Game::EldenRing,
-        inputs::oracle(inputs::OracleSet::SoulsFormats, inputs::Game::Elden, "format"),
+        inputs::oracle(
+            inputs::OracleSet::SoulsFormats,
+            inputs::Game::Elden,
+            "format-sote",
+        ),
     )] {
         let (Some(archive), Some(oracle), Some(dll)) = (
             common::archive(game)?,
@@ -319,28 +326,28 @@ fn elden_rings_named_words() -> Result<()> {
         "light banks",
         w.banks,
     );
-    assert_eq!((w.banks, w.lights), (109, 11_229));
-    assert_eq!(w.values("flicker_interval_min"), vec![(0, 11_229)]);
-    assert_eq!(w.values("flicker_interval_max"), vec![(0, 11_229)]);
-    assert_eq!(w.values("flicker_brightness"), vec![(1f32.to_bits(), 11_229)]);
-    assert_eq!(w.values("event_id"), vec![(-1i32 as u32, 11_229)]);
-    assert_eq!(w.values("near_clip"), vec![(1f32.to_bits(), 11_229)]);
-    assert_eq!(w.values("shadow_model_cull_flip"), vec![(0, 9_600), (1, 1_629)]);
-    assert_eq!(w.spread("sharpness"), (70, 0.01, 80.));
-    assert_eq!(w.spread("horizontal_angle"), (28, 0., 100.));
-    assert_eq!(w.count("horizontal_angle", 0.), 11_007);
-    assert_eq!(w.spread("near_distance"), (23, 0., 60.));
-    assert_eq!(w.count("near_distance", 0.), 10_998);
-    assert_eq!(w.spread("enable_distance"), (28, 0., 1000.));
+    assert_eq!((w.banks, w.lights), (192, 18_468));
+    assert_eq!(w.values("flicker_interval_min"), vec![(0, 18_468)]);
+    assert_eq!(w.values("flicker_interval_max"), vec![(0, 18_468)]);
+    assert_eq!(w.values("flicker_brightness"), vec![(1f32.to_bits(), 18_468)]);
+    assert_eq!(w.values("event_id"), vec![(-1i32 as u32, 18_468)]);
+    assert_eq!(w.values("near_clip"), vec![(1f32.to_bits(), 18_468)]);
+    assert_eq!(w.values("shadow_model_cull_flip"), vec![(0, 13_271), (1, 5_197)]);
+    assert_eq!(w.spread("sharpness"), (85, 0.01, 120.));
+    assert_eq!(w.spread("horizontal_angle"), (33, 0., 100.));
+    assert_eq!(w.count("horizontal_angle", 0.), 18_193);
+    assert_eq!(w.spread("near_distance"), (26, 0., 60.));
+    assert_eq!(w.count("near_distance", 0.), 18_179);
+    assert_eq!(w.spread("enable_distance"), (38, 0., 1000.));
     assert_eq!(
         (w.count("enable_distance", 40.), w.count("enable_distance", 0.)),
-        (4_928, 1_611)
+        (6_432, 5_487)
     );
-    assert_eq!(w.spread("volume_density"), (16, 0., 10.));
+    assert_eq!(w.spread("volume_density"), (21, 0., 20.));
     assert_eq!(
         (w.count("volume_density", 0.), w.count("volume_density", 1.)),
-        (8_009, 2_221)
+        (13_695, 3_615)
     );
-    assert_eq!(w.values("exposure_weight"), vec![(0, 11_229)]);
+    assert_eq!(w.values("exposure_weight"), vec![(0, 18_468)]);
     Ok(())
 }

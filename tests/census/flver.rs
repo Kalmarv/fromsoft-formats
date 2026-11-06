@@ -1,8 +1,8 @@
 //! The FLVER census: every model of an install's archives read by ours and checked against the reference census of the
 //! same files, SoulsFormats' of Sekiro (`oracles.soulsformats.sekiro/census`) and SoulsFormatsNEXT's of Elden Ring
 //! (`oracles.soulsformats.elden/census`): each file's bytes, version, meshes, materials, vertex counts, a hash of the
-//! decoded vertices and each face set's flags and indices. A FLVER the reference refuses (a record with `error`) must be
-//! refused by ours too, except a SpeedTree FLVER: the reference refuses every one of Elden Ring's (an index out of
+//! decoded vertices and each face set's flags and indices. A FLVER the reference refuses (a record with `error`) must
+//! be refused by ours too, except a SpeedTree FLVER: the reference refuses every one of Elden Ring's (an index out of
 //! range), ours reads their stored members; they are counted. Beside the comparison it counts what the reference does
 //! not compare: the bones' links, boxes and flags, the dummies' attachment, and the header and face-set words whose
 //! meaning is not known.
@@ -22,13 +22,24 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 /// The census of `game`'s FLVER models, or `None` when the configuration lacks the install, its keys, the Oodle library,
 /// the reference census or the name dictionary.
 pub fn census(game: Game) -> Result<Option<Report>> {
-    let data = match game {
-        Game::Sekiro => inputs::Game::Sekiro,
-        Game::EldenRing => inputs::Game::Elden,
+    // Elden Ring's census of the install with Shadow of the Erdtree (`census` was made before the DLC)
+    let (data, census) = match game {
+        Game::Sekiro => (
+            inputs::Game::Sekiro,
+            inputs::oracle(inputs::OracleSet::SoulsFormats, inputs::Game::Sekiro, "census"),
+        ),
+        Game::EldenRing => (
+            inputs::Game::Elden,
+            inputs::oracle(
+                inputs::OracleSet::SoulsFormats,
+                inputs::Game::Elden,
+                "census-sote",
+            ),
+        ),
     };
     let (Some(dll), Some(oracle), Some(names)) = (
         inputs::oodle(inputs::Tool::Oodle6),
-        inputs::oracle(inputs::OracleSet::SoulsFormats, data, "census"),
+        census,
         inputs::oracle(inputs::OracleSet::Uxm, data, "dictionary.txt"),
     ) else {
         return Ok(None);
@@ -144,11 +155,15 @@ pub fn census(game: Game) -> Result<Option<Report>> {
             .ok_or("a split binder the scan did not give")? = c;
     }
     let mut report = Report::default();
+    let mut reached = BTreeMap::new();
     for (hash, c) in checked {
         let id = id_of(hash);
         for seen in &c.seen {
-            if expected.remove(seen).is_none() {
-                report.failures.push(format!("{seen}: checked twice"));
+            match expected.remove(seen) {
+                Some(record) => {
+                    reached.insert(seen.clone(), record);
+                }
+                None => report.failures.push(format!("{seen}: checked twice")),
             }
         }
         report.add(c.report);
@@ -159,6 +174,42 @@ pub fn census(game: Game) -> Result<Option<Report>> {
                     .agreed_refusals
                     .push(format!("{id}: ours {e}; reference {theirs}")),
                 None => report.failures.push(format!("{id}: {e}")),
+            }
+        }
+    }
+    // An entry a later archive lists again with the same bytes (Elden Ring's DLC repeats Data3's `/chr/c5550.chrbnd.dcx`)
+    // is read once, from the archive that lists it first; the reference reads both copies. Each record of the copy not
+    // read must be the record of the copy read, but for its id.
+    for r in &archive.repeated {
+        let (kept, again) = (
+            format!("{}/{:0width$x}", r.kept, r.hash),
+            format!("{}/{:0width$x}", r.again, r.hash),
+        );
+        let copies: Vec<String> = expected
+            .keys()
+            .filter(|id| {
+                id.strip_prefix(&again)
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+            })
+            .cloned()
+            .collect();
+        for id in copies {
+            let read = format!("{kept}{}", &id[again.len()..]);
+            let without_id = |v: &serde_json::Value| {
+                let mut v = v.clone();
+                v.as_object_mut().map(|o| o.remove("id"));
+                v
+            };
+            match (expected.remove(&id), reached.get(&read)) {
+                (Some(theirs), Some(ours)) if without_id(&theirs) == without_id(ours) => {
+                    report.count(
+                        "models of an entry repeated by a later archive, matched through the first",
+                        1,
+                    );
+                }
+                _ => report.failures.push(format!(
+                    "{id}: repeats {read}, whose reference record differs or was not reached"
+                )),
             }
         }
     }

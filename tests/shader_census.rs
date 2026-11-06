@@ -1,17 +1,20 @@
 //! Elden Ring's shader names and sampler names over every material binary of the install (`shader`), soulstruct's
-//! per-shader tables of the texture coordinate sets against the models that use the shaders and against the shaders' own
-//! pixel programs, and Sekiro's shader names through the same grammar.
+//! per-shader tables of the texture coordinate sets against the models that use the shaders and against the shaders'
+//! own pixel programs, and Sekiro's shader names through the same grammar.
 //!
 //! The expected numbers are a census made with an independent Python reader of the same files (a MATBIN walker, the
-//! documented grammar and map table written again, a FLVER layout walker over the same archive entries); the second test's
-//! oracle is `oracles.soulstruct.elden/shader-uv-slots.json`, soulstruct 12b6918's `SHADER_UV_SLOTS` and `SHADER_GROUP_UV`
-//! converted to JSON.
+//! documented grammar and map table written again, a FLVER layout walker over the same archive entries); the second
+//! test's oracle is `oracles.soulstruct.elden/shader-uv-slots.json`, soulstruct 12b6918's `SHADER_UV_SLOTS` and
+//! `SHADER_GROUP_UV` converted to JSON.
 //!
 //! Elden Ring's counts are those of the path dictionary that names all 97,118 entries of the base archives
 //! (`tests/inputs`: UXM's list and the 87 Smithbox paths that hash onto the entries UXM's list leaves unnamed); the
-//! Python reader walked the same archives and named the same entries. A SpeedTree model is one whose header word at 0x68
-//! has 0x8000 in its high half (`flver::is_speedtree`), as in the reader; the FLVER version 0x20014 is not the test (two
-//! face models, `FC_M_0000_M` and `FG_A_0000_M`, have that version without being SpeedTree).
+//! Python reader walked the same archives and named the same entries. A SpeedTree model is one whose header word at
+//! 0x68 has 0x8000 in its high half (`flver::is_speedtree`), as in the reader; the FLVER version 0x20014 is not the
+//! test (two face models, `FC_M_0000_M` and `FG_A_0000_M`, have that version without being SpeedTree).
+//!
+//! The Elden Ring numbers of that census are the base game's: with Shadow of the Erdtree installed the numbers asserted
+//! are this test's own, and with the expansion's archives left out it gives the census's.
 mod inputs;
 
 use fromsoft_formats::{
@@ -370,12 +373,12 @@ fn soulstructs_uv_slot_table_against_the_models() -> Result<()> {
         "models in map, character, part, asset and object binders",
         models,
     );
-    assert_eq!((models, speedtree), (21_562, 119));
-    assert_eq!((with_material, without_material), (76_319, 11_194));
-    assert_eq!(observed.len(), 452);
+    assert_eq!((models, speedtree), (30_078, 227));
+    assert_eq!((with_material, without_material), (103_705, 11_244));
+    assert_eq!(observed.len(), 571);
     assert!(disagreeing.is_empty(), "{disagreeing:?}");
-    assert_eq!((in_table, agreeing), (181, 181));
-    assert_eq!((meshes_in_table, meshes_agreeing), (57_215, 56_256));
+    assert_eq!((in_table, agreeing), (215, 215));
+    assert_eq!((meshes_in_table, meshes_agreeing), (77_242, 75_422));
     // 168 of the table's 176 stems are in the grammar; the eight that are not are legacy and test shaders
     let outside: Vec<&String> = slots.keys().filter(|s| Profile::parse(s).is_none()).collect();
     assert_eq!(outside.len(), 8, "{outside:?}");

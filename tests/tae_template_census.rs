@@ -1,21 +1,25 @@
-//! The community's event templates (Smithbox's `TAE.Template.SDT.xml` and `TAE.Template.ER.xml`) against every event of every
-//! distinct event file (`.tae`) of the animation binders of the installs (`/chr/*.anibnd.dcx` and the animation binders inside
-//! the object, part and asset binders): how many events have a template, whether the asserted fields hold their values,
-//! which events are stored shorter than their template, which float fields store something that is not a float, and how
-//! many stored values the templates' named values do not cover.
+//! The community's event templates (Smithbox's `TAE.Template.SDT.xml` and `TAE.Template.ER.xml`) against every event of
+//! every distinct event file (`.tae`) of the animation binders of the installs (`/chr/*.anibnd.dcx` and the animation
+//! binders inside the object, part and asset binders): how many events have a template, whether the asserted fields
+//! hold their values, which events are stored shorter than their template, which float fields store something that is
+//! not a float, and how many stored values the templates' named values do not cover.
 //!
-//! The templates are held to a second source, soulstruct's table of the event types of the Dark Souls Remastered and III era
-//! (`oracles.soulstruct.elden/tae-event-classes.json`: for each type it lists, the name and the fields of the data): which types
-//! both name, whether a field of one straddles the edge of a field of the other, which fields they type as an integer and a
-//! float, and, over the stored events, where a type's data holds a nonzero byte outside the fields soulstruct lists and which of
-//! the words the two disagree on are floats.
+//! The templates are held to a second source, soulstruct's table of the event types of the Dark Souls Remastered and
+//! III era (`oracles.soulstruct.elden/tae-event-classes.json`: for each type it lists, the name and the fields of the
+//! data): which types both name, whether a field of one straddles the edge of a field of the other, which fields they
+//! type as an integer and a float, and, over the stored events, where a type's data holds a nonzero byte outside the
+//! fields soulstruct lists and which of the words the two disagree on are floats.
 //!
-//! The expected numbers are a census made with an independent Python reader of the same files (a TAE walker and a template
-//! reader written from the file layout and the XML alone).
+//! The expected numbers are a census made with an independent Python reader of the same files (a TAE walker and a
+//! template reader written from the file layout and the XML alone).
 //!
-//! Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6`, `oracles.uxm.{sekiro,elden}/dictionary.txt` and
-//! `oracles.smithbox.{sekiro,elden}/tae-template.xml`; a game that is not configured is skipped, and the second source's
-//! checks need `oracles.soulstruct.elden/tae-event-classes.json` (the comparison of the two tables alone needs no install).
+//! Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6`, `oracles.uxm.{sekiro,elden}/dictionary.txt`
+//! and `oracles.smithbox.{sekiro,elden}/tae-template.xml`; a game that is not configured is skipped, and the second
+//! source's checks need `oracles.soulstruct.elden/tae-event-classes.json` (the comparison of the two tables alone needs
+//! no install).
+//!
+//! The Elden Ring numbers of that census are the base game's: with Shadow of the Erdtree installed the numbers asserted
+//! are this test's own, and with the expansion's archives left out it gives the census's.
 mod inputs;
 
 use fromsoft_formats::dcx::Decoder;
@@ -559,10 +563,10 @@ fn elden_rings_events_through_the_community_templates() -> Result<()> {
     expect_found(Query::Install(Data::Elden, None), "event files", t.files);
     assert_eq!(
         (t.files, t.events, t.with_template),
-        (1_071, 1_313_057, 1_313_057)
+        (1_282, 1_635_135, 1_635_135)
     );
     assert!(t.without_template.is_empty());
-    assert_eq!(t.kinds_in_data.len(), 124);
+    assert_eq!(t.kinds_in_data.len(), 127);
     assert_eq!(templates.len(), 156);
     assert_eq!(templates.iter().filter(|e| e.name.is_some()).count(), 141);
     assert_eq!(
@@ -570,42 +574,42 @@ fn elden_rings_events_through_the_community_templates() -> Result<()> {
             .iter()
             .filter(|e| t.kinds_in_data.contains(&e.kind))
             .count(),
-        124
+        127
     );
-    assert_eq!(t.asserted, 2_050_123);
-    assert_eq!((t.short, t.short_with_a_named_field_missing), (268, 63));
+    assert_eq!(t.asserted, 2_603_817);
+    assert_eq!((t.short, t.short_with_a_named_field_missing), (283, 64));
     assert_eq!(t.trailing_nonzero, 0);
     assert!(t.words.is_empty(), "{:?}", t.words);
-    assert_eq!(t.listed, 1_867_190);
-    assert_eq!(t.unlisted.values().sum::<usize>(), 4_069);
+    assert_eq!(t.listed, 2_355_636);
+    assert_eq!(t.unlisted.values().sum::<usize>(), 5_181);
     assert_eq!(t.unlisted.len(), 8);
-    assert_eq!(t.unlisted.get(&(700, 5)), Some(&2_800));
-    assert_eq!(t.unlisted.get(&(1, 1)), Some(&694));
+    assert_eq!(t.unlisted.get(&(700, 5)), Some(&2_959));
+    assert_eq!(t.unlisted.get(&(1, 1)), Some(&1638));
     // soulstruct's table over the stored events (see Sekiro's test)
     if let Some(second) = &t.second {
-        assert_eq!((second.listed, second.with_class), (1_274_243, 1_274_080));
+        assert_eq!((second.listed, second.with_class), (1_589_960, 1_589_755));
         assert!(second.only_soulstruct_seen.is_empty());
         assert_eq!(
             second.outside_types(),
             BTreeMap::from([
-                (2, (6_876, 5_917)),
+                (2, (10_611, 9_233)),
                 (64, (1_921, 1_809)),
-                (96, (20_848, 1_642)),
+                (96, (26_731, 2_732)),
                 (120, (1_481, 1_481)),
-                (129, (408_400, 408_390)),
+                (129, (539_224, 539_214)),
                 (145, (2_828, 2_828)),
-                (193, (4_562, 4_517)),
-                (601, (4_071, 4_071)),
-                (700, (37_568, 34_213)),
+                (193, (6_376, 6_331)),
+                (601, (6_391, 6_391)),
+                (700, (47_625, 43_822)),
             ])
         );
         assert_eq!(
             second.words,
             BTreeMap::from([
-                ((0, 4), [304_824, 5_052, 0]),
+                ((0, 4), [353_141, 5_054, 0]),
                 ((194, 8), [4, 0, 0]),
-                ((730, 0), [1, 0, 115]),
-                ((730, 4), [1, 0, 115]),
+                ((730, 0), [2, 0, 230]),
+                ((730, 4), [2, 0, 230]),
             ])
         );
     }

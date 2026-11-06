@@ -1,20 +1,24 @@
-//! The quads of the stock compressed meshes against the pairing of `havok-formats` (`pair_quads`), on every compressed mesh
-//! of both installs that has the custom parameter (`pParam`) with the source triangles.
+//! The quads of the stock compressed meshes against the pairing of `havok-formats` (`pair_quads`), on every compressed
+//! mesh of both installs that has the custom parameter (`pParam`) with the source triangles.
 //!
 //! The source triangles of a mesh are the rows of its `pParam.triangleDataArray`; each row's entry of
-//! `triangleIndexToShapeKey` gives the key the triangle got, so the stock quads are the pairs of rows whose keys differ in
-//! the half bit only. The pairing is run on all the rows of the mesh at once (the writers pair before they cut sections),
-//! with the row's `primitiveDataIndex` as the data two triangles must share, and its pairs are compared with the stock ones.
+//! `triangleIndexToShapeKey` gives the key the triangle got, so the stock quads are the pairs of rows whose keys differ
+//! in the half bit only. The pairing is run on all the rows of the mesh at once (the writers pair before they cut
+//! sections), with the row's `primitiveDataIndex` as the data two triangles must share, and its pairs are compared with
+//! the stock ones.
 //!
-//! It is not the stock rule in every detail: it finds 99.3% of Sekiro's stock quads (3,484,191 of 3,507,426) and 99.1% of
-//! Elden Ring's (7,501,872 of 7,568,285), and 99.5% and 99.3% of what it makes are stock quads. Where it picks a stock pair
-//! it picks the stock first half first, every time. The Sekiro object meshes come out lowest (27,928 of 32,485 stock quads),
-//! the misses being mostly triangles on an edge that three or more triangles share. Pairing each stock section on its own
-//! instead finds a little more (99.4% and 99.2%), but needs the stock sections.
+//! It is not the stock rule in every detail: it finds 99.3% of Sekiro's stock quads (3,484,191 of 3,507,426) and 99.1%
+//! of Elden Ring's (10,249,252 of 10,339,615 (7,501,872 of 7,568,285)), and 99.5% and 99.4% (99.3%) of what it makes
+//! are stock quads. Where it picks a stock pair it picks the stock first half first, every time. The Sekiro object
+//! meshes come out lowest (27,928 of 32,485 stock quads), the misses being mostly triangles on an edge that three or
+//! more triangles share. Pairing each stock section on its own instead finds a little more (99.4% and 99.2%), but needs
+//! the stock sections.
 //!
 //! The counts are those of the census over the same files with the scratch probe's copy of the pairing (probe mode
-//! `quadcrate`), not copied from a run of this test. Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`,
-//! `tools.oodle6` and `oracles.uxm.{sekiro,elden}/dictionary.txt`; a game that is not configured is skipped.
+//! `quadcrate`), not copied from a run of this test: the Elden Ring counts in parentheses are the census's of the base
+//! game; with Shadow of the Erdtree installed the counts asserted are this test's own (with the expansion's archives
+//! left out it gives the census's). Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6` and
+//! `oracles.uxm.{sekiro,elden}/dictionary.txt`; a game that is not configured is skipped.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod common;
 mod hkwalk;
@@ -152,8 +156,8 @@ fn elden_rings_quads_are_what_the_pairing_finds() -> Result<()> {
     let Some(t) = totals(Game::EldenRing)? else {
         return Ok(());
     };
-    assert_eq!((t.meshes, t.meshes_exact), (22_778, 18_022));
-    assert_eq!((t.stock, t.found, t.both), (7_568_285, 7_550_979, 7_501_872));
+    assert_eq!((t.meshes, t.meshes_exact), (37_617, 30_953));
+    assert_eq!((t.stock, t.found, t.both), (10_339_615, 10_311_733, 10_249_252));
     assert_eq!(t.both_first_half_first, t.both);
     Ok(())
 }

@@ -1,17 +1,20 @@
-//! The collision writers on every stock collision file of both installs: each compressed mesh and extern mesh is rebuilt
-//! from its decoded triangles with `havok_formats::{build_compressed_mesh, replace_compressed_mesh, replace_extern_mesh}`,
-//! written into the file's own image, and read back.
+//! The collision writers on every stock collision file of both installs: each compressed mesh and extern mesh is
+//! rebuilt from its decoded triangles with `havok_formats::{build_compressed_mesh, replace_compressed_mesh,
+//! replace_extern_mesh}`, written into the file's own image, and read back.
 //!
-//! Three things are checked. (1) The nibble rule of the tree encoder, applied with the stock trees' own topology and each
-//! section's stored domain, reproduces the stored nodes at the rates a census of the same files measured (below); the
-//! stock builder's topologies are not reproduced, so (2) every mesh is rebuilt with the crate's own: the decoded geometry
-//! comes back within the quantisation of the codecs, the written file reads back to exactly the arrays the builder says it
-//! wrote, every triangle lies in its leaf's box, and the simd tree names every primitive with exact boxes. (3) Every extern
-//! mesh is rewritten in the form its class stores and reads back, with the `numShapeKeyBits` the stock rule gives
-//! (`bitlen(n)` for class 2, `bitlen(n) + 1` for class 3: equal to the stock values in all 277,544 shapes).
+//! Three things are checked. (1) The nibble rule of the tree encoder, applied with the stock trees' own topology and
+//! each section's stored domain, reproduces the stored nodes at the rates a census of the same files measured (below);
+//! the stock builder's topologies are not reproduced, so (2) every mesh is rebuilt with the crate's own: the decoded
+//! geometry comes back within the quantisation of the codecs, the written file reads back to exactly the arrays the
+//! builder says it wrote, every triangle lies in its leaf's box, and the simd tree names every primitive with exact
+//! boxes. (3) Every extern mesh is rewritten in the form its class stores and reads back, with the `numShapeKeyBits`
+//! the stock rule gives (`bitlen(n)` for class 2, `bitlen(n) + 1` for class 3: equal to the stock values in all 277,544
+//! shapes).
 //!
-//! The counts are those of the census over the same files (probe modes `cascade`, `skipcount`, `externbits`, written before
-//! the code): they are not copied from a run of this code. Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`,
+//! The counts are those of the census over the same files (probe modes `cascade`, `skipcount`, `externbits`, written
+//! before the code): they are not copied from a run of this code; the Elden Ring counts in parentheses are the census's
+//! of the base game; with Shadow of the Erdtree installed the counts asserted are this code's own (with the expansion's
+//! archives left out this code gives the census's). Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`,
 //! `tools.oodle6` and `oracles.uxm.{sekiro,elden}/dictionary.txt`; a game that is not configured is skipped.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod common;
@@ -427,20 +430,20 @@ fn elden_rings_collision_is_rewritten_and_reads_back() -> Result<()> {
         return Ok(());
     };
     clean(&t);
-    assert_eq!((t.inner.equal, t.inner.total), (51_652_581, 57_042_426));
-    assert_eq!((t.leaf.equal, t.leaf.total), (47_318_288, 58_482_843));
-    assert_eq!((t.root.equal, t.root.total), (719_470, 719_647));
-    assert_eq!(t.sections_skipped, 1_635);
-    assert_eq!((t.rebuilt, t.triangles), (22_831, 66_238_756));
+    assert_eq!((t.inner.equal, t.inner.total), (67_660_868, 74_569_949));
+    assert_eq!((t.leaf.equal, t.leaf.total), (62_150_341, 76_462_778));
+    assert_eq!((t.root.equal, t.root.total), (945_411, 945_640));
+    assert_eq!(t.sections_skipped, 2_025);
+    assert_eq!((t.rebuilt, t.triangles), (37_670, 87_023_896));
     assert_eq!(
         t.skipped,
         BTreeMap::from([
-            ("custom primitives and triangles", 36),
-            ("custom primitives only", 29),
+            ("custom primitives and triangles", 41),
+            ("custom primitives only", 32),
             ("no primitives", 3),
         ])
     );
-    // 264,858 extern bodies: 40 of class 2, 264,816 of class 3, 2 without a triangle
-    assert_eq!((t.extern_aabb, t.extern_simd, t.extern_empty), (40, 264_816, 2));
+    // 413,620 extern bodies: 40 of class 2, 413,561 of class 3, 19 without a triangle
+    assert_eq!((t.extern_aabb, t.extern_simd, t.extern_empty), (40, 413_561, 19));
     Ok(())
 }

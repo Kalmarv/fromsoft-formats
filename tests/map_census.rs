@@ -1,19 +1,22 @@
-//! Every map layout the dictionaries name that the installs hold (Sekiro's 10, Elden Ring's 935: the base game, no
-//! expansion archive), through [`MapLayout`]: the totals the strict reader returns, then the fields read from the layouts'
-//! records against an independent census of the same files (a separate parser of the MSB sections and records, run
-//! over the decoded layouts, reading no output of this crate).
+//! Every map layout the dictionaries name that the installs hold (Sekiro's 10, Elden Ring's 1,347 with Shadow of the
+//! Erdtree's archives, 935 without), through [`MapLayout`]: the totals the strict reader returns, then the fields read
+//! from the layouts' records against an independent census of the same files (a separate parser of the MSB sections and
+//! records, run over the decoded layouts, reading no output of this crate). The census was made on the base game (its
+//! numbers in parentheses below); with the expansion installed the Elden Ring numbers asserted are this test's own
+//! (with the expansion's archives left out it gives the census's).
 //!
-//! - Every model states how many parts name it (7,242 Sekiro and 53,503 Elden Ring models), which `MapLayout::read`
-//!   checks.
-//! - Elden Ring's regions and events end with the extra block: 36,409 regions and 7,585 events read, 625 regions and
-//!   131 events name a map, and the map words of the extra blocks and of the parts' tile-load configs (77,782 of them)
-//!   name the maps of the install except the 91 that name two overworld tiles it does not hold.
-//! - The alternate overworld tiles (`_10`) have the alternate parents (`_11`, `_12`) in the install, whose layouts place
-//!   3,578 of their far assets.
+//! - Every model states how many parts name it (7,242 Sekiro and 75,291 (53,503) Elden Ring models), which
+//!   `MapLayout::read` checks.
+//! - Elden Ring's regions and events end with the extra block: 50,608 (36,409) regions and 10,286 (7,585) events read,
+//!   769 (625) regions and 142 (131) events name a map, and the map words of the extra blocks and of the parts'
+//!   tile-load configs (101,517 (77,782) of them) name the maps of the install except the 91 that name two overworld
+//!   tiles it does not hold.
+//! - The alternate overworld tiles (`_10`) have the alternate parents (`_11`, `_12`) in the install, whose layouts
+//!   place 3,578 of their far assets.
 //! - The entity block's draw controls and the collision parts' draw-param selectors.
 //!
-//! Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6` and `oracles.uxm.{sekiro,elden}/dictionary.txt`;
-//! a game that is not configured is skipped.
+//! Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6` and
+//! `oracles.uxm.{sekiro,elden}/dictionary.txt`; a game that is not configured is skipped.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod inputs;
 
@@ -76,7 +79,7 @@ fn layouts(game: Game) -> Result<Option<(Archive, BTreeMap<String, MapLayout>)>>
 fn every_layout_of_the_installs_reads_with_its_totals() -> Result<()> {
     for (game, maps, models, parts, regions, events) in [
         (Game::Sekiro, 10, 7_242, 55_352, 8_712, 1_626),
-        (Game::EldenRing, 935, 53_503, 457_108, 36_409, 7_585),
+        (Game::EldenRing, 1_347, 75_291, 676_654, 50_608, 10_286),
     ] {
         let Some((_, layouts)) = layouts(game)? else {
             continue;
@@ -111,7 +114,7 @@ fn every_layout_of_the_installs_reads_with_its_totals() -> Result<()> {
         }
         assert_eq!((m, p, r, e), (models, parts, regions, events), "{}", game.name());
         if game == Game::EldenRing {
-            assert_eq!((region_maps, event_maps), (625, 131));
+            assert_eq!((region_maps, event_maps), (769, 142));
         } else {
             assert_eq!((region_maps, event_maps), (0, 0));
         }
@@ -142,13 +145,13 @@ fn map_words_name_the_installed_maps() -> Result<()> {
             absent.insert(name);
         }
     }
-    // 625 + 131 extra-block words and 77,026 tile-load words: all but 91 of the 77,782 name a map of the install
-    assert_eq!(tile_loads, 77_026);
+    // 769 + 142 extra-block words and 100,606 tile-load words: all but 91 of the 101,517 name a map of the install
+    assert_eq!(tile_loads, 100_606);
     assert_eq!(
         absent.iter().map(String::as_str).collect::<Vec<_>>(),
         ["m60_42_40_10", "m60_47_42_10"]
     );
-    assert_eq!(named, 77_782 - 91);
+    assert_eq!(named, 101_517 - 91);
     Ok(())
 }
 
@@ -249,19 +252,19 @@ fn the_entity_blocks_draw_controls_and_the_collisions_draw_param_selectors() -> 
                 }
             }
         }
-        assert_eq!(used, 11_583);
-        assert_eq!(ids_without_flag, 439);
-        assert_eq!((reflection, above, point, rtao), (156, 198, 97, 6_655));
-        assert_eq!(collisions, 3_266);
-        // the byte at +0x35 of a collision's type data is 255 on 3,225 of the 3,266; the scene config's byte at +32 takes
-        // the file ids of the overworld draw-param files; on 40 of the 41 overrides it restates the override (1, 2 and 3
+        assert_eq!(used, 18_887);
+        assert_eq!(ids_without_flag, 1_205);
+        assert_eq!((reflection, above, point, rtao), (196, 240, 97, 6_676));
+        assert_eq!(collisions, 4_737);
+        // the byte at +0x35 of a collision's type data is 255 on 4,351 of the 4,737; the scene config's byte at +32 takes
+        // the file ids of the overworld draw-param files; on 382 of the 386 overrides it restates the override (1, 2 and 3
         // as 10, 20 and 30)
-        assert_eq!(overrides, 41);
-        assert_eq!(restated, 40);
-        assert_eq!(sub_ids, 128);
+        assert_eq!(overrides, 386);
+        assert_eq!(restated, 382);
+        assert_eq!(sub_ids, 534);
         assert_eq!(
             sub_values.into_iter().collect::<Vec<_>>(),
-            [0, 10, 20, 21, 30, 31, 40, 41, 42]
+            [0, 10, 20, 21, 30, 31, 40, 41, 42, 50, 55, 60, 65, 70, 75, 78]
         );
     }
     Ok(())
@@ -309,13 +312,25 @@ fn a_dungeon_without_draw_param_files_of_its_own_uses_its_familys() -> Result<()
         }
         *bucket.entry(area).or_default() += 1;
     }
-    // 58 maps have files of their own, 21 use the family's (20 of m30, one of m11) and the 27 of m31 and m32 use m30_00's
+    // 72 maps have files of their own, 33 use the family's (20 of m30, 4 of m21, 3 of m42, 2 each of m40 and m41, one each
+    // of m11 and m43) and the 27 of m31 and m32 use m30_00's
     let total = |m: &BTreeMap<&str, usize>| m.values().sum::<usize>();
     assert_eq!(
         (total(&own), total(&family), total(&referenced), total(&none)),
-        (58, 21, 27, 0)
+        (72, 33, 27, 0)
     );
-    assert_eq!(family, BTreeMap::from([("m11", 1), ("m30", 20)]));
+    assert_eq!(
+        family,
+        BTreeMap::from([
+            ("m11", 1),
+            ("m21", 4),
+            ("m30", 20),
+            ("m40", 2),
+            ("m41", 2),
+            ("m42", 3),
+            ("m43", 1)
+        ])
+    );
     assert_eq!(referenced, BTreeMap::from([("m31", 19), ("m32", 8)]));
     Ok(())
 }
@@ -343,14 +358,14 @@ fn draw_blocks_and_the_numbers_of_regions_and_events() -> Result<()> {
         (
             Game::EldenRing,
             vec![
-                ("Asset", [421_253, 421_253, 421_253, 281_090, 106_461, 80_643, 3]),
-                ("Collision", [3_266, 3_266, 3_266, 906, 1_053, 883, 341]),
-                ("ConnectCollision", [800, 800, 800, 130, 110, 161, 322]),
-                ("DummyAsset", [2_661, 2_661, 0, 53, 77, 1, 0]),
-                ("DummyEnemy", [7_108, 7_108, 0, 3_028, 4, 1, 0]),
-                ("Enemy", [16_776, 16_776, 0, 11_849, 1, 6, 0]),
-                ("MapPiece", [4_522, 4_522, 0, 2_886, 1_444, 1_341, 0]),
-                ("Player", [722, 722, 0, 203, 0, 3, 0]),
+                ("Asset", [624_987, 624_987, 624_987, 437_542, 137_708, 108_377, 3]),
+                ("Collision", [4_737, 4_737, 4_737, 1_108, 1_286, 1_096, 400]),
+                ("ConnectCollision", [1_125, 1_125, 1_125, 171, 149, 302, 492]),
+                ("DummyAsset", [3_971, 3_971, 0, 53, 149, 1, 0]),
+                ("DummyEnemy", [9_453, 9_453, 0, 4_370, 4, 1, 0]),
+                ("Enemy", [25_399, 25_399, 0, 19_274, 1, 6, 0]),
+                ("MapPiece", [6_051, 6_051, 0, 3_896, 1_509, 1_402, 0]),
+                ("Player", [931, 931, 0, 309, 0, 3, 0]),
             ],
         ),
     ];
@@ -453,19 +468,19 @@ fn draw_blocks_and_the_numbers_of_regions_and_events() -> Result<()> {
         );
         // against the independent census (a separate parser of the part records, the same union of the collisions' display words),
         // over the map pieces, objects and assets: Sekiro's 51,508 parts have 654 with no draw group, 49,433 that meet a
-        // display group and 1,421 that meet none; Elden Ring's 425,775 have 317,870, 70,713 and 37,192
+        // display group and 1,421 that meet none; Elden Ring's 631,038 have 491,821, 91,860 and 47,357
         let expected_census = if game == Game::Sekiro {
             [1_304, 999, 51_508, 654, 49_433, 1_421]
         } else {
-            [3_266, 906, 425_775, 317_870, 70_713, 37_192]
+            [4_737, 1_108, 631_038, 491_821, 91_860, 47_357]
         };
         assert_eq!(census, expected_census, "{} groups", game.name());
         // the same independent census, over the parts under no draw group: Sekiro 654 (271 with display groups of their own,
-        // 230 of those meeting the collisions' display groups); Elden Ring 317,870 (235,081; 9,198)
+        // 230 of those meeting the collisions' display groups); Elden Ring 491,821 (379,757; 14,443)
         let expected_zero = if game == Game::Sekiro {
             [654, 271, 230]
         } else {
-            [317_870, 235_081, 9_198]
+            [491_821, 379_757, 14_443]
         };
         assert_eq!(zero, expected_zero, "{} zero draw groups", game.name());
         // the draw block's fourth field is 0 in Sekiro; in Elden Ring -1 as a signed word, then a byte that is 1 on 177 map
@@ -491,14 +506,14 @@ fn draw_blocks_and_the_numbers_of_regions_and_events() -> Result<()> {
             );
             assert_eq!(tails[&[255, 255, 1, 0]], 177);
             assert_eq!(conditions.len(), 8);
-            assert_eq!(display_tails.values().sum::<usize>(), 421_253 + 3_266 + 800);
+            assert_eq!(display_tails.values().sum::<usize>(), 624_987 + 4_737 + 1_125);
             assert_eq!(
                 display_tails
                     .iter()
                     .filter(|(t, _)| **t != [0, 0, 255, 255])
                     .map(|(_, n)| n)
                     .sum::<usize>(),
-                3
+                4
             );
         }
     }
@@ -506,13 +521,13 @@ fn draw_blocks_and_the_numbers_of_regions_and_events() -> Result<()> {
     if games_read < 2 {
         return Ok(());
     }
-    // 945 maps: the region index within the type is the per-type counter on all 45,121 regions; the number at +44 is
-    // unique in every map and is 0 to n-1 in 419; the event number at +8 equals the record index on 367 of 9,211 events,
-    // is unique in every map and dense in 731; the event's index within its type is the counter on all but the two events of
-    // type 0xffffffff
-    assert_eq!((files, regions, region_counter), (945, 45_121, 45_121));
-    assert_eq!((numbers_unique, numbers_dense), (945, 419));
-    assert_eq!((events, event_counter, event_is_index), (9_211, 9_209, 367));
-    assert_eq!((event_ids_unique, event_ids_dense), (945, 731));
+    // 1,357 maps: the region index within the type is the per-type counter on all 59,320 regions; the number at +44 is
+    // unique in every map and is 0 to n-1 in 533; the event number at +8 equals the record index on 481 of 11,912 events,
+    // is unique in every map and dense in 1,090; the event's index within its type is the counter on 11,905 of them (in
+    // the base game's 9,211 on all but the two events of type 0xffffffff)
+    assert_eq!((files, regions, region_counter), (1_357, 59_320, 59_320));
+    assert_eq!((numbers_unique, numbers_dense), (1_357, 533));
+    assert_eq!((events, event_counter, event_is_index), (11_912, 11_905, 481));
+    assert_eq!((event_ids_unique, event_ids_dense), (1_357, 1_090));
     Ok(())
 }

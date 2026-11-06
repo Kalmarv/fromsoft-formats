@@ -10,13 +10,17 @@
 //! - **parse-equal, the difference stated**: a DCX envelope compressed again decodes to the same bytes under the same
 //!   header, but its payload is not the shipped one (the compressors are not the tools'); a binder written with its
 //!   nested envelopes compressed again reads back to the same binder; the 3 FMGs are written without their gaps.
-//! - **refused**: a Kraken envelope with either size word one more or one less, with its payload one byte short or one byte
-//!   over, is refused by [`Decoder::decode`].
+//! - **refused**: a Kraken envelope with either size word one more or one less, with its payload one byte short or one
+//!   byte over, is refused by [`Decoder::decode`]; but an Oodle memset quantum states its fill byte and not its length,
+//!   so where the stream's last block is one, a decoded size one more or one less is a well-formed envelope, which
+//!   must decode to that size (at full depth 2 variants in Sekiro, of one texture holding 699,258 zero bytes in 165,
+//!   and 8 in Elden Ring with Shadow of the Erdtree).
 //!
 //! The counts are those of an independent census, two Python models that rebuilt the same files byte for byte: the
-//! archives' DCX headers, 61,581 BND4 and 2,072 BHF4 binders, 288,921 TPF packages, 4,472 FMGs and 235 PARAMs, and the 29
-//! regulations' 5,489 params. `[run] gate = 'smoke'` re-encodes and probes a seeded sample (one entry in sixteen),
-//! `'full'` every one.
+//! archives' DCX headers, 61,581 BND4 and 2,072 BHF4 binders, 288,921 TPF packages, 4,472 FMGs and 235 PARAMs, and the
+//! 29 regulations' 5,489 params, made with Elden Ring's base game: with Shadow of the Erdtree installed Elden Ring's
+//! counts are this test's own (with the expansion's archives left out it gives the census's). `[run] gate = 'smoke'`
+//! re-encodes and probes a seeded sample (one entry in sixteen), `'full'` every one.
 //!
 //! Needs `installs.*`, `keys.*`, `tools.oodle6`, `oracles.uxm.*/dictionary.txt` and, for the regulations,
 //! `oracles.smithbox.elden/regulations`; a test whose input is not configured does nothing.
@@ -193,7 +197,8 @@ impl Census<'_> {
     }
 
     /// A good envelope, and the same with either size word one more or one less, its payload one byte short and one
-    /// byte over: only the first may decode.
+    /// byte over: only the first may decode, and a decoded size the stream's framing allows (its last block a memset
+    /// quantum, which fixes no length), to that size.
     fn refusals(&mut self, label: &str, envelope: &[u8]) {
         // a zero byte after the payload is alignment, so a payload size one over takes it
         let mut base = envelope.to_vec();
@@ -206,26 +211,51 @@ impl Census<'_> {
             return;
         }
         let word = |b: &[u8], at: usize| u32::from_be_bytes(b[at..at + 4].try_into().unwrap());
-        let mut cases: Vec<(String, Vec<u8>)> = Vec::new();
+        // the payload framed for `size` decoded bytes ends in a block of one memset quantum
+        let payload = Envelope::parse(&base, usize::MAX).unwrap().payload;
+        let open_ended = |size: u32| {
+            let framing = usize::try_from(size)
+                .ok()
+                .and_then(|n| oodle_framing::walk(payload, n).ok());
+            framing.and_then(|f| f.blocks.last().copied()).is_some_and(|b| {
+                let q = b.quanta;
+                !b.stored
+                    && b.decoder.quantum_size() == oodle_framing::BLOCK_SIZE
+                    && (q.memset, q.compressed, q.whole_match, q.stored) == (1, 0, 0, 0)
+            })
+        };
+        // each malformed variant, and the size it decodes to where its framing is well formed
+        let mut cases: Vec<(String, Vec<u8>, Option<usize>)> = Vec::new();
         for (at, name) in [(28, "decoded size"), (32, "payload size")] {
             let was = word(&base, at);
             for (now, how) in [(was.wrapping_sub(1), "-1"), (was.wrapping_add(1), "+1")] {
                 let mut bad = base.clone();
                 bad[at..at + 4].copy_from_slice(&now.to_be_bytes());
-                cases.push((format!("{name} {how}"), bad));
+                let decodes = (at == 28 && open_ended(now)).then_some(now as usize);
+                cases.push((format!("{name} {how}"), bad, decodes));
             }
         }
         let mut short = base.clone();
         short.truncate(base.len() - 2);
-        cases.push(("payload one byte short".to_owned(), short));
-        let mut over = base;
+        cases.push(("payload one byte short".to_owned(), short, None));
+        let mut over = base.clone();
         over.push(1);
-        cases.push(("payload one byte over".to_owned(), over));
-        for (what, bad) in cases {
-            if self.decoder.decode(&bad).is_ok() {
-                self.fail(label, format!("accepted with the {what}"));
-            } else {
-                self.bump("dcx malformed Kraken envelopes refused");
+        cases.push(("payload one byte over".to_owned(), over, None));
+        for (what, bad, decodes) in cases {
+            match (self.decoder.decode(&bad), decodes) {
+                (Err(_), None) => self.bump("dcx malformed Kraken envelopes refused"),
+                (Ok(_), None) => self.fail(label, format!("accepted with the {what}")),
+                (Ok(out), Some(n)) if out.len() == n => {
+                    self.bump("dcx memset-ended Kraken envelopes decoded at a size one off")
+                }
+                (Ok(out), Some(n)) => self.fail(
+                    label,
+                    format!("decoded with the {what} to {} bytes, not {n}", out.len()),
+                ),
+                (Err(e), Some(_)) => self.fail(
+                    label,
+                    format!("refused with the {what}, which its memset quantum allows: {e}"),
+                ),
             }
         }
     }
@@ -574,15 +604,15 @@ fn elden_ring_archives() -> Result<()> {
         &c,
         &[
             ("dcx refused", 0),
-            ("dcx envelopes", 117_141),
-            ("dcx framed byte-equal", 117_141),
+            ("dcx envelopes", 153_725),
+            ("dcx framed byte-equal", 153_725),
             ("dcx Deflate", 20),
-            ("bnd4 binders", 53_722),
-            ("bnd4 byte-equal", 53_722),
-            ("bhf4 binders", 1_996),
-            ("bhf4 byte-equal", 1_996),
-            ("tpf packages", 274_440),
-            ("tpf byte-equal", 274_440),
+            ("bnd4 binders", 77_877),
+            ("bnd4 byte-equal", 77_877),
+            ("bhf4 binders", 2_886),
+            ("bhf4 byte-equal", 2_886),
+            ("tpf packages", 429_672),
+            ("tpf byte-equal", 429_672),
             ("fmg files", 3_968),
             ("fmg byte-equal", 3_965),
             // three files hold unreferenced zero bytes between their strings, which the writer leaves out

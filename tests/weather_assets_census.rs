@@ -5,16 +5,19 @@
 //!
 //! The totals asserted are those of an independent census (a Python walk of the params typed by the Smithbox paramdefs
 //! and of the decoded layouts, reading no output of this crate): 1,007 rows naming 27 sky maps, of which the archives
-//! hold the 18 listed below; `isFireAsh` 0 in 412 rows, 1 in 382 and 2 in 213 (the later addition's maps only); 403
-//! rows with a creation limit; 1,599 asset slots in use; no two rows of one map, weather, fire-ash state and limits;
-//! every named asset placed by its sky map's layout. `MapDefaultInfoParam`: 875 rows, by creation limit -1: 114, 0: 69,
-//! 1: 125, 2: 71, 3: 72, 4: 198, 21: 8, 31: 10, 41: 19, 42: 8, 50: 145, 60: 26, 65: 1, 70: 8, 75: 1.
-//! `WeatherAssetCreateParam` (the same independent census):
-//! version 1, 64-byte rows, 8 rows, every padding byte zero; `CreateConditionType` 0 in 6 rows and 1 in 2; the assets
-//! AEG050_448, AEG050_449, AEG096_200 and AEG096_201, two rows each; `CreateAssetLimitId0` 2, 4 and 70 in 2, 2 and 4
-//! rows and the other limit slots -1; `CreatePoint0` set in every row and the other points -1.
+//! hold the 25 listed below (the 18 without Shadow of the Erdtree's); `isFireAsh` 0 in 412 rows, 1 in 382 and 2 in 213
+//! (the later addition's maps only); 403 rows with a creation limit; 1,599 asset slots in use; no two rows of one map,
+//! weather, fire-ash state and limits; every named asset placed by its sky map's layout. `MapDefaultInfoParam`: 875
+//! rows, by creation limit -1: 114, 0: 69, 1: 125, 2: 71, 3: 72, 4: 198, 21: 8, 31: 10, 41: 19, 42: 8, 50: 145, 60: 26,
+//! 65: 1, 70: 8, 75: 1. `WeatherAssetCreateParam` (the same independent census): version 1, 64-byte rows, 8 rows, every
+//! padding byte zero; `CreateConditionType` 0 in 6 rows and 1 in 2; the assets AEG050_448, AEG050_449, AEG096_200 and
+//! AEG096_201, two rows each; `CreateAssetLimitId0` 2, 4 and 70 in 2, 2 and 4 rows and the other limit slots -1;
+//! `CreatePoint0` set in every row and the other points -1.
 //!
 //! Needs `installs.elden`, `keys.elden`, `tools.oodle6` and `oracles.smithbox.elden/defs`; skipped when not configured.
+//!
+//! The Elden Ring numbers of that census are the base game's: with Shadow of the Erdtree installed the numbers asserted
+//! are this test's own, and with the expansion's archives left out it gives the census's.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod inputs;
 
@@ -33,8 +36,8 @@ mod common;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
-/// The sky maps the base game's archives hold a layout for.
-const SKY_MAPS: [&str; 18] = [
+/// The sky maps the archives hold a layout for, Shadow of the Erdtree's included.
+const SKY_MAPS: [&str; 25] = [
     "m10_00_00_99",
     "m11_00_00_99",
     "m11_05_00_99",
@@ -45,6 +48,12 @@ const SKY_MAPS: [&str; 18] = [
     "m14_00_00_99",
     "m15_00_00_99",
     "m16_00_00_99",
+    "m20_00_00_99",
+    "m20_01_00_99",
+    "m21_00_00_99",
+    "m21_01_00_99",
+    "m21_02_00_99",
+    "m28_00_00_99",
     "m34_10_00_99",
     "m34_11_00_99",
     "m34_12_00_99",
@@ -53,6 +62,7 @@ const SKY_MAPS: [&str; 18] = [
     "m34_15_00_99",
     "m39_20_00_99",
     "m60_00_00_99",
+    "m61_00_00_99",
 ];
 
 fn defs(dir: &std::path::Path) -> Result<ParamDefs> {

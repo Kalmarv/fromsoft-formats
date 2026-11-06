@@ -1,9 +1,8 @@
-//! The effect census of each configured game (`tests/census/effects.rs`): every effect binder, animation event file, map
-//! layout and event script reads, every effect file is counted once under exactly one combination of the kinds of record
-//! that reach it (or none), every param table reads (Sekiro's three of the 32-bit form among them), and where Smithbox's
-//! param meta is configured, the param rule takes beyond it only fields that hold effect
-//! files alone. `cargo run --release --example census -- effects <game>` prints the same report and what changed since the
-//! last run.
+//! The effect census of each configured game (`tests/census/effects.rs`): every effect binder, animation event file,
+//! map layout and event script reads, every effect file is counted once under exactly one combination of the kinds of
+//! record that reach it (or none), every param table reads (Sekiro's three of the 32-bit form among them), and where
+//! Smithbox's param meta is configured, the param rule takes beyond it only fields that hold effect files alone. `cargo
+//! run --release --example census -- effects <game>` prints the same report and what changed since the last run.
 mod census;
 mod common;
 mod inputs;

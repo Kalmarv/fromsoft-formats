@@ -1,19 +1,25 @@
 //! The interior flags (`triangleIsInterior`) of the stock compressed meshes against the pass of `havok-formats`
 //! (`interior_keys`), on every compressed mesh of both installs.
 //!
-//! For each mesh that has any flag set on a key of one of its triangles or quads, the primitives are read with their vertex
-//! identities and decoded positions (`interior_primitives`), the pass is run, and the keys it flags are compared with the
-//! keys the file flags: a key is the shape key of a triangle, or of either half of a quad. A mesh with no flag set is not
-//! tested (the pass was not run when it was made: 362 of Sekiro's meshes and 5,777 of Elden Ring's).
+//! For each mesh that has any flag set on a key of one of its triangles or quads, the primitives are read with their
+//! vertex identities and decoded positions (`interior_primitives`), the pass is run, and the keys it flags are compared
+//! with the keys the file flags: a key is the shape key of a triangle, or of either half of a quad. A mesh with no flag
+//! set is not tested (the pass was not run when it was made: 362 of Sekiro's meshes and 10,698 of Elden Ring's
+//! (5,777)).
 //!
-//! The pass reproduces every flag of every such mesh: no key is wrong in 2,982 meshes (25,383,271 keys, 8,080,712 of
-//! them flagged) of Sekiro and in 17,122 meshes (65,846,233 keys, 25,136,262 flagged) of Elden Ring. One mesh of Sekiro
-//! (19 quads) and 53 of Elden Ring (22,196) have quads stored as flat (`primitiveStoresIsFlatConvex` is 255), which the
-//! pass takes as polygons; no other mesh has one.
+//! The pass reproduces every flag of every such mesh of Sekiro and of Elden Ring's base game: no key is wrong in 2,982
+//! meshes (25,383,271 keys, 8,080,712 of them flagged) of Sekiro and in 17,122 meshes (65,846,233 keys, 25,136,262
+//! flagged) of the base game. With Shadow of the Erdtree installed 27,046 of Elden Ring's 27,048 meshes (86,366,666
+//! keys, 31,771,977 flagged) are exact and 4 keys of the other two are not, 2 in each of the expansion's `m28_00_00_00`
+//! high and low collision meshes (shape 0 of `h28_00_00_00_000000` and `l28_00_00_00_000000`): why is not established.
+//! One mesh of Sekiro (19 quads) and 57 of Elden Ring (22,620; (53, 22,196)) have quads stored as flat
+//! (`primitiveStoresIsFlatConvex` is 255), which the pass takes as polygons; no other mesh has one.
 //!
 //! The counts are those of the census over the same files with the scratch probe's copy of the pass (probe mode
-//! `intsim`), not copied from a run of this test. Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`,
-//! `tools.oodle6` and `oracles.uxm.{sekiro,elden}/dictionary.txt`; a game that is not configured is skipped.
+//! `intsim`), not copied from a run of this test: the Elden Ring counts in parentheses are the census's of the base
+//! game; with Shadow of the Erdtree installed the counts asserted are this test's own (with the expansion's archives
+//! left out it gives the census's). Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6` and
+//! `oracles.uxm.{sekiro,elden}/dictionary.txt`; a game that is not configured is skipped.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod common;
 mod hkwalk;
@@ -33,6 +39,8 @@ struct Totals {
     keys: usize,
     flagged: usize,
     wrong: usize,
+    /// Each mesh with a wrong key: its binder, member and shape (in the order of `shapes`), and its wrong keys.
+    wrong_meshes: Vec<(String, usize)>,
     flat_quad_meshes: usize,
     flat_quads: usize,
 }
@@ -45,13 +53,14 @@ impl Totals {
         self.keys += o.keys;
         self.flagged += o.flagged;
         self.wrong += o.wrong;
+        self.wrong_meshes.extend(o.wrong_meshes);
         self.flat_quad_meshes += o.flat_quad_meshes;
         self.flat_quads += o.flat_quads;
     }
 }
 
 fn visit(t: &mut Totals, m: &Member<'_>) -> Result<()> {
-    for shape in shapes(m.tag)? {
+    for (index, shape) in shapes(m.tag)?.into_iter().enumerate() {
         if !is_compressed_mesh(shape.type_name()) {
             continue;
         }
@@ -91,6 +100,10 @@ fn visit(t: &mut Totals, m: &Member<'_>) -> Result<()> {
         t.flagged += flagged;
         t.wrong += wrong;
         t.meshes_exact += usize::from(wrong == 0);
+        if wrong != 0 {
+            t.wrong_meshes
+                .push((format!("{} {} shape {index}", m.binder, m.name), wrong));
+        }
     }
     Ok(())
 }
@@ -99,7 +112,8 @@ fn totals(game: Game) -> Result<Option<Totals>> {
     let Some(install) = hkwalk::open(game, &[Set::Mesh])? else {
         return Ok(None);
     };
-    let t = install.run(visit, Totals::merge)?;
+    let mut t = install.run(visit, Totals::merge)?;
+    t.wrong_meshes.sort();
     eprintln!(
         "{} collision interior flags: {} binders, {t:?}",
         game.name(),
@@ -125,9 +139,23 @@ fn elden_rings_interior_flags_are_what_the_pass_computes() -> Result<()> {
     let Some(t) = totals(Game::EldenRing)? else {
         return Ok(());
     };
-    assert_eq!((t.meshes_with_flags, t.meshes_without_flags), (17_122, 5_777));
-    assert_eq!((t.keys, t.flagged), (65_846_233, 25_136_262));
-    assert_eq!((t.wrong, t.meshes_exact), (0, 17_122));
-    assert_eq!((t.flat_quad_meshes, t.flat_quads), (53, 22_196));
+    assert_eq!((t.meshes_with_flags, t.meshes_without_flags), (27_048, 10_698));
+    assert_eq!((t.keys, t.flagged), (86_366_666, 31_771_977));
+    assert_eq!((t.wrong, t.meshes_exact), (4, 27_046));
+    let wrong: Vec<_> = t.wrong_meshes.iter().map(|(m, n)| (m.as_str(), *n)).collect();
+    assert_eq!(
+        wrong,
+        [
+            (
+                r"/map/m28/m28_00_00_00/h28_00_00_00.hkxbhd m28_00_00_00\h28_00_00_00_000000.hkx.dcx shape 0",
+                2
+            ),
+            (
+                r"/map/m28/m28_00_00_00/l28_00_00_00.hkxbhd m28_00_00_00\l28_00_00_00_000000.hkx.dcx shape 0",
+                2
+            ),
+        ]
+    );
+    assert_eq!((t.flat_quad_meshes, t.flat_quads), (57, 22_620));
     Ok(())
 }

@@ -1,12 +1,13 @@
-//! Every event file (`.tae`) of the animation binders of the installs (`/chr/*.anibnd.dcx` and the animation binders inside
-//! the object, part and asset binders), through [`Tae`]:
-//! the header constants, the animation groups table and the times tables are checked as the files are read, and the
-//! event groups are counted against an independent census of the same files (a separate parser of the header, the
-//! animation table and the group arrays, reading no output of this crate), which found 326 distinct event files in
-//! Sekiro's install and 1,071 in Elden Ring's.
+//! Every event file (`.tae`) of the animation binders of the installs (`/chr/*.anibnd.dcx` and the animation binders
+//! inside the object, part and asset binders), through [`Tae`]: the header constants, the animation groups table and
+//! the times tables are checked as the files are read, and the event groups are counted against an independent census
+//! of the same files (a separate parser of the header, the animation table and the group arrays, reading no output of
+//! this crate), which found 326 distinct event files in Sekiro's install and 1,071 in Elden Ring's base game. With
+//! Shadow of the Erdtree installed Elden Ring's numbers are this test's own (1,282 distinct event files); with the
+//! expansion's archives left out it gives the census's.
 //!
-//! Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6` and `oracles.uxm.{sekiro,elden}/dictionary.txt`;
-//! a game that is not configured is skipped.
+//! Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6` and
+//! `oracles.uxm.{sekiro,elden}/dictionary.txt`; a game that is not configured is skipped.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod inputs;
 
@@ -28,7 +29,7 @@ fn every_event_file_of_the_animation_binders_reads_with_its_groups() -> Result<(
         (
             Game::EldenRing,
             Data::Elden,
-            [1_071, 51_151, 943_080, 49_359, 45_101],
+            [1_282, 66_813, 1_164_636, 61_545, 58_615],
         ),
     ] {
         let (Some(root), Some(folder), Some(dll), Some(dictionary)) = (

@@ -1,13 +1,17 @@
-//! The stored format code of every texture of every texture package of each installed game (the split `.tpfbhd` binders,
-//! `.tpf.dcx` files and the `texbnd`, `tpfbnd`, `objbnd`, `partsbnd`, `ffxbnd` and `fgbnd` binders) against the pixel format
-//! of the DDS file it holds: each code stands for one pixel layout ([`PixelFamily`]), under the DDS dialects below.
+//! The stored format code of every texture of every texture package of each installed game (the split `.tpfbhd`
+//! binders, `.tpf.dcx` files and the `texbnd`, `tpfbnd`, `objbnd`, `partsbnd`, `ffxbnd` and `fgbnd` binders) against
+//! the pixel format of the DDS file it holds: each code stands for one pixel layout ([`PixelFamily`]), under the DDS
+//! dialects below.
 //!
-//! The expected numbers are a census made with an independent Python reader of the same files (a TPF walker and a DDS header
-//! reader).
+//! The expected numbers are a census made with an independent Python reader of the same files (a TPF walker and a DDS
+//! header reader).
 //!
 //! Elden Ring's counts are those of the path dictionary that names all 97,118 entries of the base archives
 //! (`tests/inputs`: UXM's list and the 87 Smithbox paths that hash onto the entries UXM's list leaves unnamed); the
 //! Python reader walked the same archives and named the same entries.
+//!
+//! The Elden Ring numbers of that census are the base game's: with Shadow of the Erdtree installed the numbers asserted
+//! are this test's own, and with the expansion's archives left out it gives the census's.
 mod inputs;
 
 use fromsoft_formats::{
@@ -190,23 +194,23 @@ fn elden_rings_format_codes() -> Result<()> {
         "texture packages",
         t.packages,
     );
-    assert_eq!((t.packages, t.textures, t.no_family), (274_440, 301_807, 0));
+    assert_eq!((t.packages, t.textures, t.no_family), (429_672, 464_260, 0));
     assert_eq!(
         t.by_code,
         table(&[
-            (0, &[("DX10:72", 12_703), ("fourcc:DXT1", 3_393)]),
-            (1, &[("DX10:72", 4_201)]),
+            (0, &[("DX10:72", 16_408), ("fourcc:DXT1", 3_933)]),
+            (1, &[("DX10:72", 5_385)]),
             (9, &[("rgb:41:bits32:ff0000/ff00/ff/ff000000", 3)]),
-            (10, &[("DX10:93", 4)]),
-            (22, &[("fourcc:113", 1_193)]),
-            (102, &[("DX10:98", 210_421), ("DX10:99", 686)]),
-            (103, &[("DX10:80", 14), ("fourcc:ATI1", 7_092)]),
-            (104, &[("fourcc:ATI2", 92)]),
-            (105, &[("rgb:41:bits32:ff/ff00/ff0000/ff000000", 974)]),
-            (106, &[("DX10:98", 9_653)]),
-            (107, &[("DX10:98", 3_770)]),
-            (108, &[("fourcc:DXT1", 3_072)]),
-            (115, &[("DX10:95", 44_536)]),
+            (10, &[("DX10:93", 5), ("rgb:40:bits32:ff0000/ff00/ff/0", 2)]),
+            (22, &[("fourcc:113", 1_641)]),
+            (102, &[("DX10:98", 329_829), ("DX10:99", 940)]),
+            (103, &[("DX10:80", 14), ("fourcc:ATI1", 8_668)]),
+            (104, &[("fourcc:ATI2", 122)]),
+            (105, &[("rgb:41:bits32:ff/ff00/ff0000/ff000000", 1_033)]),
+            (106, &[("DX10:98", 12_501)]),
+            (107, &[("DX10:98", 4_428)]),
+            (108, &[("fourcc:DXT1", 4_563)]),
+            (115, &[("DX10:95", 74_785)]),
         ])
     );
     // the order of the channels tells 9 from 105

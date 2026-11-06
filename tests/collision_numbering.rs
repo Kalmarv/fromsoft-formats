@@ -2,13 +2,16 @@
 //! compressed mesh of both installs.
 //!
 //! The leaves of a section tree, in file order, carry the index each primitive is stored at. The stock tool numbers the
-//! primitives in the pre-order of the tree and then sorts them by data-run index with its quicksort; a section names one
-//! run, so the result depends on the count alone. Every section tree of two leaves or more follows it: 273,148 in Sekiro
-//! and 721,282 in Elden Ring (all the section trees there are, with the 80 and 1,123 that have a single leaf).
+//! primitives in the pre-order of the tree and then sorts them by data-run index with its quicksort; a section names
+//! one run, so the result depends on the count alone. Every section tree of two leaves or more follows it: 273,148 in
+//! Sekiro and 947,665 in Elden Ring (721,282) (all the section trees there are, with the 80 and 1,549 (1,123) that have
+//! a single leaf).
 //!
 //! The counts are those of the census over the same files with the scratch probe's copy of the rule (probe mode
-//! `numperm`), not copied from a run of this test. Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`,
-//! `tools.oodle6` and `oracles.uxm.{sekiro,elden}/dictionary.txt`; a game that is not configured is skipped.
+//! `numperm`), not copied from a run of this test: the Elden Ring counts in parentheses are the census's of the base
+//! game; with Shadow of the Erdtree installed the counts asserted are this test's own (with the expansion's archives
+//! left out it gives the census's). Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6` and
+//! `oracles.uxm.{sekiro,elden}/dictionary.txt`; a game that is not configured is skipped.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod common;
 mod hkwalk;
@@ -95,6 +98,6 @@ fn every_section_tree_of_elden_ring_numbers_its_primitives_the_stock_way() -> Re
     let Some(t) = totals(Game::EldenRing)? else {
         return Ok(());
     };
-    assert_eq!((t.followed, t.not_followed, t.single_leaf), (721_282, 0, 1_123));
+    assert_eq!((t.followed, t.not_followed, t.single_leaf), (947_665, 0, 1_549));
     Ok(())
 }

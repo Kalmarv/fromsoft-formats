@@ -1,9 +1,12 @@
-//! The grass meshes (`.grass`) of the map and asset binders of each installed game through [`Grass`]: every file reads, its
-//! volumes form the tree the reader checks, a volume's mask word is the set of grass types its faces' vertices grow, the
-//! box of a volume holds the vertices of its faces, and the six densities lie in 0 to 1.
+//! The grass meshes (`.grass`) of the map and asset binders of each installed game through [`Grass`]: every file reads,
+//! its volumes form the tree the reader checks, a volume's mask word is the set of grass types its faces' vertices
+//! grow, the box of a volume holds the vertices of its faces, and the six densities lie in 0 to 1.
 //!
 //! The expected numbers are a census made with an independent Python reader of the same files (the layout from the
 //! community's reader and the binary template, the tree and the masks read from the data).
+//!
+//! The Elden Ring numbers of that census are the base game's: with Shadow of the Erdtree installed the numbers asserted
+//! are this test's own, and with the expansion's archives left out it gives the census's.
 mod inputs;
 
 use fromsoft_formats::{Game, NameDictionary, dcx::Decoder, grass::Grass};
@@ -269,24 +272,24 @@ fn elden_rings_grass_meshes() -> Result<()> {
     expect_found(Query::Install(inputs::Game::Elden, None), "grass meshes", t.files);
     assert_eq!(
         (t.files, t.volumes, t.vertices, t.faces),
-        (1_925, 89_852, 4_490_801, 7_799_267)
+        (3_064, 197_429, 11_132_606, 18_752_273)
     );
-    assert_eq!(t.children, BTreeMap::from([(0, 45_879), (1, 19), (2, 43_954)]));
-    assert_eq!((t.two_children_fill, t.one_child_holds_more), (43_954, 19));
+    assert_eq!(t.children, BTreeMap::from([(0, 100_212), (1, 69), (2, 97_148)]));
+    assert_eq!((t.two_children_fill, t.one_child_holds_more), (97_148, 69));
     assert_eq!(
         t.types_per_vertex,
         BTreeMap::from([
-            (0, 574_942),
-            (1, 1_041_497),
-            (2, 1_413_705),
-            (3, 751_222),
-            (4, 324_111),
-            (5, 166_553),
-            (6, 218_771)
+            (0, 775_076),
+            (1, 2_423_362),
+            (2, 4_534_726),
+            (3, 2_319_454),
+            (4, 581_417),
+            (5, 251_649),
+            (6, 246_922)
         ])
     );
     assert_eq!(t.density_range, (0., 1.));
-    assert_eq!(t.over_one, 1_169_828);
+    assert_eq!(t.over_one, 5_109_677);
     assert_eq!((t.mask_differs, t.box_misses_a_vertex), (0, 0));
     assert_eq!(
         (
@@ -294,7 +297,7 @@ fn elden_rings_grass_meshes() -> Result<()> {
             t.non_unit_normals,
             t.normals_not_against_the_cross_product
         ),
-        (674, 492_851, 469)
+        (1176, 3_561_582, 4220)
     );
     Ok(())
 }

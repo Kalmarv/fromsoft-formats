@@ -1,11 +1,12 @@
-//! The TAE writer: files built here read back as written and refuse what the format cannot store; and every distinct event
-//! file of the animation binders of both installs (Sekiro's 326, Elden Ring's 1,071) writes back to its bytes.
+//! The TAE writer: files built here read back as written and refuse what the format cannot store; and every distinct
+//! event file of the animation binders of both installs (Sekiro's 326, Elden Ring's 1,282 with Shadow of the Erdtree
+//! installed, 1,071 without) writes back to its bytes.
 //!
-//! The real-data counts were measured with an independent Python implementation of the layout (a parser and a writer of
-//! its own, run over the same files): every one of the 326 and 1,071 is written byte for byte.
+//! The base games' counts were measured with an independent Python implementation of the layout (a parser and a writer
+//! of its own, run over the same files): every one of the 326 and 1,071 is written byte for byte.
 //!
-//! Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6` and `oracles.uxm.{sekiro,elden}/dictionary.txt`
-//! for the real-data test; a game that is not configured is skipped.
+//! Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6` and
+//! `oracles.uxm.{sekiro,elden}/dictionary.txt` for the real-data test; a game that is not configured is skipped.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod common;
 mod inputs;
@@ -198,7 +199,7 @@ fn what_the_format_cannot_store_is_refused() {
 fn every_event_file_of_the_installs_writes_back_to_its_bytes() -> Result<()> {
     for (game, data, expected) in [
         (Game::Sekiro, Data::Sekiro, 326),
-        (Game::EldenRing, Data::Elden, 1_071),
+        (Game::EldenRing, Data::Elden, 1_282),
     ] {
         let (Some(root), Some(folder), Some(dll), Some(dictionary)) = (
             install(data),

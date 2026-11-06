@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.17.0 (2026-11-06)
+
+- **Breaking:** havok-formats 0.10.0 (from 0.9.0), whose `Compendium` and `Error` this crate's `collision::read_map`,
+  `collision::read_bodies` and `Error::Havok` take. Its constraint reader keeps NaN floats as stored, so every ragdoll
+  of the Elden Ring install with Shadow of the Erdtree reads (the DLC's `chr/c5320.chrbnd.dcx` was refused).
+- The real-data tests are of the Elden Ring install with Shadow of the Erdtree (Steam build 25827938), checked against
+  the references `oracles.soulsformats.elden/census-sote` and `format-sote` (made of that install); each test's
+  documentation keeps the base game's counts beside them. The FLVER census matches a model whose entry a later archive
+  repeats with the same bytes (`Archive::repeated`: the DLC repeats `/chr/c5550.chrbnd.dcx`) through the first copy. The
+  collision interior pass reproduces the flags of 27,046 of the install's 27,048 flagged meshes; 4 keys of the other
+  two (the DLC's `m28_00_00_00` high and low collision meshes, 2 each) differ, which the test pins by mesh (why is not
+  established).
+- `writers_census` at full depth: an Oodle stream whose last block is a memset quantum (which states its fill byte and
+  not its length) is well formed at a decoded size one more or one less, so the test now expects such an envelope to
+  decode at that size instead of being refused (one Sekiro texture, `c5010_body_A_m.tpf.dcx` of
+  `/map/m17/m17_0000.tpfbhd`: 699,258 zero bytes in a 165-byte payload, its 2 variants; Elden Ring has 8 such variants).
+  Every other malformed variant is still refused (162,436 in Sekiro and 922,222 in Elden Ring at full depth).
+
 ## 0.16.0 (2026-11-06)
 
 - **Breaking:** `param::Stored` gains `format` (a `param::Format`: byte order, the header's format bytes 0x2D and

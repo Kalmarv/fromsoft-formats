@@ -1,5 +1,5 @@
-//! The point sets of the custom primitives of the installs' compressed meshes (`havok_formats::PointSet`): every mesh of
-//! the map, object and asset collision is read, and each `0x52` record decodes to points that lie in the box of the
+//! The point sets of the custom primitives of the installs' compressed meshes (`havok_formats::PointSet`): every mesh
+//! of the map, object and asset collision is read, and each `0x52` record decodes to points that lie in the box of the
 //! primitive's leaf.
 //!
 //! The counts are those of the census that found the record layout (its own decoder, in the collision checks of the
@@ -8,8 +8,11 @@
 //! (all assets), 336 points, the tag word 0x3C24, at most 12 points a record. The map `h` and `l` sets have none. The
 //! extern shape references (Elden Ring: 8 in the `_h` assets and 254 in the `_l`) are not point sets.
 //!
-//! Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6` and `oracles.uxm.{sekiro,elden}/dictionary.txt`;
-//! a game that is not configured is skipped.
+//! Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6` and
+//! `oracles.uxm.{sekiro,elden}/dictionary.txt`; a game that is not configured is skipped.
+//!
+//! The Elden Ring numbers of that census are the base game's: with Shadow of the Erdtree installed the numbers asserted
+//! are this test's own, and with the expansion's archives left out it gives the census's.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod common;
 mod hkwalk;
@@ -170,6 +173,6 @@ fn elden_rings_point_sets_decode_inside_their_leaf_boxes() -> Result<()> {
     assert_eq!(t.tags, BTreeMap::from([(0x3c24, 28)]));
     assert_eq!((t.inside, t.outside), (336, 0), "worst excess {}", t.worst_excess);
     // the extern shape references are the other custom primitives: 8 in the `_h` assets, 254 in the `_l`
-    assert_eq!(t.externs, 262);
+    assert_eq!(t.externs, 401);
     Ok(())
 }

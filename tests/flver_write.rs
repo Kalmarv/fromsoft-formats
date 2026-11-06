@@ -1,13 +1,16 @@
 //! The FLVER writer: a model built here writes and reads back; the layout read from a file writes the model back to the
-//! file; values that do not fit their encoding are refused; and every FLVER of both installs that the reader takes writes
-//! back to its bytes.
+//! file; values that do not fit their encoding are refused; and every FLVER of both installs that the reader takes
+//! writes back to its bytes.
 //!
 //! The real-data counts were measured with an independent Python implementation of the layout (a parser and a writer of
-//! its own, with the vertex and index data kept as bytes, run over the same files): all of Sekiro's 14,064 distinct FLVERs
-//! and Elden Ring's 20,557 are written back byte for byte, with the rules the module's note states.
+//! its own, with the vertex and index data kept as bytes, run over the same files): all of Sekiro's 14,064 distinct
+//! FLVERs and Elden Ring's 20,557 are written back byte for byte, with the rules the module's note states.
 //!
-//! Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6` and `oracles.uxm.{sekiro,elden}/dictionary.txt`
-//! for the real-data test; a game that is not configured is skipped.
+//! Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6` and
+//! `oracles.uxm.{sekiro,elden}/dictionary.txt` for the real-data test; a game that is not configured is skipped.
+//!
+//! The Elden Ring numbers of that census are the base game's: with Shadow of the Erdtree installed the numbers asserted
+//! are this test's own, and with the expansion's archives left out it gives the census's.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod common;
 mod inputs;
@@ -525,8 +528,8 @@ fn elden_rings_flvers_write_back_to_their_bytes() -> Result<()> {
     println!(
         "Elden Ring: {models} FLVERs written back, {refused} refused by the reader, {bones} bones, {face_sets} face sets"
     );
-    assert_eq!(models + refused, 22_169);
-    assert_eq!((bones, face_sets), (535_503, 277_113));
+    assert_eq!(models + refused, 30_795);
+    assert_eq!((bones, face_sets), (619_093, 341_297));
     Ok(())
 }
 

@@ -1,14 +1,18 @@
-//! A TAE file held to the community's event templates ([`Tae::check_templates`], [`Tae::write_checked`]): the refusals name
-//! the animation, the event and the field; and every event of every distinct event file of both installs passes the
-//! Smithbox templates for its game.
+//! A TAE file held to the community's event templates ([`Tae::check_templates`], [`Tae::write_checked`]): the refusals
+//! name the animation, the event and the field; and every event of every distinct event file of both installs passes
+//! the Smithbox templates for its game.
 //!
 //! The real-data counts are those of an independent Python reader of the same files and templates (a TAE walker and a
-//! template reader written from the file layout and the XML alone): Sekiro's 326 distinct event files hold 337,924 events,
-//! 337,847 of a type the template defines (types 340, 341 and 350 have none) and 553,355 asserted fields that hold their
-//! value; Elden Ring's 1,071 hold 1,313,057 events, all of a defined type, and 2,050,123 asserted fields that hold theirs.
+//! template reader written from the file layout and the XML alone): Sekiro's 326 distinct event files hold 337,924
+//! events, 337,847 of a type the template defines (types 340, 341 and 350 have none) and 553,355 asserted fields that
+//! hold their value; Elden Ring's base game's 1,071 hold 1,313,057 events, all of a defined type, and 2,050,123
+//! asserted fields that hold theirs. With Shadow of the Erdtree installed Elden Ring's are this test's own: 1,282
+//! files, 1,635,135 events, all of a defined type, and 2,603,817 asserted fields (with the expansion's archives left
+//! out it gives the reader's).
 //!
-//! Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6`, `oracles.uxm.{sekiro,elden}/dictionary.txt` and
-//! `oracles.smithbox.{sekiro,elden}/tae-template.xml` for the real-data test; a game that is not configured is skipped.
+//! Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6`, `oracles.uxm.{sekiro,elden}/dictionary.txt`
+//! and `oracles.smithbox.{sekiro,elden}/tae-template.xml` for the real-data test; a game that is not configured is
+//! skipped.
 mod common;
 mod inputs;
 
@@ -119,7 +123,7 @@ fn every_event_of_the_installs_keeps_the_templates_asserts() -> Result<()> {
     // per game: events, events of a defined type, asserted fields held
     for (game, data, expected) in [
         (Game::Sekiro, Data::Sekiro, (337_924, 337_847, 553_355)),
-        (Game::EldenRing, Data::Elden, (1_313_057, 1_313_057, 2_050_123)),
+        (Game::EldenRing, Data::Elden, (1_635_135, 1_635_135, 2_603_817)),
     ] {
         let (Some(root), Some(folder), Some(dll), Some(dictionary), Some(template)) = (
             install(data),

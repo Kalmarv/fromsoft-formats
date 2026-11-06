@@ -1,14 +1,17 @@
-//! The degenerate-triangle test of `havok-formats` (`is_degenerate_triangle`, the stock tool's own) on the source rows of
-//! every compressed mesh of both installs that has the custom parameter (`pParam`).
+//! The degenerate-triangle test of `havok-formats` (`is_degenerate_triangle`, the stock tool's own) on the source rows
+//! of every compressed mesh of both installs that has the custom parameter (`pParam`).
 //!
-//! A row whose entry of `triangleIndexToShapeKey` names a triangle of the mesh is a kept triangle; the others are left out.
-//! No kept triangle is degenerate by the test (24,704,951 in Sekiro, 66,147,210 in Elden Ring). Of the left-out rows whose
-//! three source vertices a kept row also uses (the position taken from the first such row), the test calls 13,345 of 87,100
-//! degenerate in Sekiro and 267,763 of 549,405 in Elden Ring; the others use a vertex no kept row uses (27,874 and 538,167).
+//! A row whose entry of `triangleIndexToShapeKey` names a triangle of the mesh is a kept triangle; the others are left
+//! out. No kept triangle is degenerate by the test (24,704,951 in Sekiro, 86,931,924 in Elden Ring (66,147,210)). Of
+//! the left-out rows whose three source vertices a kept row also uses (the position taken from the first such row), the
+//! test calls 13,345 of 87,100 degenerate in Sekiro and 323,977 of 671,156 in Elden Ring (267,763 of 549,405); the
+//! others use a vertex no kept row uses (27,874 and 636,723 (538,167)).
 //!
 //! The counts are those of the census over the same files with the scratch probe's copy of the test (probe mode
-//! `degencrate`), not copied from a run of this test. Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`,
-//! `tools.oodle6` and `oracles.uxm.{sekiro,elden}/dictionary.txt`; a game that is not configured is skipped.
+//! `degencrate`), not copied from a run of this test: the Elden Ring counts in parentheses are the census's of the base
+//! game; with Shadow of the Erdtree installed the counts asserted are this test's own (with the expansion's archives
+//! left out it gives the census's). Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6` and
+//! `oracles.uxm.{sekiro,elden}/dictionary.txt`; a game that is not configured is skipped.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod common;
 mod hkwalk;
@@ -135,8 +138,8 @@ fn no_kept_triangle_of_elden_ring_is_degenerate() -> Result<()> {
     let Some(t) = totals(Game::EldenRing)? else {
         return Ok(());
     };
-    assert_eq!((t.kept, t.kept_degenerate), (66_147_210, 0));
-    assert_eq!((t.left_out_known, t.left_out_degenerate), (549_405, 267_763));
-    assert_eq!(t.left_out_unknown, 538_167);
+    assert_eq!((t.kept, t.kept_degenerate), (86_931_924, 0));
+    assert_eq!((t.left_out_known, t.left_out_degenerate), (671_156, 323_977));
+    assert_eq!(t.left_out_unknown, 636_723);
     Ok(())
 }

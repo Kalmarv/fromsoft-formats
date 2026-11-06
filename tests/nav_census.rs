@@ -1,13 +1,15 @@
 //! Every navmesh binder the installs hold (`*.nvmhktbnd.dcx`), through [`havok_formats::navmesh::nav_data`]: every
 //! member tagfile reads (each carries its own type table), and the totals are those of the census that found them
 //! with its own reading of the same files (Sekiro: 10 binders, 1,509 tagfiles, 279,053 faces, 1,160,836 edges; Elden
-//! Ring: 695 binders, 7,438 tagfiles, 6,317,094 faces, 26,313,941 edges).
+//! Ring's base game: 695 binders, 7,438 tagfiles, 6,317,094 faces, 26,313,941 edges). With Shadow of the Erdtree
+//! installed Elden Ring's are this test's own (997 binders, 10,880 tagfiles, 9,476,723 faces, 39,262,850 edges); with
+//! the expansion's archives left out it gives the census's.
 //!
 //! The binders are found from the games' MSB map names as well as from the dictionaries: a binder either archive
 //! holds that its dictionary does not name is read too (the test counts them; there are none).
 //!
-//! Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6` and `oracles.uxm.{sekiro,elden}/dictionary.txt`;
-//! a game that is not configured is skipped.
+//! Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6` and
+//! `oracles.uxm.{sekiro,elden}/dictionary.txt`; a game that is not configured is skipped.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod common;
 mod inputs;
@@ -231,20 +233,20 @@ fn elden_rings_navmesh_binders_read_with_the_census_totals() -> Result<()> {
     let Some(t) = totals(Game::EldenRing)? else {
         return Ok(());
     };
-    assert_eq!((t.binders, t.unnamed_binders, t.files), (695, 0, 7_438));
-    assert_eq!((t.sdk_2016, t.sdk_2018), (0, 7_438));
+    assert_eq!((t.binders, t.unnamed_binders, t.files), (997, 0, 10_880));
+    assert_eq!((t.sdk_2016, t.sdk_2018), (0, 10_880));
     assert_eq!(
         (t.faces, t.edges, t.vertices),
-        (6_317_094, 26_313_941, 13_306_284)
+        (9_476_723, 39_262_850, 19_940_555)
     );
     assert_eq!(
         (t.user_edges, t.clustered_faces, t.empty_meshes),
-        (2_597_337, 0, 4_027)
+        (3_924_697, 0, 6_316)
     );
-    // 3,826 of them the corners straight only seen from above (havok-formats 0.9.0's census)
-    assert_eq!((t.triangles, t.incomplete_faces), (11_079_642, 2));
+    // in the base game 3,826 of them the corners straight only seen from above (havok-formats 0.9.0's census)
+    assert_eq!((t.triangles, t.incomplete_faces), (16_381_383, 2));
     assert_eq!((t.graphs, t.graph_nodes, t.graph_edges), (0, 0, 0));
-    assert_eq!((t.trees, t.tree_nodes), (6_021, 12_630_777));
-    assert_eq!((t.setup_arrays, t.setups), (188, 673));
+    assert_eq!((t.trees, t.tree_nodes), (8_833, 18_948_882));
+    assert_eq!((t.setup_arrays, t.setups), (263, 959));
     Ok(())
 }

@@ -1,10 +1,11 @@
 //! The animation binders of each install's characters (`/chr/*.anibnd.dcx`) and the binders their markers name
-//! (`Binder::division_markers`): Sekiro's player keeps its animations in seven binders its `.txt` markers name, Elden Ring's
-//! characters in divisions their `.blf` lists name (96 binders, 261 lists), and the player's in eleven by `.txt` markers.
-//! Every list reads as `blf::LoadList` and has the same three commands.
+//! (`Binder::division_markers`): Sekiro's player keeps its animations in seven binders its `.txt` markers name, Elden
+//! Ring's characters in divisions their `.blf` lists name (140 binders, 369 lists; 96 and 261 in the base game), and
+//! the player's in eleven by `.txt` markers. Every list reads as `blf::LoadList` and has the same three commands.
 //!
-//! The expected numbers are a census made with an independent Python reader of the same binders (the member names of every
-//! animation binder at the top level of the archive).
+//! The expected numbers are a census made with an independent Python reader of the same binders (the member names of
+//! every animation binder at the top level of the archive), made on the base game: with Shadow of the Erdtree installed
+//! the Elden Ring numbers are this test's own (with the expansion's archives left out it gives the census's).
 mod inputs;
 
 use fromsoft_formats::{Game, NameDictionary, blf::LoadList, dcx::Decoder};
@@ -178,17 +179,17 @@ fn elden_rings_characters_name_their_divisions() -> Result<()> {
         "animation binders",
         t.binders,
     );
-    assert_eq!(t.binders, 567);
-    // 96 characters keep a list for each division (261 lists), the player 11 text markers
-    assert_eq!((t.with_companions, t.companions), (97, 272));
+    assert_eq!(t.binders, 811);
+    // 140 characters keep a list for each division (369 lists), the player 11 text markers
+    assert_eq!((t.with_companions, t.companions), (141, 380));
     assert_eq!(
         t.by_count,
-        BTreeMap::from([(2, 61), (3, 17), (4, 9), (5, 3), (6, 5), (7, 1), (11, 1)])
+        BTreeMap::from([(2, 92), (3, 24), (4, 14), (5, 4), (6, 5), (7, 1), (11, 1)])
     );
     // two of the player's text markers name no binder of the archive
     assert_eq!(t.markers_without_binder, 2);
-    assert_eq!((t.lists, t.binders_with_lists), (261, 96));
-    assert_eq!(t.versions, BTreeMap::from([(301, 261)]));
+    assert_eq!((t.lists, t.binders_with_lists), (369, 140));
+    assert_eq!(t.versions, BTreeMap::from([(301, 369)]));
     // every list: the animations (entry id 1,000,000,000), `div_data.txt` (6,000,000) and `ver_0001.txt` (9,999,999)
     assert_eq!(
         t.shapes,
@@ -198,7 +199,7 @@ fn elden_rings_characters_name_their_divisions() -> Result<()> {
                 (6_000_000, "_TXT".to_owned(), [16, 2, 1]),
                 (9_999_999, "_TXT".to_owned(), [16, 2, 1]),
             ],
-            261
+            369
         )])
     );
     Ok(())

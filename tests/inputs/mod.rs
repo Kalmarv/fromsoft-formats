@@ -94,16 +94,22 @@ primase_testdata::inputs! {
             about: r#"an independent decoder's raw triangle soup of each `havok` tagfile, `<name>.hkx.soup`; schema in https://github.com/Kalmarv/primase/tree/main/toolkit/havok/README.md; tests/collision.rs"#,
             source: r#"independent: a clean-room decoder written from the data alone (no code of this crate, no third-party code), a small Python-standard-library program (5f6dde8) run over `corpus.sekiro/havok`; its README states the format facts and its counts.tsv the per-file triangles"#,
         },
-        Query::Oracle(OracleSet::SoulsFormats, Game::Elden, "census") => {
+        Query::Oracle(OracleSet::SoulsFormats, Game::Elden, "census-sote") => {
             status: Live,
             gate: false,
-            about: r#"an independent census of installs.elden in oracles.soulsformats.sekiro/census's schema (the archives' decrypted headers as `<name>.plain`, entries.tsv, binders.tsv, errors.tsv, samples; hashes 16 hex digits; an archive's shard is its index in UXM's Elden Ring archive list); tests/flver_census.rs"#,
-            source: r#"independent: SoulsFormatsNEXT ee1dd61 with UXM 9501be8's keys, RSA and path hash, the Elden Ring harness's `census` mode (not part of this repository)"#,
+            about: r#"an independent census of installs.elden with Shadow of the Erdtree (Steam build 25827938) in oracles.soulsformats.sekiro/census's schema (the archives' decrypted headers as `<name>.plain`, `DLC.plain` among them, entries.tsv, binders.tsv, errors.tsv, samples; hashes 16 hex digits; an archive's shard is its index in UXM's Elden Ring archive list); tests/flver_census.rs"#,
+            source: r#"independent: SoulsFormatsNEXT ee1dd61 with UXM 9501be8's keys, RSA and path hash, the Elden Ring harness's `census` mode (primase-oracles 6b07350, not part of this repository)"#,
+        },
+        Query::Oracle(OracleSet::SoulsFormats, Game::Elden, "format-sote") => {
+            status: Live,
+            gate: false,
+            about: r#"the reading `format` holds of msb, btl, matbin and metaparam, of installs.elden with Shadow of the Erdtree (Steam build 25827938): `btl.jsonl` holds the DLC's light banks too (192 against 109); tests/btl_census.rs"#,
+            source: r#"independent: SoulsFormatsNEXT ee1dd61 with UXM 9501be8's keys and path hash, the Elden Ring harness's format modes (primase-oracles 6b07350, not part of this repository)"#,
         },
         Query::Oracle(OracleSet::SoulsFormats, Game::Elden, "format") => {
             status: Live,
             gate: false,
-            about: r#"an independent reader's field-by-field reading of Elden Ring files read from installs.elden (JSON lines, floats as hex bit patterns): `msb.jsonl` (every map layout: its models, every part with kind, model, transform, entity IDs, shadow controls and hit filter, and its spawn point regions with name, position and rotation), `btl.jsonl` (every light bank: its version and lights, or the reference's refusal), `havok.jsonl` (chosen tiles' map collision and assets' collision: every compressed mesh shape's stored sections, vertices, primitives, shape keys and extern shape instances), `matbin.jsonl` (every material binder's members in member order: shader and source paths, key, every parameter's name, key, type and value, every sampler's type, path, key and two trailing floats), `metaparam.jsonl` (every shader bundle's metaparam: binder, bundle and member names, header words, texture slots, render passes, CAParams and MtdParams); schema in https://github.com/Kalmarv/primase/tree/main/worlds/fromsoft/README.md; tests/btl_census.rs, tests/havok_census.rs, tests/matbin_census.rs, tests/metaparam_census.rs"#,
+            about: r#"an independent reader's field-by-field reading of Elden Ring files read from installs.elden (JSON lines, floats as hex bit patterns): `msb.jsonl` (every map layout: its models, every part with kind, model, transform, entity IDs, shadow controls and hit filter, and its spawn point regions with name, position and rotation), `btl.jsonl` (every light bank: its version and lights, or the reference's refusal), `havok.jsonl` (chosen tiles' map collision and assets' collision: every compressed mesh shape's stored sections, vertices, primitives, shape keys and extern shape instances), `matbin.jsonl` (every material binder's members in member order: shader and source paths, key, every parameter's name, key, type and value, every sampler's type, path, key and two trailing floats), `metaparam.jsonl` (every shader bundle's metaparam: binder, bundle and member names, header words, texture slots, render passes, CAParams and MtdParams); schema in https://github.com/Kalmarv/primase/tree/main/worlds/fromsoft/README.md; tests/havok_census.rs, tests/matbin_census.rs, tests/metaparam_census.rs (its matbin and metaparam are those of the install with the DLC too: the base archives hold the DLC's binders)"#,
             source: r#"independent: SoulsFormatsNEXT ee1dd61 with UXM 9501be8's keys and path hash, and HKLib ac40bc9 for Havok, the Elden Ring harness's format modes (not part of this repository)"#,
         },
         Query::Oracle(OracleSet::SoulsFormats, Game::Sekiro, "census") => {

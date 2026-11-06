@@ -1,5 +1,5 @@
-//! The GX items of every model in the map, character, part, asset and object binders of each installed game against
-//! the community's descriptors (Smithbox's `GX_Item_Descriptors.json`, `oracles.smithbox.<game>/gx-item-descriptors.json`):
+//! The GX items of every model in the map, character, part, asset and object binders of each installed game against the
+//! community's descriptors (Smithbox's `GX_Item_Descriptors.json`, `oracles.smithbox.<game>/gx-item-descriptors.json`):
 //! the crate's table of names is the descriptors' for the items the installs store, every item whose id and version the
 //! table names stores no more words than the descriptor lists, and the properties the `Material` accessors read lie in
 //! the ranges below.
@@ -10,6 +10,9 @@
 //! Elden Ring's counts are those of the path dictionary that names all 97,118 entries of the base archives
 //! (`tests/inputs`: UXM's list and the 87 Smithbox paths that hash onto the entries UXM's list leaves unnamed); the
 //! Python reader walked the same archives and named the same entries.
+//!
+//! The Elden Ring numbers of that census are the base game's: with Shadow of the Erdtree installed the numbers asserted
+//! are this test's own, and with the expansion's archives left out it gives the census's.
 mod inputs;
 
 use fromsoft_formats::{
@@ -277,17 +280,17 @@ fn elden_rings_gx_items() -> Result<()> {
         t.models, t.materials, t.items, t.emissive, t.translucency, t.albedo, t.parallax, t.water
     );
     expect_found(Query::Install(inputs::Game::Elden, None), "models", t.models);
-    assert_eq!((t.models, t.materials, t.items), (21_681, 86_791, 113_293));
+    assert_eq!((t.models, t.materials, t.items), (30_305, 114_679, 149_641));
     assert_eq!(
         t.by_item,
         counts(&[
             ("GX00v100", 1),
-            ("GX00v102", 85_906),
+            ("GX00v102", 113_088),
             ("GX03v100", 1),
             ("GX04v100", 136),
-            ("GX05v100", 5_130),
-            ("GX14v101", 688),
-            ("GX15v100", 857),
+            ("GX05v100", 6_119),
+            ("GX14v101", 1_394),
+            ("GX15v100", 951),
             ("GX20v100", 165),
             ("GX22v100", 162),
             ("GX24v100", 162),
@@ -298,14 +301,14 @@ fn elden_rings_gx_items() -> Result<()> {
     );
     assert_eq!(
         t.unnamed,
-        counts(&[("GX18", 565), ("GXMD", 19_237), ("GXUD", 119)])
+        counts(&[("GX18", 1_163), ("GXMD", 25_908), ("GXUD", 227)])
     );
     assert_eq!((t.emissive.0, t.emissive.1, t.emissive.2), (1, 0.6, 0.6));
     assert_eq!(
         (t.translucency.0, t.translucency.1, t.translucency.2),
-        (5_130, 1., 1.)
+        (6_119, 1., 1.)
     );
-    assert_eq!(t.albedo.0, 688);
+    assert_eq!(t.albedo.0, 1_394);
     assert!(
         (t.albedo.1 - 0.79311).abs() < 1e-5 && (t.albedo.2 - 1.359988).abs() < 1e-5,
         "{:?}",
