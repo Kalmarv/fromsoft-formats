@@ -94,18 +94,23 @@ fn add(declared: &mut [usize; 4], m: &Metaparam) {
 
 #[test]
 fn every_metaparam_of_the_bundles_cut_from_the_install() {
-    let Some(dir) = inputs::oracle(inputs::OracleSet::Corpus, inputs::Game::Sekiro, "shader-binders") else {
+    // a folder or one archive alike (`oracle_tree`)
+    let Some(tree) = inputs::oracle_tree(inputs::OracleSet::Corpus, inputs::Game::Sekiro, "shader-binders")
+    else {
         return;
     };
-    let dir = dir.join("shaderbdle");
-    let mut bundles: Vec<String> = std::fs::read_dir(&dir)
-        .unwrap()
-        .map(|e| e.unwrap().file_name().into_string().unwrap())
+    // the bundles: the entries of `shaderbdle/`, each a folder of its own files
+    let bundles: Vec<String> = tree
+        .names()
+        .into_iter()
+        .filter_map(|n| n.strip_prefix("shaderbdle/"))
+        .map(|rest| rest.split('/').next().unwrap().to_owned())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
         .collect();
-    bundles.sort();
     assert_eq!(bundles.len(), 248);
     let read = |name: &str| {
-        let bytes = std::fs::read(dir.join(name).join(format!("{name}.metaparam"))).unwrap();
+        let bytes = tree.read(&format!("shaderbdle/{name}/{name}.metaparam")).unwrap();
         let m = Metaparam::read(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
         (bytes, m)
     };
