@@ -58,7 +58,7 @@ havok-formats = "0.10.0"
 md-5 = { version = "=0.11.0", default-features = false }
 num-bigint = { version = "=0.5.1", default-features = false, features = ["std"] }
 primase-foundations = "0.3.2"
-primase-testdata = "0.2.5"
+primase-testdata = "0.2.6"
 serde = { version = "1", default-features = false, features = ["std", "derive"] }
 serde_json = { version = "=1.0.154", default-features = false, features = ["std", "preserve_order", "float_roundtrip"] }
 sha2 = { version = "=0.11.1", default-features = false }
