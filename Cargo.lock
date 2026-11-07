@@ -221,8 +221,9 @@ dependencies = [
 
 [[package]]
 name = "dxcontainer"
-version = "0.4.0"
-source = "git+https://github.com/Kalmarv/dx?rev=39883bd084ad1db1f66416f41b25cf2529f9eec1#39883bd084ad1db1f66416f41b25cf2529f9eec1"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "434e78a929a111671777fe4ca0a81aaabb51a51483b0acc0cf0653f6234b2136"
 dependencies = [
  "primase-foundations",
  "thiserror",
